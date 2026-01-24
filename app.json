@@ -1,29 +1,66 @@
 {
   "expo": {
-    "name": "spot-checkin-app",
-    "slug": "spot-checkin-app",
+    "name": "Perched",
+    "slug": "perched",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "spotcheckinapp",
+    "icon": "./assets/brand/Perched App Logo.png",
+    "scheme": "perched",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Perched uses the camera to capture your check-in photo.",
+        "NSPhotoLibraryUsageDescription": "Perched uses your photo library to attach a check-in photo.",
+        "NSPhotoLibraryAddUsageDescription": "Perched can save your check-in photos to your library.",
+        "NSLocationWhenInUseUsageDescription": "Perched uses your location to show nearby third places and friend hotspots.",
+        "NSContactsUsageDescription": "Perched uses your contacts to help you find friends."
+      },
+      "config": {
+        "googleMapsApiKey": "REDACTED"
+      }
     },
     "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_CONTACTS",
+        "READ_MEDIA_IMAGES"
+      ],
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FBFAF8",
+        "foregroundImage": "./assets/brand/Perched App Logo.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
+      ,
+      "config": {
+        "googleMaps": {
+          "apiKey": "REDACTED"
+        }
+      }
+    },
+    "extra": {
+      "GOOGLE_MAPS_API_KEY": "REDACTED",
+      "FIREBASE_CONFIG": {
+        "apiKey": "REDACTED",
+        "authDomain": "spot-app-ce2d8.firebaseapp.com",
+        "projectId": "spot-app-ce2d8",
+        "storageBucket": "spot-app-ce2d8.firebasestorage.app",
+        "messagingSenderId": "1077668570664",
+        "appId": "1:1077668570664:web:13956d4db5d0124911371d",
+        "measurementId": "G-0RTBHQMXT8"
+      },
+      "ADMIN_EMAILS": "",
+      "SUPPORT_EMAIL": "perchedappteam@gmail.com",
+      "INSTAGRAM_URL": "https://instagram.com/perchedapp",
+      "TIKTOK_URL": "https://tiktok.com/@perchedapp"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/brand/Perched App Logo.png"
     },
     "plugins": [
       "expo-router",
@@ -33,16 +70,15 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#FBFAF8",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#0E0F12"
           }
         }
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     }
   }
 }

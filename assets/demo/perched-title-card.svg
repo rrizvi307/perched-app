@@ -1,0 +1,35 @@
+<svg width="1080" height="1920" viewBox="0 0 1080 1920" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(540 840) rotate(90) scale(1120 720)">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#FBFAF8"/>
+    </radialGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="30" flood-color="#0E0F12" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect width="1080" height="1920" fill="url(#bg)"/>
+
+	  <g filter="url(#softShadow)">
+	    <image x="470" y="740" width="140" height="140" href="./perched-mark.png" xlink:href="./perched-mark.png" />
+	  </g>
+
+  <text x="540" y="980" text-anchor="middle" fill="#0E0F12" font-size="104" font-weight="800"
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+        letter-spacing="-2.5" text-rendering="geometricPrecision">
+    Perched
+  </text>
+
+  <text x="540" y="1060" text-anchor="middle" fill="#6B6F76" font-size="30" font-weight="600"
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        opacity="0.92" text-rendering="geometricPrecision">
+    Your story, in real places.
+  </text>
+
+  <text x="540" y="1708" text-anchor="middle" fill="#6B6F76" font-size="20" font-weight="600"
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        opacity="0.85">
+    @perchedapp
+  </text>
+</svg>
