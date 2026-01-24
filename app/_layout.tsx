@@ -151,13 +151,13 @@ function InnerApp() {
   return (
     <ThemeProvider key={`${colorScheme}-${preference}`} value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
       <Stack
-        screenOptions={{
-          headerShown: false,
-          gestureEnabled: true,
-          fullScreenGestureEnabled: true,
-          gestureResponseDistance: 70,
-        }}
-      >
+	        screenOptions={{
+	          headerShown: false,
+	          gestureEnabled: true,
+	          fullScreenGestureEnabled: true,
+	          gestureResponseDistance: { start: 70 },
+	        }}
+	      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="signin" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="signup" options={{ headerShown: false, gestureEnabled: false }} />
@@ -165,13 +165,13 @@ function InnerApp() {
         <Stack.Screen name="checkin" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen
           name="settings"
-          options={{
-            headerShown: false,
-            gestureEnabled: true,
-            fullScreenGestureEnabled: true,
-            gestureResponseDistance: 70,
-          }}
-        />
+	          options={{
+	            headerShown: false,
+	            gestureEnabled: true,
+	            fullScreenGestureEnabled: true,
+	            gestureResponseDistance: { start: 70 },
+	          }}
+	        />
         <Stack.Screen name="verify" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="upgrade" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />

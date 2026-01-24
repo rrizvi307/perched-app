@@ -171,12 +171,12 @@ export default function CheckinScreen() {
 			setIsEditMode(true);
 			setEditId(editParam);
 			// try to load remote/local checkin for editing
-			(void async function loadEdit() {
-				try {
-					const fb = await import('@/services/firebaseClient');
-					const check = await fb.getCheckinById(editParam as string);
-					if (check) {
-						if (check.spotName) setSpot(check.spotName);
+				void (async function loadEdit() {
+					try {
+						const fb = await import('@/services/firebaseClient');
+						const check = await fb.getCheckinById(editParam as string);
+						if (check) {
+							if (check.spotName) setSpot(check.spotName);
 						if (check.caption) setCaption(check.caption);
 						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
@@ -195,10 +195,10 @@ export default function CheckinScreen() {
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 						}
 					} catch {}
-				}
-			})();
-		}
-	}, [params, spot]);
+					}
+				})();
+			}
+		}, [params, spot]);
 
 	const triggerHaptic = useCallback(async () => {
 		if (Platform.OS === 'web') return;

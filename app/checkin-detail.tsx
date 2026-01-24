@@ -175,13 +175,13 @@ export default function CheckinDetailScreen() {
 
               <View style={[styles.actions, gapStyle(10)]}>
                 {spotLink ? (
-                  <Pressable
-                    onPress={() => router.push(spotLink as any)}
-                    style={({ pressed }) => [
-                      styles.actionButton,
-                      { borderColor, backgroundColor: pressed ? highlight : card },
-                    ]}
-                  >
+	                  <Pressable
+	                    onPress={() => router.push(spotLink as any)}
+	                    style={({ pressed }) => [
+	                      styles.actionButton,
+	                      { borderColor: border, backgroundColor: pressed ? highlight : card },
+	                    ]}
+	                  >
                     <Text style={{ color: text, fontWeight: '800' }}>View spot</Text>
                   </Pressable>
                 ) : null}
