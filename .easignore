@@ -1,0 +1,11 @@
+# EAS Build upload ignore list
+# https://docs.expo.dev/build-reference/easignore/
+
+node_modules
+.expo
+.DS_Store
+firebase-debug.log
+spot-checkin-app
+.env*
+__lock_test
+

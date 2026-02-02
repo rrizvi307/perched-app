@@ -1134,6 +1134,77 @@ export async function deleteCurrentUser() {
   await user.delete();
 }
 
+export async function deleteAccountAndData({ password }: { password?: string } = {}) {
+  const fb = ensureFirebase();
+  if (!fb) throw new Error('Firebase not initialized.');
+  const auth = fb.auth();
+  const current = auth.currentUser;
+  if (!current) throw new Error('No authenticated user');
+
+  const userId = current.uid;
+  const email = current.email || undefined;
+  if (password && email) {
+    await reauthenticateCurrentUser({ email, password });
+  }
+
+  const db = fb.firestore();
+
+  // Attempt to remove user-generated content first while still authenticated.
+  try {
+    // Remove this user from friends lists (best effort).
+    try {
+      const userDoc = await db.collection('users').doc(userId).get();
+      const friends = normalizeStringArray(userDoc.data()?.friends);
+      for (const friendId of friends) {
+        try {
+          await db
+            .collection('users')
+            .doc(friendId)
+            .set({ friends: fb.firestore.FieldValue.arrayRemove(userId) }, { merge: true });
+        } catch {}
+      }
+    } catch {}
+
+    // Delete friend requests to/from this user.
+    try {
+      const toSnap = await db.collection('friendRequests').where('toId', '==', userId).get();
+      for (const doc of toSnap.docs) {
+        try {
+          await db.collection('friendRequests').doc(doc.id).delete();
+        } catch {}
+      }
+    } catch {}
+    try {
+      const fromSnap = await db.collection('friendRequests').where('fromId', '==', userId).get();
+      for (const doc of fromSnap.docs) {
+        try {
+          await db.collection('friendRequests').doc(doc.id).delete();
+        } catch {}
+      }
+    } catch {}
+
+    // Delete check-ins authored by this user (batch in pages).
+    for (let page = 0; page < 20; page++) {
+      const snap = await db.collection('checkins').where('userId', '==', userId).limit(50).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((d: any) => batch.delete(d.ref));
+      await batch.commit();
+      if (snap.size < 50) break;
+    }
+
+    // Delete the user profile document last.
+    try {
+      await db.collection('users').doc(userId).delete();
+    } catch {}
+  } catch (e) {
+    // Continue to account deletion; server-side cleanup can be handled separately if needed.
+  }
+
+  // Finally, delete the auth account.
+  await deleteCurrentUser();
+}
+
 export async function reauthenticateCurrentUser({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');

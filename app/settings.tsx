@@ -7,7 +7,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
+import { clearPushToken, deleteAccountAndData, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
 import { clearCheckins, clearDemoCustomPhotos, getDemoAutoApprove, getDemoModeEnabled, getLocationEnabled, getNotificationsEnabled, resetDemoNetwork, setDemoAutoApprove, setDemoCustomPhotos, setDemoModeEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
@@ -248,6 +248,60 @@ export default function SettingsScreen() {
     } catch {}
   }
 
+  async function runDeleteAccount(password?: string) {
+    if (!user) return;
+    if (!fbAvailable) {
+      showToast('Firebase not configured. Unable to delete account.', 'error');
+      return;
+    }
+    try {
+      showToast('Deleting account…', 'info');
+      await deleteAccountAndData({ password });
+      try {
+        await signOut();
+      } catch {}
+      showToast('Account deleted.', 'success');
+      router.replace('/signin');
+    } catch (e: any) {
+      const code = e?.code as string | undefined;
+      if (code === 'auth/requires-recent-login') {
+        showToast('For security, please sign in again and try deleting your account.', 'warning');
+        return;
+      }
+      showToast('Unable to delete account right now.', 'error');
+    }
+  }
+
+  function confirmDeleteAccount() {
+    if (!user) return;
+    Alert.alert(
+      'Delete account?',
+      'This permanently deletes your account and your check-ins. This can’t be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            if (Platform.OS === 'ios' && user.email) {
+              Alert.prompt(
+                'Confirm password',
+                'Enter your password to delete your account.',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Delete', style: 'destructive', onPress: (value?: string) => void runDeleteAccount(value || undefined) },
+                ],
+                'secure-text'
+              );
+              return;
+            }
+            void runDeleteAccount();
+          },
+        },
+      ]
+    );
+  }
+
   return (
     <ThemedView style={styles.container}>
       <Atmosphere />
@@ -437,6 +491,21 @@ export default function SettingsScreen() {
         >
           <Text style={{ color: danger, fontWeight: '700' }}>Sign out</Text>
         </Pressable>
+
+        {user ? (
+          <>
+            <View style={{ height: 12 }} />
+            <Pressable
+              onPress={confirmDeleteAccount}
+              style={({ pressed }) => [
+                styles.dangerRow,
+                { borderColor: withAlpha(danger, 0.35), backgroundColor: pressed ? withAlpha(danger, 0.12) : card },
+              ]}
+            >
+              <Text style={{ color: danger, fontWeight: '700' }}>Delete account</Text>
+            </Pressable>
+          </>
+        ) : null}
 
         <View style={{ height: 12 }} />
         <Pressable

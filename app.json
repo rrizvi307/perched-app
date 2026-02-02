@@ -9,6 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
+      "bundleIdentifier": "app.perched",
+      "buildNumber": "1",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Perched uses the camera to capture your check-in photo.",
@@ -22,6 +24,8 @@
       }
     },
     "android": {
+      "package": "app.perched",
+      "versionCode": 1,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
@@ -34,8 +38,7 @@
         "foregroundImage": "./assets/brand/Perched App Logo.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
-      ,
+      "predictiveBackGestureEnabled": false,
       "config": {
         "googleMaps": {
           "apiKey": ""
@@ -56,7 +59,10 @@
       "ADMIN_EMAILS": "",
       "SUPPORT_EMAIL": "perchedappteam@gmail.com",
       "INSTAGRAM_URL": "https://instagram.com/perchedapp",
-      "TIKTOK_URL": "https://tiktok.com/@perchedapp"
+      "TIKTOK_URL": "https://tiktok.com/@perchedapp",
+      "eas": {
+        "projectId": ""
+      }
     },
     "web": {
       "output": "static",

@@ -14,7 +14,11 @@ Firebase setup (Firestore + Storage + Auth)
 npm install firebase
 ```
 
-6) Add the config into `app.json` or a `.env` file and set values for:
+6) Add the config via environment variables (recommended) or Expo config.
+
+This repo reads Firebase config from environment variables at build time (see `app.config.js`), and at runtime from `Constants.expoConfig.extra.FIREBASE_CONFIG`.
+
+Locally: copy `.env.example` → `.env.local` (gitignored) and set:
 
 - `FIREBASE_API_KEY`
 - `FIREBASE_AUTH_DOMAIN`
@@ -22,6 +26,9 @@ npm install firebase
 - `FIREBASE_STORAGE_BUCKET`
 - `FIREBASE_MESSAGING_SENDER_ID`
 - `FIREBASE_APP_ID`
+- `FIREBASE_MEASUREMENT_ID` (optional)
+
+For EAS Build: add the same vars as **Secrets** (project scope) before building.
 
 7) Run the app and test authentication + storage flows.
 

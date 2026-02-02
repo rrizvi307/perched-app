@@ -26,7 +26,7 @@
 - Terms of service screen
 - Block/report user flow
 - Location fuzzing for non-friends
-- Data deletion flow (support flow or settings entry)
+- In-app account deletion (Settings → Delete account)
 - Support contact surface (support email)
 
 ## Growth & Retention
@@ -53,3 +53,41 @@
 ## Store Submission Config
 - iOS Info.plist permission strings (camera, photos, location, contacts)
 - Android runtime permissions (camera, location, contacts)
+- Bundle identifiers set (iOS `bundleIdentifier`, Android `package`)
+- Build profiles configured (`eas.json`)
+
+## TestFlight / App Store Steps (Expo + EAS)
+
+1) **Create / configure Apple Developer + App Store Connect**
+- Create an app record matching the iOS bundle identifier in `app.json`.
+
+2) **Configure secrets (required for maps + Firebase)**
+- Locally: `.env.local` (gitignored)
+- EAS: project secrets (see `docs/LOCAL_KEYS.md`)
+
+3) **Initialize EAS**
+```bash
+npx eas login
+npx eas init
+```
+
+4) **Build**
+- Internal device build (quick sharing):
+```bash
+npx eas build -p ios --profile preview
+```
+- TestFlight/App Store build:
+```bash
+npx eas build -p ios --profile production
+```
+
+5) **Submit**
+```bash
+npx eas submit -p ios --profile production
+```
+
+6) **Before you invite testers**
+- Create new account on a second device
+- Add friends both ways
+- Post a check-in, then delete it
+- Settings → Delete account (required for App Store review if you support account creation)
