@@ -175,7 +175,7 @@ export default function SettingsScreen() {
           await makeDirectoryAsync(dir, { intermediates: true });
         } catch {}
 
-        const saved: Array<{ uri: string; fileName?: string | null }> = [];
+        const saved: { uri: string; fileName?: string | null }[] = [];
         const seen = new Set<string>();
         for (let i = 0; i < assets.length; i++) {
           const a: any = assets[i];
