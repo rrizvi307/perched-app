@@ -10,14 +10,16 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
-import { getDemoAutoApprove, getDemoModeEnabled, getLocationEnabled, getNotificationsEnabled, resetDemoNetwork, setDemoAutoApprove, setDemoModeEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
+import { clearCheckins, clearDemoCustomPhotos, getDemoAutoApprove, getDemoModeEnabled, getLocationEnabled, getNotificationsEnabled, resetDemoNetwork, setDemoAutoApprove, setDemoCustomPhotos, setDemoModeEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
 import { resetAndReseedDemo, setGlobalDemoMode } from '@/services/demoMode';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
+import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SettingsScreen() {
@@ -134,6 +136,95 @@ export default function SettingsScreen() {
     } finally {
       locationToggleInFlight.current = false;
     }
+  }
+
+  async function importDemoPhotos() {
+    if (Platform.OS === 'web') {
+      showToast('Import demo photos is only available on iOS/Android.', 'info');
+      return;
+    }
+
+    const run = async () => {
+      try {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (perm.status !== 'granted') {
+          showToast('Enable Photos access to import demo photos.', 'warning');
+          return;
+        }
+
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsMultipleSelection: true,
+          selectionLimit: 24,
+          quality: 0.9,
+        });
+        if (result.canceled) return;
+
+        const assets = Array.isArray(result.assets) ? result.assets : [];
+        if (!assets.length) {
+          showToast('No photos selected.', 'info');
+          return;
+        }
+        if (!documentDirectory) {
+          showToast('Unable to access app storage for demo photos.', 'error');
+          return;
+        }
+
+        const dir = `${documentDirectory}perched-demo-seed`;
+        try {
+          await makeDirectoryAsync(dir, { intermediates: true });
+        } catch {}
+
+        const saved: Array<{ uri: string; fileName?: string | null }> = [];
+        const seen = new Set<string>();
+        for (let i = 0; i < assets.length; i++) {
+          const a: any = assets[i];
+          const fromUri = typeof a?.uri === 'string' ? a.uri : '';
+          if (!fromUri) continue;
+          if (seen.has(fromUri)) continue;
+          seen.add(fromUri);
+          const fileName =
+            typeof a?.fileName === 'string'
+              ? a.fileName
+              : typeof fromUri === 'string'
+                ? fromUri.split('/').pop() || null
+                : null;
+          const extRaw = (fileName || fromUri).split('.').pop() || 'jpg';
+          const ext = extRaw.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
+          const target = `${dir}/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+          try {
+            await copyAsync({ from: fromUri, to: target });
+            saved.push({ uri: target, fileName });
+          } catch {
+            // skip
+          }
+        }
+
+        if (!saved.length) {
+          showToast('Unable to import photos. Try selecting different images.', 'error');
+          return;
+        }
+
+        showToast('Updating demo feed…', 'info');
+        await clearCheckins();
+        await setDemoCustomPhotos(saved);
+        await setDemoModeEnabled(true);
+        setDemoEnabledState(true);
+        await resetAndReseedDemo(user?.id);
+        showToast('Demo feed replaced with your photos.', 'success');
+      } catch {
+        showToast('Unable to import demo photos right now.', 'error');
+      }
+    };
+
+    Alert.alert(
+      'Replace demo feed',
+      'This will clear local check-ins and replace the demo feed with photos you select.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace', style: 'destructive', onPress: () => void run() },
+      ]
+    );
   }
 
   async function inviteFriends() {
@@ -406,12 +497,38 @@ export default function SettingsScreen() {
                 mutedColor={muted}
               />
               <SettingRow
+                label="Import demo photos (replace feed)"
+                value="Pick"
+                onPress={importDemoPhotos}
+                borderColor={border}
+                highlight={highlight}
+                textColor={text}
+                mutedColor={muted}
+              />
+              <SettingRow
                 label="Clear demo content"
                 value="Clear"
                 onPress={async () => {
                   showToast('Clearing demo content…', 'info');
                   try {
                     await resetDemoNetwork();
+                  } catch {}
+                }}
+                borderColor={border}
+                highlight={highlight}
+                textColor={text}
+                mutedColor={muted}
+              />
+              <SettingRow
+                label="Reset demo photo override"
+                value="Reset"
+                onPress={async () => {
+                  showToast('Resetting demo photo override…', 'info');
+                  try {
+                    await clearDemoCustomPhotos();
+                    await resetDemoNetwork();
+                    await resetAndReseedDemo(user?.id);
+                    showToast('Demo photos reset.', 'success');
                   } catch {}
                 }}
                 borderColor={border}

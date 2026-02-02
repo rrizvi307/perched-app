@@ -10,7 +10,7 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getApprovedCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportUserRemote, sendFriendRequest, setCloseFriendRemote, subscribeApprovedCheckins, subscribeApprovedCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
+import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportUserRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
@@ -108,6 +108,7 @@ function FeedPhoto({
 	const muted = useThemeColor({}, 'muted');
 	const primary = useThemeColor({}, 'primary');
 	const accent = useThemeColor({}, 'accent');
+	const success = useThemeColor({}, 'success');
 	const highlight = withAlpha(primary, 0.12);
 	const badgeFill = withAlpha(accent, 0.16);
 	const isWeb = Platform.OS === 'web';
@@ -198,7 +199,8 @@ function FeedPhoto({
 		} catch {}
 	}, [user]);
 
-	const filterExpired = useCallback((list: Checkin[]) => list.filter((it) => !isCheckinExpired(it)), []);
+	// Feed shows full history; "live" is a 24h status indicated with a dot.
+	const filterExpired = useCallback((list: Checkin[]) => list, []);
 
 	const needsDailyCheckin = useMemo(() => {
 		if (!lastSelfCheckinAt) return true;
@@ -307,10 +309,10 @@ function FeedPhoto({
 				const demo = isDemoMode();
 				await pruneInvalidPendingCheckins().catch(() => {});
 				const pendingPromise = getPendingCheckins().catch(() => []);
-				if (demo) {
-					try { await seedDemoNetwork(user?.id); } catch {}
-					const pending = await pendingPromise;
-					const pendingSummary = summarizePending(pending);
+					if (demo) {
+						try { await seedDemoNetwork(user?.id); } catch {}
+						const pending = await pendingPromise;
+						const pendingSummary = summarizePending(pending);
 					setPendingCount(pendingSummary.count);
 					setPendingUploading(pendingSummary.uploading);
 					setPendingError(pendingSummary.error);
@@ -318,10 +320,10 @@ function FeedPhoto({
 					setItems(filterExpired(data as any));
 					setRemoteCursor(null);
 					setHasMoreRemote(false);
-					setStatus(null);
-					return;
-				}
-				const res = await getApprovedCheckinsRemote(PAGE);
+						setStatus(null);
+						return;
+					}
+					const res = await getCheckinsRemote(PAGE);
 				const pending = await pendingPromise;
 				const pendingSummary = summarizePending(pending);
 				setPendingCount(pendingSummary.count);
@@ -338,11 +340,11 @@ function FeedPhoto({
 						} catch {}
 					});
 				}
-			const cleaned = filterExpired(res.items as any);
-			let merged = await mergeRemoteWithLocal(cleaned);
-			if (merged.length < 2 && process.env.NODE_ENV !== 'production') {
-				try {
-					await seedDemoNetwork(user?.id);
+				const cleaned = filterExpired(res.items as any);
+				let merged = await mergeRemoteWithLocal(cleaned);
+				if (merged.length < 2 && process.env.NODE_ENV !== 'production') {
+					try {
+						await seedDemoNetwork(user?.id);
 					merged = await mergeRemoteWithLocal(cleaned);
 				} catch {}
 			}
@@ -381,20 +383,20 @@ function FeedPhoto({
 					}
 				} catch {}
 		} finally {
-			setRefreshing(false);
-			setInitialLoading(false);
-		}
-		}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
+				setRefreshing(false);
+				setInitialLoading(false);
+			}
+			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
 
-	const loadMore = useCallback(async () => {
-		if (loadingMore || !hasMoreRemote) return;
-		setLoadingMore(true);
-		try {
-			const res = await getApprovedCheckinsRemote(PAGE, remoteCursor || undefined);
-			if (res.items && res.items.length) {
-				const cleaned = filterExpired(res.items as any);
-				setItems((prev) => [...prev, ...cleaned]);
-				setRemoteCursor(res.lastCursor || null);
+		const loadMore = useCallback(async () => {
+			if (loadingMore || !hasMoreRemote) return;
+			setLoadingMore(true);
+			try {
+				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
+				if (res.items && res.items.length) {
+					const cleaned = filterExpired(res.items as any);
+					setItems((prev) => [...prev, ...cleaned]);
+					setRemoteCursor(res.lastCursor || null);
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
 		} catch {
@@ -429,9 +431,32 @@ function FeedPhoto({
 
 		// subscribe to optimistic inserts from Checkin screen
 		const unsubLocal = subscribeCheckinEvents((it: any) => {
+			const incomingClientId = it?.clientId;
+			const incomingId = it?.id;
+			const isDeleted = !!it?.deleted;
+
+			if (isDeleted) {
+				setItems((prev) => {
+					const next = prev.filter((p: any) => {
+						if (incomingClientId && p?.clientId === incomingClientId) return false;
+						if (incomingId && p?.id === incomingId) return false;
+						return true;
+					});
+					return filterExpired(next as any);
+				});
+				try {
+					localCacheRef.current = localCacheRef.current.filter((p: any) => {
+						if (incomingClientId && p?.clientId === incomingClientId) return false;
+						if (incomingId && p?.id === incomingId) return false;
+						return true;
+					});
+				} catch {}
+				return;
+			}
+
 			setItems((prev) => {
-				const clientId = it?.clientId;
-				const id = it?.id;
+				const clientId = incomingClientId;
+				const id = incomingId;
 				const idx = prev.findIndex((p: any) => (clientId && p?.clientId === clientId) || (id && p?.id === id));
 				if (idx >= 0) {
 					const next = prev.slice();
@@ -441,8 +466,8 @@ function FeedPhoto({
 				return filterExpired([it as any, ...prev] as any);
 			});
 			try {
-				const clientId = it?.clientId;
-				const id = it?.id;
+				const clientId = incomingClientId;
+				const id = incomingId;
 				const idx = localCacheRef.current.findIndex((p: any) => (clientId && p?.clientId === clientId) || (id && p?.id === id));
 				if (idx >= 0) {
 					localCacheRef.current[idx] = { ...localCacheRef.current[idx], ...it } as any;
@@ -504,12 +529,12 @@ function FeedPhoto({
 				friendsUnsubRef.current = null;
 			}
 
-			if (!onlyFriends) {
-				const unsub = subscribeApprovedCheckins((remoteItems: any[]) => {
-					const cleaned = filterExpired(remoteItems as any);
-					void (async () => {
-						const merged = await mergeRemoteWithLocal(cleaned);
-						setItems(merged);
+				if (!onlyFriends) {
+					const unsub = subscribeCheckins((remoteItems: any[]) => {
+						const cleaned = filterExpired(remoteItems as any);
+						void (async () => {
+							const merged = await mergeRemoteWithLocal(cleaned);
+							setItems(merged);
 						if (cleaned.length) {
 							setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
 							setHasMoreRemote(cleaned.length >= PAGE);
@@ -547,16 +572,16 @@ function FeedPhoto({
 			try { friendsUnsubRef.current(); } catch {}
 			friendsUnsubRef.current = null;
 		}
-			if (!friendIds || friendIds.length === 0) {
-				// nothing to subscribe to
-				setItems([]);
-				return;
-			}
-			const unsub = subscribeApprovedCheckinsForUsers(friendIds, (remoteItems: any[]) => {
-				const cleaned = filterExpired(remoteItems as any);
-				void (async () => {
-					const merged = await mergeRemoteWithLocal(cleaned);
-					setItems(merged);
+				if (!friendIds || friendIds.length === 0) {
+					// nothing to subscribe to
+					setItems([]);
+					return;
+				}
+				const unsub = subscribeCheckinsForUsers(friendIds, (remoteItems: any[]) => {
+					const cleaned = filterExpired(remoteItems as any);
+					void (async () => {
+						const merged = await mergeRemoteWithLocal(cleaned);
+						setItems(merged);
 					if (cleaned.length) {
 						setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
 						setHasMoreRemote(cleaned.length >= PAGE);
@@ -592,12 +617,10 @@ function FeedPhoto({
 			out = out.filter((it: any) => friendIdSet.has(it.userId));
 		}
 
-		// filter expired posts (live window)
-		out = out.filter((it: any) => !isCheckinExpired(it));
-
-		// sanitize items for privacy: exact locations visible only to friends/owner
-		const sanitized = out.map((it: any) => {
-			if (user && blockedIdSet.has(it.userId)) return null;
+			// filter expired posts (live window)
+			// sanitize items for privacy: exact locations visible only to friends/owner
+			const sanitized = out.map((it: any) => {
+				if (user && blockedIdSet.has(it.userId)) return null;
 			if (!it.visibility) return it;
 			if (it.visibility === 'friends') {
 				const allowed = user && (friendIdSet.has(it.userId) || it.userId === user.id);
@@ -616,25 +639,27 @@ function FeedPhoto({
 		return sanitized.filter(Boolean) as Checkin[];
 	}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet]);
 
-	const collapsedItems = useMemo(() => {
-		const toTs = (value: any) => toMillis(value) || 0;
-		const hasRenderablePhoto = (it: any) => {
-			const candidate = it?.photoUrl || it?.photoURL || it?.imageUrl || it?.imageURL || it?.image;
-			return typeof candidate === 'string' && candidate.trim().length > 0;
-		};
-		const map: Record<string, { item: Checkin; count: number }> = {};
-		visibleItems.forEach((it) => {
-			const name = it.spotName || it.spot || 'Unknown';
-			const key = spotKey((it as any).spotPlaceId, name);
-			if (!map[key]) {
-				map[key] = { item: it, count: 1 };
-				return;
-			}
-			map[key].count += 1;
-			const existing = map[key].item;
-			const existingTs = toTs(existing.createdAt);
-			const nextTs = toTs(it.createdAt);
-			const existingHasPhoto = hasRenderablePhoto(existing) && !existing.photoPending;
+		const collapsedItems = useMemo(() => {
+			const toTs = (value: any) => toMillis(value) || 0;
+			const now = Date.now();
+			const hasRenderablePhoto = (it: any) => {
+				const candidate = it?.photoUrl || it?.photoURL || it?.imageUrl || it?.imageURL || it?.image;
+				return typeof candidate === 'string' && candidate.trim().length > 0;
+			};
+			const map: Record<string, { item: Checkin; total: number; live: number }> = {};
+			visibleItems.forEach((it) => {
+				const name = it.spotName || it.spot || 'Unknown';
+				const key = spotKey((it as any).spotPlaceId, name);
+				if (!map[key]) {
+					map[key] = { item: it, total: 1, live: !isCheckinExpired(it, now) ? 1 : 0 };
+					return;
+				}
+				map[key].total += 1;
+				if (!isCheckinExpired(it, now)) map[key].live += 1;
+				const existing = map[key].item;
+				const existingTs = toTs(existing.createdAt);
+				const nextTs = toTs(it.createdAt);
+				const existingHasPhoto = hasRenderablePhoto(existing) && !existing.photoPending;
 			const nextHasPhoto = hasRenderablePhoto(it) && !(it as any).photoPending;
 			// Prefer: newer, but don't let a photo-less duplicate override a photo-backed one.
 			if (nextTs > existingTs) {
@@ -649,14 +674,14 @@ function FeedPhoto({
 			// If the newer item is missing a photo (still uploading), keep an older item that has one.
 			const withinTwoHours = existingTs - nextTs <= 2 * 60 * 60 * 1000;
 			if (!existingHasPhoto && nextHasPhoto && withinTwoHours) {
-				map[key].item = it;
-			}
-		});
-		return Object.values(map).map((v) => ({ ...v.item, groupCount: v.count })) as any[];
-	}, [visibleItems]);
+					map[key].item = it;
+				}
+			});
+			return Object.values(map).map((v) => ({ ...v.item, groupCount: v.live, totalCount: v.total })) as any[];
+			}, [visibleItems]);
 
-	const groupedCount = collapsedItems.reduce((sum, it) => sum + ((it as any).groupCount || 1), 0);
-	const demoMode = isDemoMode();
+		const liveCount = collapsedItems.reduce((sum, it) => sum + ((it as any).groupCount || 0), 0);
+		const demoMode = isDemoMode();
 
 	return (
 		<ThemedView style={styles.container}>
@@ -680,11 +705,11 @@ function FeedPhoto({
 							<Body style={{ color: muted }}>
 								See where people are studying and working, then tap in with a photo and a quick note.
 							</Body>
-							<Text style={{ color: muted, marginTop: 6 }}>
-								{groupedCount
-									? `${groupedCount} check-in${groupedCount === 1 ? '' : 's'} today`
-									: 'No check-ins yet today.'}
-							</Text>
+									<Text style={{ color: muted, marginTop: 6 }}>
+									{liveCount
+										? `${liveCount} check-in${liveCount === 1 ? '' : 's'} in the last 24h`
+										: 'No check-ins in the last 24h yet.'}
+									</Text>
 							<Text style={{ color: muted, marginTop: 6 }}>
 								Use the + button above to share where you are.
 							</Text>
@@ -729,12 +754,12 @@ function FeedPhoto({
 											<Text style={{ color: muted, fontSize: 12 }}>Firebase configured: {isFirebaseConfigured() ? 'yes' : 'no'}</Text>
 											<Text style={{ color: muted, fontSize: 12 }}>Init error: {String(getFirebaseInitError() || 'none')}</Text>
 											<Pressable
-												onPress={async () => {
-													try {
-														const res = await getApprovedCheckinsRemote(1);
-														showToast(`Remote OK: ${res.items?.length || 0}`, 'success');
-													} catch (err) {
-														showToast(`Remote error: ${String(err)}`, 'error');
+													onPress={async () => {
+														try {
+															const res = await getCheckinsRemote(1);
+															showToast(`Remote OK: ${res.items?.length || 0}`, 'success');
+														} catch (err) {
+															showToast(`Remote error: ${String(err)}`, 'error');
 													}
 												}}
 												style={({ pressed }) => [{ padding: 8, marginTop: 8, borderRadius: 8, borderColor: border, borderWidth: 1, backgroundColor: pressed ? highlight : card }]}
@@ -807,13 +832,15 @@ function FeedPhoto({
 						</View>
 					</View>
 				}
-				renderItem={({ item }) => {
-					const time = formatCheckinTime(item.createdAt);
-					const remaining = formatTimeRemaining(item);
-					const groupCount = (item as any).groupCount || 1;
-					const isFriend = !!(item.userId && friendIdSet.has(item.userId));
-					const isIncoming = !!(item.userId && incomingById.has(item.userId));
-					const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
+					renderItem={({ item }) => {
+						const now = Date.now();
+						const time = formatCheckinTime(item.createdAt);
+						const isLive = !isCheckinExpired(item, now);
+						const remaining = isLive ? formatTimeRemaining(item) : '';
+						const groupCount = ((item as any).groupCount ?? 0) as number;
+						const isFriend = !!(item.userId && friendIdSet.has(item.userId));
+						const isIncoming = !!(item.userId && incomingById.has(item.userId));
+						const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
 					const photo = resolvePhotoSrc(item);
 						const selfFallback = user && item.userId === user.id
 							? (user.name || (user.handle ? `@${user.handle}` : user.email ? user.email.split('@')[0] : null))
@@ -838,13 +865,16 @@ function FeedPhoto({
 												{initials || 'PA'}
 											</Text>
 										</View>
-									)}
-									<View style={{ marginLeft: 10 }}>
-											<Text style={{ color: text, fontWeight: '700' }}>{displayName}</Text>
-											{effectiveHandle && !displayName.startsWith('@') ? (
-												<Text style={{ color: muted, fontSize: 12 }}>@{effectiveHandle}</Text>
-											) : null}
-											<Text style={{ color: muted, fontSize: 12 }}>{time}</Text>
+										)}
+										<View style={{ marginLeft: 10 }}>
+												<View style={styles.nameRow}>
+													<Text style={{ color: text, fontWeight: '700' }}>{displayName}</Text>
+													{isLive ? <View style={[styles.liveDot, { backgroundColor: success }]} /> : null}
+												</View>
+												{effectiveHandle && !displayName.startsWith('@') ? (
+													<Text style={{ color: muted, fontSize: 12 }}>@{effectiveHandle}</Text>
+												) : null}
+												<Text style={{ color: muted, fontSize: 12 }}>{time}</Text>
 											{remaining ? <Text style={{ color: muted, fontSize: 11 }}>{remaining}</Text> : null}
 										</View>
 								</View>
@@ -918,18 +948,18 @@ function FeedPhoto({
 
 							<FeedPhoto uri={photo} background={background} muted={muted} pending={item.photoPending} />
 							<View style={styles.cardContent}>
-							<Pressable
-								onPress={() => {
-									const placeId = (item as any).spotPlaceId;
-									const name = item.spotName || item.spot || '';
-									router.push(`/spot?placeId=${encodeURIComponent(placeId || '')}&name=${encodeURIComponent(name)}`);
-								}}
-							>
-								<Text style={[styles.spot, { color: text }]}>{item.spotName || item.spot}</Text>
-							</Pressable>
-							{groupCount > 1 ? (
-								<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here today</Text>
-							) : null}
+								<Pressable
+									onPress={() => {
+										const placeId = (item as any).spotPlaceId;
+										const name = item.spotName || item.spot || '';
+										router.push(`/spot?placeId=${encodeURIComponent(placeId || '')}&name=${encodeURIComponent(name)}`);
+									}}
+								>
+									<Text style={[styles.spot, { color: text }]}>{item.spotName || item.spot}</Text>
+								</Pressable>
+								{groupCount > 1 ? (
+									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here in the last 24h</Text>
+								) : null}
 							{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
 								<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
 							)}
@@ -1102,8 +1132,10 @@ const styles = StyleSheet.create({
 	cardImage: { width: '100%', aspectRatio: 1 },
 	cardContent: { padding: tokens.space.s18 },
 	cardHeader: { padding: tokens.space.s16, paddingBottom: tokens.space.s10 },
-	avatarRow: { flexDirection: 'row', alignItems: 'center' },
-	avatar: { width: 46, height: 46, borderRadius: 23 },
+		avatarRow: { flexDirection: 'row', alignItems: 'center' },
+		nameRow: { flexDirection: 'row', alignItems: 'center' },
+		liveDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
+		avatar: { width: 46, height: 46, borderRadius: 23 },
 	cardActions: { flexDirection: 'row', alignItems: 'center', marginTop: tokens.space.s12 },
 	followButton: {
 		paddingHorizontal: tokens.space.s12,

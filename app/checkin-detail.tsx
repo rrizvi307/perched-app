@@ -7,8 +7,9 @@ import { tokens } from '@/constants/tokens';
 import { useToast } from '@/contexts/ToastContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { formatCheckinTime, formatTimeRemaining, toMillis } from '@/services/checkinUtils';
+import { publishCheckin } from '@/services/feedEvents';
 import { deleteCheckinRemote, getCheckinById, isFirebaseConfigured } from '@/services/firebaseClient';
-import { removeCheckinLocalById, getCheckins } from '@/storage/local';
+import { getCheckins, removeCheckinLocalByClientId, removeCheckinLocalById } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -98,14 +99,19 @@ export default function CheckinDetailScreen() {
       setDeleting(true);
       try {
         const id = String(item.id || '');
+        const clientId = typeof item?.clientId === 'string' ? item.clientId : '';
+        let remoteOk = true;
         if (isFirebaseConfigured() && id && !id.startsWith('demo-self-') && !id.startsWith('demo-c') && !id.startsWith('local-')) {
-          await deleteCheckinRemote(id);
+          remoteOk = await deleteCheckinRemote(id);
         }
+        if (!remoteOk) throw new Error('Remote delete failed');
         if (id) await removeCheckinLocalById(id);
+        if (clientId) await removeCheckinLocalByClientId(clientId);
+        publishCheckin({ id, clientId: clientId || null, deleted: true });
         showToast('Deleted check-in.', 'success');
         router.back();
       } catch {
-        showToast('Unable to delete right now.', 'error');
+        showToast('Unable to delete right now. Check Firebase rules + connection.', 'error');
       } finally {
         setDeleting(false);
       }

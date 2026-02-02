@@ -8,14 +8,14 @@ import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { getBlockedUsers, getApprovedCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
+import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
 import { getMapsKey, getPlaceDetails, searchPlaces, searchPlacesNearby, searchPlacesWithBias } from '@/services/googleMaps';
 import { requestForegroundLocation } from '@/services/location';
 import { classifySpotCategory, spotKey } from '@/services/spotUtils';
 import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot } from '@/storage/local';
-import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
+import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
 import { useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import React, { useEffect, useState } from 'react';
@@ -374,7 +374,6 @@ export default function Explore() {
             items = await getCheckins();
           } catch {}
           items = (items || []).filter((it: any) => {
-            if (isCheckinExpired(it)) return false;
             if (user && blockedIds.includes(it.userId)) return false;
             if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
             if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
@@ -426,9 +425,8 @@ export default function Explore() {
           setLoading(false);
           return;
         }
-        const res = await getApprovedCheckinsRemote(80);
+        const res = await getCheckinsRemote(500);
         let items = (res.items || []).filter((it: any) => {
-          if (isCheckinExpired(it)) return false;
           if (user && blockedIds.includes(it.userId)) return false;
           if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
           if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
@@ -445,16 +443,15 @@ export default function Explore() {
         } catch {}
         if (!items.length && process.env.NODE_ENV !== 'production') {
           try {
-            await seedDemoNetwork(user?.id);
-            const local = await getCheckins();
-            const fallback = local.filter((it: any) => {
-              if (isCheckinExpired(it)) return false;
-              if (user && blockedIds.includes(it.userId)) return false;
-              if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-              if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
-              if (!passesScope(it)) return false;
-              return true;
-            });
+	            await seedDemoNetwork(user?.id);
+	            const local = await getCheckins();
+	            const fallback = local.filter((it: any) => {
+	              if (user && blockedIds.includes(it.userId)) return false;
+	              if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
+	              if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+	              if (!passesScope(it)) return false;
+	              return true;
+	            });
             if (fallback.length) items = fallback;
           } catch {}
         }
@@ -541,7 +538,6 @@ export default function Explore() {
       } catch {
         const local = await getCheckins();
         const filtered = local.filter((it: any) => {
-          if (isCheckinExpired(it)) return false;
           if (user && blockedIds.includes(it.userId)) return false;
           if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
           if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;

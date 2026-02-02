@@ -3,6 +3,9 @@
 # dependencies
 node_modules/
 
+# Local nested copy / symlink loop (accidental)
+spot-checkin-app
+
 # Expo
 .expo/
 dist/

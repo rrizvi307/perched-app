@@ -8,8 +8,10 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
+import { isDemoMode } from '@/services/demoMode';
+import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { getCheckinsForUserRemote } from '@/services/firebaseClient';
-import { getCheckins } from '@/storage/local';
+import { getCheckins, seedDemoNetwork } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -61,6 +63,14 @@ export default function MyPostsScreen() {
     if (!user?.id) return;
     setRefreshing(true);
     try {
+      if (isDemoMode()) {
+        try {
+          await seedDemoNetwork(user.id);
+        } catch {}
+        const local = await getCheckins();
+        setItems(local.filter((c: any) => c?.userId === user.id));
+        return;
+      }
       const res = await getCheckinsForUserRemote(user.id, 240);
       const remote = Array.isArray(res) ? res : (res?.items ?? []);
       const local = await getCheckins();
@@ -80,6 +90,38 @@ export default function MyPostsScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const unsub = subscribeCheckinEvents((it: any) => {
+      const incomingClientId = it?.clientId;
+      const incomingId = it?.id;
+      if (!incomingClientId && !incomingId) return;
+
+      setItems((prev) => {
+        const matches = (p: any) => (incomingClientId && p?.clientId === incomingClientId) || (incomingId && p?.id === incomingId);
+        const idx = prev.findIndex(matches);
+
+        if (it?.deleted) {
+          if (idx < 0) return prev;
+          const next = prev.slice();
+          next.splice(idx, 1);
+          return next;
+        }
+
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = { ...next[idx], ...it };
+          return next;
+        }
+
+        if (user?.id && it?.userId && it.userId !== user.id) return prev;
+        return [it, ...prev];
+      });
+    });
+    return () => {
+      unsub();
+    };
+  }, [user?.id]);
 
   const sorted = useMemo(() => (items || []).slice().sort((a: any, b: any) => createdAtMs(b) - createdAtMs(a)), [items]);
   const now = Date.now();

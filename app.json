@@ -18,7 +18,7 @@
         "NSContactsUsageDescription": "Perched uses your contacts to help you find friends."
       },
       "config": {
-        "googleMapsApiKey": "REDACTED"
+        "googleMapsApiKey": ""
       }
     },
     "android": {
@@ -38,20 +38,20 @@
       ,
       "config": {
         "googleMaps": {
-          "apiKey": "REDACTED"
+          "apiKey": ""
         }
       }
     },
     "extra": {
-      "GOOGLE_MAPS_API_KEY": "REDACTED",
+      "GOOGLE_MAPS_API_KEY": "",
       "FIREBASE_CONFIG": {
-        "apiKey": "REDACTED",
-        "authDomain": "spot-app-ce2d8.firebaseapp.com",
-        "projectId": "spot-app-ce2d8",
-        "storageBucket": "spot-app-ce2d8.firebasestorage.app",
-        "messagingSenderId": "1077668570664",
-        "appId": "1:1077668570664:web:13956d4db5d0124911371d",
-        "measurementId": "G-0RTBHQMXT8"
+        "apiKey": "",
+        "authDomain": "",
+        "projectId": "",
+        "storageBucket": "",
+        "messagingSenderId": "",
+        "appId": "",
+        "measurementId": ""
       },
       "ADMIN_EMAILS": "",
       "SUPPORT_EMAIL": "perchedappteam@gmail.com",

@@ -5,19 +5,19 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
-import { CHECKIN_TTL_MS } from '@/services/checkinUtils';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
 import { normalizePhone } from '@/utils/phone';
 
 export const FIREBASE_CONFIG = {
-  apiKey: 'REDACTED',
-  authDomain: 'spot-app-ce2d8.firebaseapp.com',
-  projectId: 'spot-app-ce2d8',
-  storageBucket: 'spot-app-ce2d8.firebasestorage.app',
-  messagingSenderId: '1077668570664',
-  appId: '1:1077668570664:web:13956d4db5d0124911371d',
-  measurementId: 'G-0RTBHQMXT8',
+  apiKey: (process.env.EXPO_PUBLIC_FIREBASE_API_KEY as string) || (process.env.FIREBASE_API_KEY as string) || '',
+  authDomain: (process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN as string) || (process.env.FIREBASE_AUTH_DOMAIN as string) || '',
+  projectId: (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string) || (process.env.FIREBASE_PROJECT_ID as string) || '',
+  storageBucket: (process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET as string) || (process.env.FIREBASE_STORAGE_BUCKET as string) || '',
+  messagingSenderId:
+    (process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID as string) || (process.env.FIREBASE_MESSAGING_SENDER_ID as string) || '',
+  appId: (process.env.EXPO_PUBLIC_FIREBASE_APP_ID as string) || (process.env.FIREBASE_APP_ID as string) || '',
+  measurementId: (process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID as string) || (process.env.FIREBASE_MEASUREMENT_ID as string) || '',
 };
 
 function getStorageBucketCandidates() {
@@ -241,7 +241,6 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
   const db = fb.firestore();
   const now = Date.now();
   const createdAt = fb.firestore.Timestamp.fromMillis(now);
-  const expiresAt = fb.firestore.Timestamp.fromMillis(now + CHECKIN_TTL_MS);
   const doc = {
     clientId: clientId || null,
     userId,
@@ -262,9 +261,9 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
     createdAt,
     createdAtServer: fb.firestore.FieldValue.serverTimestamp(),
     createdAtMs: now,
-    expiresAt,
-    approved: false,
-    moderation: { status: 'pending' },
+    // Early-stage default: auto-approve so TestFlight users can see each other's posts immediately.
+    approved: true,
+    moderation: { status: 'approved' },
   };
 
   const ref = await db.collection('checkins').add(doc);

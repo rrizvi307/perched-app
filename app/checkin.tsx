@@ -188,7 +188,6 @@ export default function CheckinScreen() {
 						const items = await local.getCheckins();
 						const found = (items || []).find((c: any) => String(c.id) === String(editParam));
 						if (found) {
-							if (found.spotName) setSpot(found.spotName);
 							if (found.caption) setCaption(found.caption);
 							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);

@@ -15,9 +15,11 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { devLog } from '@/services/logger';
+import { isDemoMode } from '@/services/demoMode';
+import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
-import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
+import { getCheckins, getPermissionPrimerSeen, getSavedSpots, seedDemoNetwork, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { isPhoneLike, normalizePhone } from '@/utils/phone';
 import { useRouter } from 'expo-router';
@@ -123,6 +125,16 @@ export default function ProfileScreen() {
   const loadCheckins = useCallback(async () => {
     setRefreshing(true);
     try {
+      if (isDemoMode()) {
+        try {
+          await seedDemoNetwork(user?.id);
+        } catch {}
+        const local = await getCheckins();
+        const mine = local.filter((c: any) => c.userId === user?.id);
+        setCheckins(mine);
+        setStatus(null);
+        return;
+      }
       const remoteRes = await getCheckinsForUserRemote(user?.id || '', 240);
       const remote = Array.isArray(remoteRes) ? remoteRes : (remoteRes && (remoteRes.items ?? [])) as any[];
       const mineRemote = remote.filter((c: any) => c.userId === user?.id);
@@ -165,6 +177,38 @@ export default function ProfileScreen() {
       } catch {}
     })();
   }, [loadCheckins, user]);
+
+  useEffect(() => {
+    const unsub = subscribeCheckinEvents((it: any) => {
+      const incomingClientId = it?.clientId;
+      const incomingId = it?.id;
+      if (!incomingClientId && !incomingId) return;
+
+      setCheckins((prev) => {
+        const matches = (p: any) => (incomingClientId && p?.clientId === incomingClientId) || (incomingId && p?.id === incomingId);
+        const idx = prev.findIndex(matches);
+
+        if (it?.deleted) {
+          if (idx < 0) return prev;
+          const next = prev.slice();
+          next.splice(idx, 1);
+          return next;
+        }
+
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = { ...next[idx], ...it };
+          return next;
+        }
+
+        if (user?.id && it?.userId && it.userId !== user.id) return prev;
+        return [it, ...prev];
+      });
+    });
+    return () => {
+      unsub();
+    };
+  }, [user?.id]);
 
   useFocusEffect(
     useCallback(() => {

@@ -8,6 +8,7 @@ const CHECKIN_DRAFT_KEY = 'spot_checkin_draft_v1';
 const USER_PROFILE_KEY = 'spot_user_profile_v1';
 const DEMO_AUTO_APPROVE_KEY = 'spot_demo_auto_approve_v1';
 const DEMO_MODE_ENABLED_KEY = 'spot_demo_mode_enabled_v1';
+const DEMO_CUSTOM_PHOTOS_KEY = 'spot_demo_custom_photos_v1';
 
 type Checkin = {
   id: string;
@@ -30,6 +31,8 @@ type Checkin = {
   createdAt: string;
   tags?: string[];
 };
+
+type DemoCustomPhoto = { uri: string; fileName?: string | null };
 
 let memory: Checkin[] = [];
 const permissionMemory: Record<string, boolean> = {};
@@ -167,9 +170,9 @@ function pruneHistory(list: Checkin[], maxDays = 30) {
 }
 
 export async function saveCheckin(item: Omit<Checkin, 'id' | 'createdAt' | 'expiresAt'>) {
-  // posts expire by default after 12 hours to keep feed fresh
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-  const checkin: Checkin = { id: String(Date.now()), createdAt: new Date().toISOString(), expiresAt, ...item };
+  // Note: "Live/Expired" is computed from createdAt in checkinUtils.
+  // We keep full history locally (trimmed by pruneHistory) and never auto-delete based on an expiresAt field.
+  const checkin: Checkin = { id: String(Date.now()), createdAt: new Date().toISOString(), ...item };
   if (isWeb()) {
     try {
       const raw = window.localStorage.getItem(KEY);
@@ -328,6 +331,35 @@ export async function removeCheckinLocalById(id: string) {
     }
   }
   memory = memory.filter((c) => String(c.id) !== String(id));
+}
+
+export async function removeCheckinLocalByClientId(clientId: string) {
+  if (!clientId) return;
+  if (isWeb()) {
+    try {
+      const raw = window.localStorage.getItem(KEY);
+      const arr: Checkin[] = raw ? JSON.parse(raw) : [];
+      const next = arr.filter((c) => String(c.clientId || '') !== String(clientId));
+      window.localStorage.setItem(KEY, JSON.stringify(next));
+      return;
+    } catch {
+      return;
+    }
+  }
+  const store = await getAsyncStorage();
+  if (store) {
+    try {
+      const raw = await store.getItem(KEY);
+      const arr: Checkin[] = raw ? JSON.parse(raw) : [];
+      const next = arr.filter((c) => String(c.clientId || '') !== String(clientId));
+      await store.setItem(KEY, JSON.stringify(next));
+      memory = next.slice();
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  memory = memory.filter((c) => String(c.clientId || '') !== String(clientId));
 }
 
 export async function getCheckins() {
@@ -762,7 +794,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
         checkins = checkinsRaw ? JSON.parse(checkinsRaw) : [];
       }
     }
-    const demoCheckins = [
+    let demoCheckins = [
       {
         id: `demo-c1-${now}`,
         createdAt: new Date(now - 4 * 60 * 1000).toISOString(),
@@ -1079,7 +1111,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
     const agoraPlaceId = agoraAnchor?.spotPlaceId || null;
     const agoraLatLng = agoraAnchor?.spotLatLng || null;
 
-    const selfSeed =
+    let selfSeed =
       currentUserId && currentUser && !String(currentUserId).startsWith('demo-u')
         ? [
             {
@@ -1193,6 +1225,130 @@ export async function seedDemoNetwork(currentUserId?: string) {
             },
           ]
         : [];
+
+    // If custom demo photos are provided (for filming), swap the seeded content to match.
+    try {
+      const customPhotos = await getDemoCustomPhotos().catch(() => []);
+      const cleaned = Array.isArray(customPhotos)
+        ? customPhotos.filter((p: any) => typeof p?.uri === 'string' && String(p.uri).trim().length > 0)
+        : [];
+      const unique: DemoCustomPhoto[] = [];
+      const seen = new Set<string>();
+      for (const p of cleaned) {
+        const uri = String((p as any).uri || '').trim();
+        if (!uri || seen.has(uri)) continue;
+        seen.add(uri);
+        unique.push({ uri, fileName: typeof (p as any).fileName === 'string' ? (p as any).fileName : null });
+      }
+
+      if (unique.length) {
+        const spotCycle = ['Agora Coffee', 'Starbucks', 'Campus Library', 'Cowork Loft', 'Bookshop Cafe', 'The Forum'];
+        const coordsFor: Record<string, { lat: number; lng: number }> = {
+          'Agora Coffee': { lat: 29.7172, lng: -95.4018 },
+          Starbucks: { lat: 29.7604, lng: -95.3698 },
+          'Campus Library': { lat: 29.7174, lng: -95.4011 },
+          'Cowork Loft': { lat: 29.7604, lng: -95.3698 },
+          'Bookshop Cafe': { lat: 29.742, lng: -95.409 },
+          'The Forum': { lat: 29.7392, lng: -95.3856 },
+        };
+        const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+        const placeIdFor = (name: string) => `demo-place-${slug(name) || 'spot'}`;
+        const tagsFor = (name: string) => {
+          if (name === 'Starbucks') return ['Study', 'Wi-Fi', 'Seating'];
+          if (name === 'Campus Library') return ['Quiet', 'Study', 'Seating'];
+          if (name === 'Cowork Loft') return ['Coworking', 'Outlets', 'Wi-Fi'];
+          if (name === 'The Forum') return ['Social', 'Spacious', 'Wi-Fi'];
+          if (name === 'Bookshop Cafe') return ['Quiet', 'Bright', 'Study'];
+          return ['Study', 'Outlets', 'Wi-Fi'];
+        };
+        const captions = [
+          'Coffee + laptop for an hour',
+          'Deep work block',
+          'Quiet corner today',
+          'POV: one more task',
+          'Reading + espresso',
+          'Headphones in. Focus mode.',
+          'Quick sprint',
+          'Sunlight + a warm drink',
+        ];
+        const guessSpot = (p: DemoCustomPhoto, index: number) => {
+          const name = String(p.fileName || '').toLowerCase();
+          if (name.includes('starb')) return 'Starbucks';
+          if (name.includes('forum')) return 'The Forum';
+          if (name.includes('library')) return 'Campus Library';
+          if (name.includes('cowork')) return 'Cowork Loft';
+          return spotCycle[index % spotCycle.length];
+        };
+
+        const isDemoUser = !!(currentUserId && String(currentUserId).startsWith('demo-u'));
+        const canSelfSeed = !!(currentUserId && currentUser && !isDemoUser);
+        const demoMin = Math.min(4, unique.length);
+        let selfCount = canSelfSeed ? Math.min(6, Math.max(3, Math.floor(unique.length / 2))) : 0;
+        if (canSelfSeed) selfCount = Math.min(selfCount, Math.max(0, unique.length - demoMin));
+
+        const selfPhotos = canSelfSeed ? unique.slice(0, selfCount) : [];
+        const demoPhotos = unique.slice(selfCount);
+
+        const demoLimit = Math.min(demoPhotos.length, demoUsers.length);
+        demoCheckins = demoPhotos.slice(0, demoLimit).map((p, i) => {
+          const u = demoUsers[i];
+          const spotName = guessSpot(p, i);
+          const coords = coordsFor[spotName] || coordsFor['Agora Coffee'];
+          const createdAt = new Date(now - (i * 9 + 4) * 60 * 1000).toISOString();
+          const visibility = i % 7 === 2 ? 'friends' : 'public';
+          return {
+            id: `demo-c${i + 1}-${now}`,
+            createdAt,
+            userId: u.id,
+            userName: u.name,
+            userHandle: u.handle,
+            userPhotoUrl: (demoAvatars as any)[u.id],
+            city: u.city,
+            campus: u.campus,
+            campusOrCity: u.campusOrCity,
+            spotName,
+            spotPlaceId: spotName === 'Agora Coffee' ? (agoraPlaceId || 'demo-place-agora') : placeIdFor(spotName),
+            spotLatLng: spotName === 'Agora Coffee' && agoraLatLng ? (agoraLatLng as any) : coords,
+            photoUrl: p.uri,
+            caption: captions[i % captions.length],
+            tags: tagsFor(spotName),
+            openNow: true,
+            visibility,
+          } as any;
+        });
+
+        if (canSelfSeed && currentUserId && currentUser) {
+          selfSeed = selfPhotos.map((p, i) => {
+            const spotName = guessSpot(p, i + demoLimit);
+            const coords = coordsFor[spotName] || coordsFor['Agora Coffee'];
+            const ageMs = i === 0 ? 2 * 60 * 60 * 1000 : i === 1 ? 20 * 60 * 60 * 1000 : (i + 1) * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000;
+            const createdAt = new Date(now - ageMs).toISOString();
+            const visibility = i % 5 === 1 ? 'friends' : 'public';
+            return {
+              id: `demo-self-${currentUserId}-${now}-${i + 1}`,
+              createdAt,
+              userId: currentUserId,
+              userName: currentUser.name || 'You',
+              userHandle: currentUser.handle || 'you',
+              userPhotoUrl: currentUser.photoUrl || null,
+              city: currentUser.city || undefined,
+              campus: currentUser.campus || undefined,
+              campusOrCity: currentUser.campusOrCity || undefined,
+              spotName,
+              spotPlaceId: spotName === 'Agora Coffee' ? (agoraPlaceId || 'demo-place-agora') : placeIdFor(spotName),
+              spotLatLng: spotName === 'Agora Coffee' && agoraLatLng ? (agoraLatLng as any) : coords,
+              photoUrl: p.uri,
+              caption: captions[(i + 2) % captions.length],
+              tags: tagsFor(spotName),
+              openNow: true,
+              visibility,
+            } as any;
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
 
     const filtered = checkins.filter((c: any) => !isDemoSeedId(c?.id));
     const next = [...selfSeed, ...demoCheckins, ...filtered];
@@ -1358,6 +1514,15 @@ export async function clearCheckins() {
   if (isWeb()) {
     window.localStorage.removeItem(KEY);
     return;
+  }
+  const store = await getAsyncStorage();
+  if (store) {
+    try {
+      if (typeof store.removeItem === 'function') await store.removeItem(KEY);
+      else await store.setItem(KEY, JSON.stringify([]));
+    } catch {
+      // ignore
+    }
   }
   memory = [];
 }
@@ -1824,6 +1989,49 @@ export async function getDemoModeEnabled() {
     try { const raw = window.localStorage.getItem(DEMO_MODE_ENABLED_KEY); return raw ? JSON.parse(raw) : false; } catch { return false; }
   }
   return await readNativeJson<boolean>(DEMO_MODE_ENABLED_KEY, false);
+}
+
+export async function setDemoCustomPhotos(photos: DemoCustomPhoto[]) {
+  const cleaned = Array.isArray(photos)
+    ? photos
+        .filter((p) => typeof p?.uri === 'string' && p.uri.trim().length > 0)
+        .map((p) => ({ uri: p.uri.trim(), fileName: typeof p?.fileName === 'string' ? p.fileName : null }))
+    : [];
+  if (isWeb()) {
+    try { window.localStorage.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify(cleaned)); } catch {}
+    return;
+  }
+  const store = await getAsyncStorage();
+  if (!store) return;
+  try {
+    await store.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify(cleaned));
+  } catch {}
+}
+
+export async function getDemoCustomPhotos() {
+  if (isWeb()) {
+    try {
+      const raw = window.localStorage.getItem(DEMO_CUSTOM_PHOTOS_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? (arr as DemoCustomPhoto[]) : [];
+    } catch {
+      return [] as DemoCustomPhoto[];
+    }
+  }
+  return await readNativeJson<DemoCustomPhoto[]>(DEMO_CUSTOM_PHOTOS_KEY, [] as DemoCustomPhoto[]);
+}
+
+export async function clearDemoCustomPhotos() {
+  if (isWeb()) {
+    try { window.localStorage.removeItem(DEMO_CUSTOM_PHOTOS_KEY); } catch {}
+    return;
+  }
+  const store = await getAsyncStorage();
+  if (!store) return;
+  try {
+    if (typeof store.removeItem === 'function') await store.removeItem(DEMO_CUSTOM_PHOTOS_KEY);
+    else await store.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify([]));
+  } catch {}
 }
 
 export async function setLocationEnabled(enabled: boolean) {

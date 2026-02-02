@@ -1,4 +1,4 @@
-export const CHECKIN_TTL_MS = 12 * 60 * 60 * 1000;
+export const CHECKIN_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function toMillis(input: any): number | null {
   if (!input) return null;
@@ -20,11 +20,14 @@ export function toMillis(input: any): number | null {
 }
 
 export function getCheckinExpiryMs(checkin: { expiresAt?: any; createdAt?: any }) {
-  const expiresMs = toMillis(checkin?.expiresAt);
-  if (expiresMs) return expiresMs;
   const createdMs = toMillis(checkin?.createdAt);
-  if (!createdMs) return null;
-  return createdMs + CHECKIN_TTL_MS;
+  const computed = createdMs ? createdMs + CHECKIN_TTL_MS : null;
+  const expiresMs = toMillis(checkin?.expiresAt);
+
+  // Prefer a computed "live window" from createdAt, but preserve a later expiresAt if present
+  // (e.g. if a future server override extends the live window).
+  if (expiresMs && computed) return Math.max(expiresMs, computed);
+  return expiresMs || computed;
 }
 
 export function isCheckinExpired(checkin: { expiresAt?: any; createdAt?: any }, now = Date.now()) {
