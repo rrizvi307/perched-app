@@ -6,6 +6,7 @@ import { Body, H1, Label } from '@/components/ui/typography';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
+import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
@@ -172,6 +173,58 @@ const ASK_PRESETS = [
   { label: 'Open now', query: 'open now' },
 ] as const;
 
+const FILTER_GROUPS: FilterGroup[] = [
+  {
+    id: 'atmosphere',
+    title: 'Atmosphere',
+    icon: 'sparkles',
+    multiSelect: true,
+    options: [
+      { id: 'quiet', label: 'Quiet', value: 'quiet' },
+      { id: 'social', label: 'Social', value: 'social' },
+      { id: 'cozy', label: 'Cozy', value: 'cozy' },
+      { id: 'bright', label: 'Bright', value: 'bright' },
+      { id: 'spacious', label: 'Spacious', value: 'spacious' },
+    ],
+  },
+  {
+    id: 'amenities',
+    title: 'Amenities',
+    icon: 'bolt.fill',
+    multiSelect: true,
+    options: [
+      { id: 'wifi', label: 'Wi-Fi', value: 'wifi' },
+      { id: 'outlets', label: 'Outlets', value: 'outlets' },
+      { id: 'seating', label: 'Seating', value: 'seating' },
+      { id: 'outdoor', label: 'Outdoor', value: 'outdoor' },
+      { id: 'parking', label: 'Parking', value: 'parking' },
+    ],
+  },
+  {
+    id: 'type',
+    title: 'Spot Type',
+    icon: 'building.2.fill',
+    multiSelect: true,
+    options: [
+      { id: 'cafe', label: 'Cafe', value: 'cafe' },
+      { id: 'library', label: 'Library', value: 'library' },
+      { id: 'cowork', label: 'Coworking', value: 'cowork' },
+      { id: 'study', label: 'Study spot', value: 'study' },
+    ],
+  },
+  {
+    id: 'hours',
+    title: 'Hours',
+    icon: 'clock.fill',
+    multiSelect: false,
+    options: [
+      { id: 'open', label: 'Open now', value: 'open' },
+      { id: 'late', label: 'Late-night', value: 'late' },
+      { id: 'closed', label: 'Closed', value: 'closed' },
+    ],
+  },
+];
+
 export default function Explore() {
   const color = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -201,6 +254,7 @@ export default function Explore() {
   const [scope, setScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
   const [vibe, setVibe] = useState<ExploreVibe>('all');
   const [openFilter, setOpenFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -1148,17 +1202,77 @@ export default function Explore() {
     const isNameSearch = !!q && !activeIntent;
     const byQuery = isNameSearch ? displaySpots.filter((s) => (s.name || '').toLowerCase().includes(q)) : displaySpots;
     if (aiMode) return byQuery;
-    if (vibe === 'all') return byQuery;
+
+    // Apply grouped filters
     return byQuery.filter((s) => {
       const typeStr = Array.isArray(s.types) ? s.types.join(' ') : '';
       const tags = Array.isArray(s.tags) ? s.tags.join(' ') : '';
       const exampleTags = Array.isArray(s.example?.tags) ? s.example.tags.join(' ') : '';
       const caption = typeof s.example?.caption === 'string' ? s.example.caption : '';
       const hay = `${s.name || ''} ${s.description || ''} ${typeStr} ${tags} ${exampleTags} ${caption}`.toLowerCase();
-      return matchesVibe(hay, vibe);
+
+      // Atmosphere filters
+      const atmosphereFilters = selectedFilters.atmosphere || [];
+      if (atmosphereFilters.length > 0) {
+        const hasMatch = atmosphereFilters.some(filter => {
+          if (filter === 'quiet') return hay.includes('quiet') || hay.includes('library') || hay.includes('reading');
+          if (filter === 'social') return hay.includes('social') || hay.includes('cafe') || hay.includes('lounge');
+          if (filter === 'cozy') return hay.includes('cozy') || hay.includes('warm');
+          if (filter === 'bright') return hay.includes('bright') || hay.includes('light') || hay.includes('airy');
+          if (filter === 'spacious') return hay.includes('spacious') || hay.includes('roomy') || hay.includes('large');
+          return false;
+        });
+        if (!hasMatch) return false;
+      }
+
+      // Amenities filters
+      const amenitiesFilters = selectedFilters.amenities || [];
+      if (amenitiesFilters.length > 0) {
+        const hasMatch = amenitiesFilters.every(filter => {
+          if (filter === 'wifi') return hay.includes('wifi') || hay.includes('wi-fi') || hay.includes('internet');
+          if (filter === 'outlets') return hay.includes('outlet') || hay.includes('power') || hay.includes('charging');
+          if (filter === 'seating') return hay.includes('seating') || hay.includes('seats') || hay.includes('tables');
+          if (filter === 'outdoor') return hay.includes('outdoor') || hay.includes('patio') || hay.includes('terrace');
+          if (filter === 'parking') return hay.includes('parking') || hay.includes('garage');
+          return true;
+        });
+        if (!hasMatch) return false;
+      }
+
+      // Type filters
+      const typeFilters = selectedFilters.type || [];
+      if (typeFilters.length > 0) {
+        const hasMatch = typeFilters.some(filter => {
+          if (filter === 'cafe') return hay.includes('cafe') || hay.includes('coffee');
+          if (filter === 'library') return hay.includes('library');
+          if (filter === 'cowork') return hay.includes('cowork') || hay.includes('co-work');
+          if (filter === 'study') return hay.includes('study') || hay.includes('university') || hay.includes('campus');
+          return false;
+        });
+        if (!hasMatch) return false;
+      }
+
+      // Hours filters
+      const hoursFilters = selectedFilters.hours || [];
+      if (hoursFilters.length > 0) {
+        const hoursMatch = hoursFilters.some(filter => {
+          if (filter === 'open') return s.openNow === true;
+          if (filter === 'closed') return s.openNow === false;
+          if (filter === 'late') return hay.includes('late') || hay.includes('24') || hay.includes('midnight');
+          return true;
+        });
+        if (!hoursMatch) return false;
+      }
+
+      // Legacy vibe filter (for backward compatibility)
+      if (vibe !== 'all' && !matchesVibe(hay, vibe)) return false;
+
+      return true;
     });
-  }, [query, displaySpots, activeIntent, aiMode, vibe, matchesVibe]);
+  }, [query, displaySpots, activeIntent, aiMode, selectedFilters, vibe, matchesVibe]);
+
   const filteredByOpen = React.useMemo(() => {
+    // Hours filter is now handled in filteredSpots, but keep for backward compatibility
     if (appliedOpenFilter === 'all') return filteredSpots;
     return filteredSpots.filter((s) => {
       if (typeof s.openNow !== 'boolean') return false;
@@ -1423,45 +1537,19 @@ export default function Explore() {
                 </View>
               </View>
             ) : null}
-            <View style={styles.vibeRow}>
-              {(['all', 'quiet', 'study', 'cowork', 'social', 'late'] as const).map((option) => {
-                const isActive = vibe === option;
-                const label = formatVibeLabel(option);
-                return (
-                  <Pressable
-                    key={option}
-                    onPress={() => setVibe(option)}
-                    style={({ pressed }) => [
-                      styles.vibeChip,
-                      { borderColor: border, backgroundColor: isActive ? primary : pressed ? highlight : card },
-                    ]}
-                  >
-                    <Text style={{ color: isActive ? '#FFFFFF' : muted, fontWeight: '600' }}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <View style={styles.vibeRow}>
-              {(['all', 'open', 'closed'] as const).map((option) => {
-                const isActive = openFilter === option;
-                const label = option === 'all' ? 'Any hours' : option === 'open' ? 'Open now' : 'Closed now';
-                return (
-                  <Pressable
-                    key={option}
-                    onPress={() => setOpenFilter(option)}
-                    style={({ pressed }) => [
-                      styles.vibeChip,
-                      { borderColor: border, backgroundColor: isActive ? primary : pressed ? highlight : card },
-                    ]}
-                  >
-                    <Text style={{ color: isActive ? '#FFFFFF' : muted, fontWeight: '600' }}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={{ color: muted, fontSize: 12, marginTop: 2 }}>
+            <FilterGroups
+              groups={FILTER_GROUPS}
+              selectedFilters={selectedFilters}
+              onFilterChange={(groupId, values) => {
+                setSelectedFilters(prev => ({
+                  ...prev,
+                  [groupId]: values,
+                }));
+              }}
+            />
+            <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
               {filteredByOpen.length
-                ? `Showing ${filteredByOpen.length} spot${filteredByOpen.length === 1 ? '' : 's'} · ${formatVibeLabel(appliedVibe)}${appliedOpenFilter === 'all' ? '' : ` · ${appliedOpenFilter === 'open' ? 'Open now' : 'Closed now'}`}`
+                ? `Showing ${filteredByOpen.length} spot${filteredByOpen.length === 1 ? '' : 's'}`
                 : 'No spots match these filters.'}
             </Text>
             {previewSpots.length ? (
