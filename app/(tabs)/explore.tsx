@@ -39,6 +39,43 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   return R * c;
 }
 
+// Aggregate utility metrics from check-ins for a spot
+function aggregateSpotMetrics(checkins: any[]) {
+  const wifiSpeeds: number[] = [];
+  const busynessValues: number[] = [];
+  const noiseLevels: { quiet: number; moderate: number; lively: number } = { quiet: 0, moderate: 0, lively: 0 };
+  let laptopYes = 0;
+  let laptopNo = 0;
+
+  checkins.forEach((c) => {
+    if (c.wifiSpeed && typeof c.wifiSpeed === 'number') wifiSpeeds.push(c.wifiSpeed);
+    if (c.busyness && typeof c.busyness === 'number') busynessValues.push(c.busyness);
+    if (c.noiseLevel === 'quiet') noiseLevels.quiet++;
+    else if (c.noiseLevel === 'moderate') noiseLevels.moderate++;
+    else if (c.noiseLevel === 'lively') noiseLevels.lively++;
+    if (c.laptopFriendly === true) laptopYes++;
+    else if (c.laptopFriendly === false) laptopNo++;
+  });
+
+  const avgWifiSpeed = wifiSpeeds.length > 0 ? Math.round(wifiSpeeds.reduce((a, b) => a + b, 0) / wifiSpeeds.length * 10) / 10 : null;
+  const avgBusyness = busynessValues.length > 0 ? Math.round(busynessValues.reduce((a, b) => a + b, 0) / busynessValues.length * 10) / 10 : null;
+
+  // Determine top noise level
+  let topNoiseLevel: 'quiet' | 'moderate' | 'lively' | null = null;
+  const totalNoise = noiseLevels.quiet + noiseLevels.moderate + noiseLevels.lively;
+  if (totalNoise > 0) {
+    if (noiseLevels.quiet >= noiseLevels.moderate && noiseLevels.quiet >= noiseLevels.lively) topNoiseLevel = 'quiet';
+    else if (noiseLevels.moderate >= noiseLevels.lively) topNoiseLevel = 'moderate';
+    else topNoiseLevel = 'lively';
+  }
+
+  // Calculate laptop-friendly percentage
+  const totalLaptop = laptopYes + laptopNo;
+  const laptopFriendlyPct = totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
+
+  return { avgWifiSpeed, avgBusyness, topNoiseLevel, laptopFriendlyPct };
+}
+
 function formatTime(input: string | { seconds?: number } | undefined) {
   return formatCheckinClock(input);
 }
@@ -199,6 +236,19 @@ const FILTER_GROUPS: FilterGroup[] = [
       { id: 'seating', label: 'Seating', value: 'seating' },
       { id: 'outdoor', label: 'Outdoor', value: 'outdoor' },
       { id: 'parking', label: 'Parking', value: 'parking' },
+    ],
+  },
+  {
+    id: 'spotIntel',
+    title: 'Spot Intel',
+    icon: 'chart.bar.fill',
+    multiSelect: true,
+    options: [
+      { id: 'fast-wifi', label: '🚀 Fast WiFi', value: 'fast-wifi' },
+      { id: 'laptop-friendly', label: '💻 Laptop OK', value: 'laptop-friendly' },
+      { id: 'not-busy', label: '🧘 Not Busy', value: 'not-busy' },
+      { id: 'quiet-spot', label: '🤫 Quiet', value: 'quiet-spot' },
+      { id: 'lively-spot', label: '🎉 Lively', value: 'lively-spot' },
     ],
   },
   {
@@ -464,9 +514,11 @@ export default function Explore() {
                 example: it,
                 openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
                 tagScores: {},
+                _checkins: [], // Track checkins for metric aggregation
               };
             }
             grouped[key].count += 1;
+            grouped[key]._checkins.push(it);
             if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
             if (Array.isArray(it.tags)) {
               it.tags.forEach((tag: any) => {
@@ -475,6 +527,12 @@ export default function Explore() {
                 grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
               });
             }
+          });
+          // Aggregate utility metrics for each spot
+          Object.values(grouped).forEach((spot: any) => {
+            const metrics = aggregateSpotMetrics(spot._checkins);
+            Object.assign(spot, metrics);
+            delete spot._checkins; // Clean up
           });
           const arr = Object.values(grouped) as any[];
           const focus = loc;
@@ -540,9 +598,11 @@ export default function Explore() {
               example: it,
               openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
               tagScores: {},
+              _checkins: [],
             };
           }
           grouped[key].count += 1;
+          grouped[key]._checkins.push(it);
           if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
           if (Array.isArray(it.tags)) {
             it.tags.forEach((tag: any) => {
@@ -551,6 +611,12 @@ export default function Explore() {
               grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
             });
           }
+        });
+        // Aggregate utility metrics for each spot
+        Object.values(grouped).forEach((spot: any) => {
+          const metrics = aggregateSpotMetrics(spot._checkins);
+          Object.assign(spot, metrics);
+          delete spot._checkins;
         });
         const arr = Object.values(grouped) as any[];
         const focus = loc;
@@ -627,9 +693,11 @@ export default function Explore() {
               example: it,
               openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
               tagScores: {},
+              _checkins: [],
             };
           }
           grouped[key].count += 1;
+          grouped[key]._checkins.push(it);
           if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
           if (Array.isArray(it.tags)) {
             it.tags.forEach((tag: any) => {
@@ -638,6 +706,12 @@ export default function Explore() {
               grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
             });
           }
+        });
+        // Aggregate utility metrics
+        Object.values(grouped).forEach((spot: any) => {
+          const metrics = aggregateSpotMetrics(spot._checkins);
+          Object.assign(spot, metrics);
+          delete spot._checkins;
         });
         const offlineArr = Object.values(grouped).sort((a, b) => b.count - a.count);
         if (!active) return;

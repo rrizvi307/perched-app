@@ -69,6 +69,11 @@ export default function CheckinScreen() {
 	const [hasPermission, setHasPermission] = useState<boolean | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
+	// Utility metrics for spot intel
+	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [noiseLevel, setNoiseLevel] = useState<'quiet' | 'moderate' | 'lively' | null>(null);
+	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -534,6 +539,11 @@ export default function CheckinScreen() {
 							caption,
 							tags: selectedTags,
 							visibility,
+							// Utility metrics
+							...(wifiSpeed && { wifiSpeed }),
+							...(noiseLevel && { noiseLevel }),
+							...(busyness && { busyness }),
+							...(laptopFriendly !== null && { laptopFriendly }),
 						};
 						await fb.updateCheckinRemote(editId, updates);
 						// update local copy
@@ -584,6 +594,11 @@ export default function CheckinScreen() {
 				campus: user?.campus,
 				visibility,
 				clientId,
+				// Utility metrics
+				...(wifiSpeed && { wifiSpeed }),
+				...(noiseLevel && { noiseLevel }),
+				...(busyness && { busyness }),
+				...(laptopFriendly !== null && { laptopFriendly }),
 			} as any;
 			const pendingPayload = {
 				userId: uid,
@@ -601,6 +616,11 @@ export default function CheckinScreen() {
 				campus: user?.campus,
 				visibility,
 				clientId,
+				// Utility metrics
+				...(wifiSpeed && { wifiSpeed }),
+				...(noiseLevel && { noiseLevel }),
+				...(busyness && { busyness }),
+				...(laptopFriendly !== null && { laptopFriendly }),
 			};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
@@ -879,6 +899,131 @@ export default function CheckinScreen() {
 							})}
 						</View>
 						<Text style={{ color: muted, marginBottom: 8 }}>Pick up to {MAX_TAGS} tags to describe the vibe.</Text>
+
+						{/* Spot Intel Section - Utility Metrics */}
+						<View style={{ marginTop: 16, marginBottom: 8 }}>
+							<Text style={{ color: text, fontWeight: '700', fontSize: 16, marginBottom: 12 }}>Spot Intel (optional)</Text>
+							<Text style={{ color: muted, marginBottom: 12 }}>Help others find the perfect spot</Text>
+
+							{/* WiFi Speed */}
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>WiFi Speed</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`wifi-${level}`}
+											onPress={() => setWifiSpeed(wifiSpeed === level ? null : level)}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: wifiSpeed === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text style={{ color: wifiSpeed === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+												{level === 1 ? '😩' : level === 2 ? '😕' : level === 3 ? '😐' : level === 4 ? '😊' : '🚀'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{wifiSpeed === 1 ? 'Unusable' : wifiSpeed === 2 ? 'Slow' : wifiSpeed === 3 ? 'OK' : wifiSpeed === 4 ? 'Fast' : wifiSpeed === 5 ? 'Blazing' : 'Tap to rate WiFi'}
+								</Text>
+							</View>
+
+							{/* Noise Level */}
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Noise Level</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{(['quiet', 'moderate', 'lively'] as const).map((level) => (
+										<Pressable
+											key={`noise-${level}`}
+											onPress={() => setNoiseLevel(noiseLevel === level ? null : level)}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: noiseLevel === level ? primary : 'transparent',
+													paddingHorizontal: 16,
+												},
+											]}
+										>
+											<Text style={{ color: noiseLevel === level ? '#FFFFFF' : text, fontWeight: '600' }}>
+												{level === 'quiet' ? '🤫 Quiet' : level === 'moderate' ? '💬 Moderate' : '🎉 Lively'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+							</View>
+
+							{/* Busyness */}
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>How Busy?</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`busy-${level}`}
+											onPress={() => setBusyness(busyness === level ? null : level)}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: busyness === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text style={{ color: busyness === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+												{level === 1 ? '👻' : level === 2 ? '🧘' : level === 3 ? '👥' : level === 4 ? '😅' : '🔥'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{busyness === 1 ? 'Empty' : busyness === 2 ? 'Quiet' : busyness === 3 ? 'Some people' : busyness === 4 ? 'Busy' : busyness === 5 ? 'Packed!' : 'Tap to rate how crowded'}
+								</Text>
+							</View>
+
+							{/* Laptop Friendly */}
+							<View style={{ marginBottom: 8 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Good for Laptop Work?</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									<Pressable
+										onPress={() => setLaptopFriendly(laptopFriendly === true ? null : true)}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: laptopFriendly === true ? primary : 'transparent',
+												paddingHorizontal: 20,
+											},
+										]}
+									>
+										<Text style={{ color: laptopFriendly === true ? '#FFFFFF' : text, fontWeight: '600' }}>
+											💻 Yes
+										</Text>
+									</Pressable>
+									<Pressable
+										onPress={() => setLaptopFriendly(laptopFriendly === false ? null : false)}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: laptopFriendly === false ? primary : 'transparent',
+												paddingHorizontal: 20,
+											},
+										]}
+									>
+										<Text style={{ color: laptopFriendly === false ? '#FFFFFF' : text, fontWeight: '600' }}>
+											☕ Not really
+										</Text>
+									</Pressable>
+								</View>
+							</View>
+						</View>
+
 						<View style={{ height: 8 }} />
 						{spot ? (
 							<Pressable
@@ -1177,6 +1322,14 @@ export default function CheckinScreen() {
 		borderWidth: 1,
 		marginRight: tokens.space.s8,
 		marginBottom: tokens.space.s8,
+	},
+	metricChip: {
+		paddingHorizontal: tokens.space.s12,
+		paddingVertical: tokens.space.s10,
+		borderRadius: 12,
+		borderWidth: 1,
+		alignItems: 'center',
+		justifyContent: 'center',
 	},
 	photoButton: {
 		height: 52,

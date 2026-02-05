@@ -71,6 +71,47 @@ const SpotListItem = React.memo<SpotListItemProps>(({
           {item.description || describeSpot(item.name, item.example?.address)}
           {item.distance !== undefined && item.distance !== Infinity ? ` · ${formatDistance(item.distance)}` : ''}
         </Text>
+        {/* Utility Metrics Row */}
+        {(item.avgWifiSpeed || item.avgBusyness || item.topNoiseLevel || item.laptopFriendlyPct !== undefined) && (
+          <View style={styles.metricsRow}>
+            {item.avgWifiSpeed ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha(primary, 0.12) }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.avgWifiSpeed >= 4 ? '🚀' : item.avgWifiSpeed >= 3 ? '📶' : '📶'}
+                </Text>
+                <Text style={{ color: primary, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                  {item.avgWifiSpeed >= 4 ? 'Fast' : item.avgWifiSpeed >= 3 ? 'OK' : 'Slow'}
+                </Text>
+              </View>
+            ) : null}
+            {item.topNoiseLevel ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha(accent, 0.12) }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.topNoiseLevel === 'quiet' ? '🤫' : item.topNoiseLevel === 'moderate' ? '💬' : '🎉'}
+                </Text>
+                <Text style={{ color: accent, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                  {item.topNoiseLevel === 'quiet' ? 'Quiet' : item.topNoiseLevel === 'moderate' ? 'Moderate' : 'Lively'}
+                </Text>
+              </View>
+            ) : null}
+            {item.avgBusyness ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha(muted, 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.avgBusyness <= 2 ? '🧘' : item.avgBusyness <= 3 ? '👥' : '🔥'}
+                </Text>
+                <Text style={{ color: text, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                  {item.avgBusyness <= 2 ? 'Calm' : item.avgBusyness <= 3 ? 'Moderate' : 'Busy'}
+                </Text>
+              </View>
+            ) : null}
+            {item.laptopFriendlyPct >= 70 ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#22C55E', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>💻</Text>
+                <Text style={{ color: '#22C55E', fontSize: 10, fontWeight: '600', marginLeft: 2 }}>Laptop OK</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
         {tags.length > 0 && (
           <View style={styles.tagRow}>
             {tags.map((tag) => (
@@ -127,6 +168,19 @@ const styles = StyleSheet.create({
     width: 100,
     height: 80,
     borderRadius: 10,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metricBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
   },
   tagRow: {
     flexDirection: 'row',

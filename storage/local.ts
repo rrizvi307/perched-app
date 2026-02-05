@@ -30,6 +30,11 @@ type Checkin = {
   expiresAt?: string;
   createdAt: string;
   tags?: string[];
+  // New utility metrics
+  wifiSpeed?: 1 | 2 | 3 | 4 | 5; // 1=unusable, 5=blazing fast
+  noiseLevel?: 'quiet' | 'moderate' | 'lively';
+  busyness?: 1 | 2 | 3 | 4 | 5; // 1=empty, 5=packed
+  laptopFriendly?: boolean; // would you recommend for laptop work?
 };
 
 type DemoCustomPhoto = { uri: string; fileName?: string | null };

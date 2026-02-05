@@ -276,6 +276,11 @@ async function seedCheckins() {
   const checkinsToCreate = 40;
   const batch = db.batch();
 
+  // Utility metric options
+  const wifiSpeeds = [3, 3, 4, 4, 4, 5, 5] as const; // Mostly good WiFi
+  const noiseLevels = ['quiet', 'quiet', 'moderate', 'moderate', 'lively'] as const;
+  const busynessLevels = [1, 2, 2, 3, 3, 3, 4, 4, 5] as const;
+
   for (let i = 0; i < checkinsToCreate; i++) {
     const user = randomElement(DEMO_USERS);
     const spot = randomElement(DEMO_SPOTS);
@@ -284,6 +289,12 @@ async function seedCheckins() {
     const hoursAgo = Math.random() * 20; // Within last 20 hours
     const createdAt = generateTimestamp(hoursAgo);
     const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
+
+    // Generate utility metrics (70% chance of having each metric)
+    const wifiSpeed = Math.random() > 0.3 ? randomElement([...wifiSpeeds]) : undefined;
+    const noiseLevel = Math.random() > 0.3 ? randomElement([...noiseLevels]) : undefined;
+    const busyness = Math.random() > 0.3 ? randomElement([...busynessLevels]) : undefined;
+    const laptopFriendly = Math.random() > 0.3 ? (Math.random() > 0.2) : undefined; // 80% say yes when provided
 
     const checkinId = `demo-checkin-${Date.now()}-${i}`;
     const checkinRef = db.collection('checkins').doc(checkinId);
@@ -307,12 +318,17 @@ async function seedCheckins() {
       visibility: 'public',
       createdAt: Timestamp.fromDate(createdAt),
       expiresAt: Timestamp.fromDate(expiresAt),
+      // Utility metrics
+      ...(wifiSpeed && { wifiSpeed }),
+      ...(noiseLevel && { noiseLevel }),
+      ...(busyness && { busyness }),
+      ...(laptopFriendly !== undefined && { laptopFriendly }),
       __demo: true,
     });
   }
 
   await batch.commit();
-  console.log(`✅ Created ${checkinsToCreate} demo check-ins`);
+  console.log(`✅ Created ${checkinsToCreate} demo check-ins with utility metrics`);
 }
 
 async function seedFriendRequests() {
