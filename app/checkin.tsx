@@ -29,6 +29,9 @@ import { syncPendingCheckins } from '@/services/syncPending';
 import { useLocalSearchParams, useRootNavigationState, useRouter } from 'expo-router';
 import { classifySpotCategory } from '@/services/spotUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { updateStatsAfterCheckin } from '@/services/gamification';
+import { notifyAchievementUnlocked, scheduleStreakReminder } from '@/services/smartNotifications';
+import { trackCheckinForRating, promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
 
 function dmsToDeg(value: any, ref?: string) {
 	if (!value) return null;
@@ -603,6 +606,37 @@ export default function CheckinScreen() {
 				const savedLocal = await saveCheckin(localPayload as any);
 				publishCheckin(savedLocal);
 				await setLastCheckinAt(Date.now());
+
+				// Track gamification stats
+				if (activePlace?.placeId) {
+					try {
+						const stats = await updateStatsAfterCheckin(activePlace.placeId, Date.now());
+
+						// Track for rating prompt
+						await trackCheckinForRating();
+
+						// Check for streak milestones and notify
+						if (stats.streakDays === 3 || stats.streakDays === 7 || stats.streakDays === 30 || stats.streakDays === 100) {
+							await notifyAchievementUnlocked(`${stats.streakDays} Day Streak`, '🔥');
+							// Perfect moment to ask for rating - user just hit milestone!
+							setTimeout(() => {
+								void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
+							}, 2000); // Wait 2s after notification
+						}
+
+						// Schedule next streak reminder
+						await scheduleStreakReminder();
+
+						// Prompt for rating after 10th check-in (milestone)
+						if (stats.totalCheckins === 10 || stats.totalCheckins === 25) {
+							setTimeout(() => {
+								void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
+							}, 2000);
+						}
+					} catch (error) {
+						console.error('Failed to update gamification stats:', error);
+					}
+				}
 			} catch {}
 			setPendingRemote(pendingPayload);
 			await enqueuePendingCheckin(pendingPayload);

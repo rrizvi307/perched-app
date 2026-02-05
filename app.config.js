@@ -12,6 +12,10 @@ function pickEnv(...keys) {
 
 module.exports = ({ config }) => {
   const googleMapsApiKey = pickEnv("EXPO_PUBLIC_GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_API_KEY");
+  const sentryDsn = pickEnv("EXPO_PUBLIC_SENTRY_DSN", "SENTRY_DSN");
+  const env = pickEnv("EXPO_PUBLIC_ENV", "ENV") || "development";
+  const segmentWriteKey = pickEnv("EXPO_PUBLIC_SEGMENT_WRITE_KEY", "SEGMENT_WRITE_KEY");
+  const mixpanelToken = pickEnv("EXPO_PUBLIC_MIXPANEL_TOKEN", "MIXPANEL_TOKEN");
 
   const firebaseFromEnv = {
     apiKey: pickEnv("EXPO_PUBLIC_FIREBASE_API_KEY", "FIREBASE_API_KEY"),
@@ -52,6 +56,10 @@ module.exports = ({ config }) => {
         ...baseFirebase,
         ...firebaseFromEnv,
       },
+      SENTRY_DSN: sentryDsn || extra.SENTRY_DSN,
+      ENV: env || extra.ENV,
+      SEGMENT_WRITE_KEY: segmentWriteKey || extra.SEGMENT_WRITE_KEY,
+      MIXPANEL_TOKEN: mixpanelToken || extra.MIXPANEL_TOKEN,
     },
   };
 };

@@ -3,6 +3,10 @@ import { Atmosphere } from '@/components/ui/atmosphere';
 import { Body, H1, Label } from '@/components/ui/typography';
 import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
+import { PolishedCard } from '@/components/ui/polished-card';
+import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PremiumButton } from '@/components/ui/premium-button';
 import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins, seedDemoNetwork } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
@@ -853,8 +857,15 @@ function FeedPhoto({
 						const effectiveHandle = item.userHandle || (user && item.userId === user.id ? user.handle : null);
 						const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
 						const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
+						const itemIndex = items.indexOf(item);
 						return (
-							<View style={[styles.card, { backgroundColor: card, borderColor: border }]}>
+							<PolishedCard
+								variant="elevated"
+								animated
+								delay={Math.min(itemIndex * 50, 500)}
+								pressable={false}
+								style={styles.card}
+							>
 							<View style={styles.cardHeader}>
 								<View style={styles.avatarRow}>
 									{item.userPhotoUrl ? (
@@ -1030,45 +1041,34 @@ function FeedPhoto({
 									) : null}
 								</View>
 							</View>
-						</View>
+						</PolishedCard>
 					);
 				}}
 				ListEmptyComponent={
 					initialLoading ? (
 						<View style={styles.empty}>
-							<View style={[styles.skeletonCard, { backgroundColor: border }]} />
-							<View style={[styles.skeletonCard, { backgroundColor: border, height: 220 }]} />
-							<View style={[styles.skeletonCard, { backgroundColor: border }]} />
+							<SkeletonFeedCard />
+							<SkeletonFeedCard />
+							<SkeletonFeedCard />
 						</View>
 					) : onlyFriends && friendIdSet.size === 0 ? (
-						<View style={styles.empty}>
-							<Body style={{ color: text, marginBottom: 8 }}>No friends yet.</Body>
-							<Pressable
-								onPress={() => router.push('/(tabs)/profile')}
-								style={[styles.emptyCta, { backgroundColor: primary }]}
-							>
-								<Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Find friends</Text>
-							</Pressable>
-						</View>
+						<EmptyState
+							icon="person.2.fill"
+							title="No friends yet"
+							description="Connect with friends to see their check-ins and discover new spots together."
+							actionLabel="Find friends"
+							onAction={() => router.push('/(tabs)/profile')}
+						/>
 					) : (
-						<View style={styles.empty}>
-							<Body style={{ color: text, marginBottom: 8 }}>No check-ins yet.</Body>
-							<Pressable
-								onPress={() => router.push('/checkin')}
-								style={[styles.emptyCta, { backgroundColor: primary }]}
-							>
-								<View style={styles.ctaRow}>
-									<IconSymbol name="plus" size={18} color="#FFFFFF" />
-									<Text style={{ color: '#FFFFFF', fontWeight: '700' }}>New check-in</Text>
-								</View>
-							</Pressable>
-							<Pressable
-								onPress={() => router.push('/(tabs)/explore')}
-								style={[styles.emptySecondary, { borderColor: border }]}
-							>
-								<Text style={{ color: text, fontWeight: '700' }}>Explore nearby</Text>
-							</Pressable>
-						</View>
+						<EmptyState
+							icon="photo.on.rectangle.angled"
+							title="No check-ins yet"
+							description="Start sharing your favorite spots and see what your friends are up to."
+							actionLabel="New check-in"
+							onAction={() => router.push('/checkin')}
+							secondaryLabel="Explore nearby"
+							onSecondary={() => router.push('/(tabs)/explore')}
+						/>
 					)
 				}
 				onEndReached={loadMore}

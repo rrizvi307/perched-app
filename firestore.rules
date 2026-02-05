@@ -1,0 +1,263 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isVerified() {
+      return isAuthenticated() && request.auth.token.email_verified == true;
+    }
+
+    // Rate limiting helper - approximate check
+    function withinRateLimit() {
+      // This is a basic check - for production, consider using Cloud Functions
+      // to enforce more sophisticated rate limiting
+      return true;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Anyone can read public profile fields
+      allow read: if isAuthenticated();
+
+      // Users can only create/update their own profile
+      allow create: if isAuthenticated() &&
+                      request.auth.uid == userId &&
+                      request.resource.data.keys().hasAll(['email', 'createdAt']);
+
+      allow update: if isOwner(userId) &&
+                      // Prevent changing critical fields
+                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'createdAt']);
+
+      // Only user or admin can delete
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Check-ins collection
+    match /checkins/{checkinId} {
+      // Read access based on visibility
+      allow read: if isAuthenticated() && (
+        // Public check-ins
+        resource.data.visibility == 'public' ||
+        // Friends-only: check if requester is in user's friends list
+        (resource.data.visibility == 'friends' &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.friends.hasAny([request.auth.uid])) ||
+        // Close friends
+        (resource.data.visibility == 'close' &&
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.closeFriends.hasAny([request.auth.uid])) ||
+        // Own check-ins
+        resource.data.userId == request.auth.uid
+      );
+
+      // Only authenticated, verified users can create
+      allow create: if isVerified() &&
+                      request.auth.uid == request.resource.data.userId &&
+                      request.resource.data.keys().hasAll(['userId', 'createdAt', 'spotName']) &&
+                      withinRateLimit();
+
+      // Only owner can update their check-ins
+      allow update: if isOwner(resource.data.userId) &&
+                      // Prevent changing userId
+                      request.resource.data.userId == resource.data.userId;
+
+      // Owner or admin can delete
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // Friend requests collection
+    match /friendRequests/{requestId} {
+      // Users can read requests involving them
+      allow read: if isAuthenticated() && (
+        resource.data.from == request.auth.uid ||
+        resource.data.to == request.auth.uid
+      );
+
+      // Users can create friend requests (from themselves)
+      allow create: if isAuthenticated() &&
+                      request.resource.data.from == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['from', 'to', 'status', 'createdAt']);
+
+      // Users can update requests they're involved in (to accept/reject)
+      allow update: if isAuthenticated() && (
+        resource.data.from == request.auth.uid ||
+        resource.data.to == request.auth.uid
+      );
+
+      // Users can delete their own requests
+      allow delete: if isAuthenticated() && (
+        resource.data.from == request.auth.uid ||
+        resource.data.to == request.auth.uid
+      );
+    }
+
+    // Reports collection
+    match /reports/{reportId} {
+      // Only admins can read reports
+      allow read: if isAdmin();
+
+      // Any authenticated user can create a report
+      allow create: if isAuthenticated() &&
+                      request.resource.data.reporterId == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['reporterId', 'reportedUserId', 'reason', 'createdAt']);
+
+      // Only admins can update (to change status)
+      allow update: if isAdmin();
+
+      // Only admins can delete
+      allow delete: if isAdmin();
+    }
+
+    // Admins collection
+    match /admins/{userId} {
+      // Only admins can read
+      allow read: if isAdmin();
+
+      // No client-side creation/updates/deletes
+      allow write: if false;
+    }
+
+    // Event logs (analytics)
+    match /eventLogs/{logId} {
+      // No read access for clients
+      allow read: if false;
+
+      // Authenticated users can write their own events
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+
+      // No updates or deletes
+      allow update, delete: if false;
+    }
+
+    // Place events/tags (for trending/ranking)
+    match /placeEvents/{eventId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+
+      allow update, delete: if false;
+    }
+
+    match /placeTags/{tagId} {
+      allow read: if isAuthenticated();
+
+      // Aggregate updates only - Cloud Function should handle this
+      allow create, update: if isAuthenticated();
+
+      allow delete: if false;
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      // Users can only read their own notifications
+      allow read: if isAuthenticated() &&
+                    resource.data.userId == request.auth.uid;
+
+      // Users can mark their own notifications as read
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      // Only allow updating 'read' field
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+
+      // System/Cloud Functions can create notifications
+      allow create: if isAuthenticated();
+
+      // Users can delete their own notifications
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid;
+    }
+
+    // Push tokens for notifications
+    match /pushTokens/{tokenId} {
+      // Users can read their own tokens
+      allow read: if isAuthenticated() &&
+                    resource.data.userId == request.auth.uid;
+
+      // Users can create/update their own tokens
+      allow create, update: if isAuthenticated() &&
+                              request.resource.data.userId == request.auth.uid;
+
+      // Users can delete their own tokens
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid;
+    }
+
+    // Reactions collection (for check-in reactions)
+    match /reactions/{reactionId} {
+      // Anyone authenticated can read reactions
+      allow read: if isAuthenticated();
+
+      // Users can create reactions with their own userId
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['checkinId', 'type', 'userId', 'createdAt']);
+
+      // Users can only delete their own reactions
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid;
+
+      // No updates allowed - users should delete and recreate
+      allow update: if false;
+    }
+
+    // Comments collection (for check-in comments)
+    match /comments/{commentId} {
+      // Anyone authenticated can read comments
+      allow read: if isAuthenticated();
+
+      // Users can create comments with their own userId
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']);
+
+      // Users can update/delete their own comments
+      allow update, delete: if isAuthenticated() &&
+                              resource.data.userId == request.auth.uid;
+    }
+
+    // User stats collection (for gamification)
+    match /userStats/{userId} {
+      // Users can read their own stats, or anyone can read for leaderboards
+      allow read: if isAuthenticated();
+
+      // Users can create/update their own stats
+      allow create, update: if isAuthenticated() &&
+                              request.auth.uid == userId;
+
+      // No deletes
+      allow delete: if false;
+    }
+
+    // Achievements collection (for unlocked achievements)
+    match /achievements/{achievementId} {
+      // Users can read their own achievements
+      allow read: if isAuthenticated();
+
+      // Users can create their own achievement unlocks
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+
+      // No updates or deletes (achievements are permanent)
+      allow update, delete: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

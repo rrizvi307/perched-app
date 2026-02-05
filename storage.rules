@@ -1,0 +1,85 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isValidSize() {
+      // Max 10MB for images
+      return request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Check-in photos
+    match /checkins/{userId}/{filename} {
+      // Anyone can read public check-in photos
+      // (Firestore rules handle visibility filtering)
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload to their folder
+      allow create: if isOwner(userId) &&
+                      isVerified() &&
+                      isValidImage() &&
+                      isValidSize();
+
+      // Only owner can update their own photos
+      allow update: if isOwner(userId) &&
+                      isValidImage() &&
+                      isValidSize();
+
+      // Only owner can delete their photos
+      allow delete: if isOwner(userId);
+    }
+
+    // Profile photos
+    match /profiles/{userId}/{filename} {
+      // Anyone can read profile photos
+      allow read: if isAuthenticated();
+
+      // Only the owner can upload their profile photo
+      allow create: if isOwner(userId) &&
+                      isValidImage() &&
+                      isValidSize();
+
+      // Only owner can update
+      allow update: if isOwner(userId) &&
+                      isValidImage() &&
+                      isValidSize();
+
+      // Only owner can delete
+      allow delete: if isOwner(userId);
+    }
+
+    // Story/share images (temporary exports)
+    match /stories/{userId}/{filename} {
+      // Stories are public once created
+      allow read: if isAuthenticated();
+
+      // Only owner can create story images
+      allow create: if isOwner(userId) &&
+                      isValidImage() &&
+                      isValidSize();
+
+      // Owner can delete
+      allow delete: if isOwner(userId);
+    }
+
+    // Default deny all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

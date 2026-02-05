@@ -14,6 +14,10 @@ import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncP
 import { ToastProvider, useToast } from '@/contexts/ToastContext';
 import { Colors } from '@/constants/theme';
 import { ensureDemoModeReady, isDemoMode } from '@/services/demoMode';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { initDeepLinking } from '@/services/deepLinking';
+import { initAnalytics } from '@/services/analytics';
+import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
@@ -21,14 +25,24 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   initErrorReporting();
+  initAnalytics();
+
+  useEffect(() => {
+    // Initialize deep linking
+    const cleanup = initDeepLinking();
+    return cleanup;
+  }, []);
+
   return (
-    <AuthProvider>
-      <ThemePreferenceProvider>
-        <ToastProvider>
-          <InnerApp />
-        </ToastProvider>
-      </ThemePreferenceProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <ThemePreferenceProvider>
+          <ToastProvider>
+            <InnerApp />
+          </ToastProvider>
+        </ThemePreferenceProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 
@@ -127,25 +141,59 @@ function InnerApp() {
         await syncPendingProfileUpdates(5);
       } catch {}
     };
-    const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(runSync);
+
+    // Initialize push notifications
+    const setupNotifications = async () => {
+      try {
+        const token = await initPushNotifications();
+        if (token) {
+          // TODO: Save token to user profile in Firebase if needed
+          // await updateUserRemote(user.id, { pushToken: token });
+        }
+        // Schedule weekly recap
+        await scheduleWeeklyRecap();
+      } catch (error) {
+        console.error('Failed to setup notifications:', error);
+      }
+    };
+
+    const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(() => {
+      void runSync();
+      void setupNotifications();
+    });
+
     if (Platform.OS === 'web') {
       void runSync();
+      // Skip notifications on web
+    } else {
+      // Also set up notification response handler
+      const notificationSubscription = addNotificationResponseListener((response) => {
+        // Handle notification tap - navigate based on type
+        const notifType = response.notification.request.content.data?.type;
+        if (notifType === 'achievement') {
+          // Navigate to achievements screen when implemented
+          // router.push('/achievements');
+        }
+      });
+
+      const sub = AppState.addEventListener('change', async (next) => {
+        if (appState.current.match(/inactive|background/) && next === 'active') {
+          try {
+            const res = await syncPendingCheckins(5);
+            if (res.synced > 0) {
+              showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
+            }
+          } catch {}
+        }
+        appState.current = next;
+      });
+
+      return () => {
+        initialTask?.cancel?.();
+        sub.remove();
+        notificationSubscription.remove();
+      };
     }
-    const sub = AppState.addEventListener('change', async (next) => {
-      if (appState.current.match(/inactive|background/) && next === 'active') {
-        try {
-          const res = await syncPendingCheckins(5);
-          if (res.synced > 0) {
-            showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
-          }
-        } catch {}
-      }
-      appState.current = next;
-    });
-    return () => {
-      initialTask?.cancel?.();
-      sub.remove();
-    };
   }, [showToast, user]);
 
   return (
@@ -174,6 +222,7 @@ function InnerApp() {
 	        />
         <Stack.Screen name="verify" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="upgrade" options={{ headerShown: false }} />
+        <Stack.Screen name="achievements" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />

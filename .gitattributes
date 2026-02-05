@@ -1,0 +1,7 @@
+# Security: Prevent accidental commits of sensitive files
+.env.local filter=secret-filter
+*.pem filter=secret-filter
+*.key filter=secret-filter
+
+# Detect secrets in commits
+*.env.* diff=secret-diff

@@ -6,6 +6,10 @@ import { Body, H1, Label } from '@/components/ui/typography';
 import { tokens } from '@/constants/tokens';
 import { useToast } from '@/contexts/ToastContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { useAuth } from '@/contexts/AuthContext';
+import { ReactionBar } from '@/components/ui/reaction-bar';
+import { getReactions, ReactionType } from '@/services/social';
+import { shareCheckin } from '@/services/shareInvite';
 import { formatCheckinTime, formatTimeRemaining, toMillis } from '@/services/checkinUtils';
 import { publishCheckin } from '@/services/feedEvents';
 import { deleteCheckinRemote, getCheckinById, isFirebaseConfigured } from '@/services/firebaseClient';
@@ -36,6 +40,7 @@ export default function CheckinDetailScreen() {
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  const { user } = useAuth();
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -49,6 +54,7 @@ export default function CheckinDetailScreen() {
   const [item, setItem] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [reactions, setReactions] = useState<any[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -59,11 +65,27 @@ export default function CheckinDetailScreen() {
         const foundLocal = local.find((c: any) => String(c?.id || '') === cid || String(c?.clientId || '') === cid) || null;
         if (foundLocal) {
           setItem(foundLocal);
+          // Load reactions
+          try {
+            const reactionData = await getReactions(cid);
+            setReactions(reactionData);
+          } catch (error) {
+            console.error('Failed to load reactions:', error);
+          }
           return;
         }
         if (isFirebaseConfigured()) {
           const remote = await getCheckinById(cid);
           setItem(remote || null);
+          // Load reactions
+          if (remote) {
+            try {
+              const reactionData = await getReactions(cid);
+              setReactions(reactionData);
+            } catch (error) {
+              console.error('Failed to load reactions:', error);
+            }
+          }
           return;
         }
         setItem(null);
@@ -92,6 +114,32 @@ export default function CheckinDetailScreen() {
     if (name) parts.push(`name=${encodeURIComponent(name)}`);
     return `/spot?${parts.join('&')}`;
   }, [item?.spotPlaceId, item?.spotName, item?.spot]);
+
+  const reactionCounts = useMemo(() => {
+    const counts: Record<ReactionType, number> = {} as any;
+    reactions.forEach((r: any) => {
+      if (r.type) {
+        counts[r.type as ReactionType] = (counts[r.type as ReactionType] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [reactions]);
+
+  const userReaction = useMemo(() => {
+    if (!user?.id) return null;
+    const userReactionObj = reactions.find((r: any) => r.userId === user.id);
+    return userReactionObj?.type || null;
+  }, [reactions, user?.id]);
+
+  const handleReactionChange = async () => {
+    // Reload reactions after change
+    try {
+      const reactionData = await getReactions(cid);
+      setReactions(reactionData);
+    } catch (error) {
+      console.error('Failed to reload reactions:', error);
+    }
+  };
 
   async function doDelete() {
     if (!item || deleting) return;
@@ -177,9 +225,45 @@ export default function CheckinDetailScreen() {
                 </View>
               ) : null}
 
+              {user && item && (
+                <View style={{ marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: withAlpha(border, 0.3) }}>
+                  <ReactionBar
+                    checkinId={cid}
+                    userId={user.id || ''}
+                    userName={user.name || ''}
+                    userHandle={user.handle}
+                    initialCounts={reactionCounts}
+                    userReaction={userReaction}
+                    onReactionChange={handleReactionChange}
+                  />
+                </View>
+              )}
+
               <View style={{ height: 14 }} />
 
               <View style={[styles.actions, gapStyle(10)]}>
+                {/* Share button */}
+                <Pressable
+                  onPress={async () => {
+                    const result = await shareCheckin(
+                      cid,
+                      title,
+                      user?.name || 'Someone',
+                      photo
+                    );
+                    if (result.success) {
+                      showToast('Check-in shared!', 'success');
+                    }
+                  }}
+                  style={({ pressed }) => [
+                    styles.actionButton,
+                    { borderColor: primary, backgroundColor: pressed ? withAlpha(primary, 0.15) : card },
+                  ]}
+                >
+                  <IconSymbol name="square.and.arrow.up" size={18} color={primary} />
+                  <Text style={{ color: primary, fontWeight: '800', marginLeft: 6 }}>Share</Text>
+                </Pressable>
+
                 {spotLink ? (
 	                  <Pressable
 	                    onPress={() => router.push(spotLink as any)}

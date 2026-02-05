@@ -4,6 +4,11 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, H2, Label } from '@/components/ui/typography';
+import { StreakBadge } from '@/components/ui/streak-badge';
+import { PolishedCard } from '@/components/ui/polished-card';
+import { PolishedLargeHeader } from '@/components/ui/polished-header';
+import { PremiumButton } from '@/components/ui/premium-button';
+import { SkeletonProfile } from '@/components/ui/skeleton-loader';
 import { getLocationOptions } from '@/constants/locations';
 import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import { getForegroundLocationIfPermitted } from '@/services/location';
@@ -19,6 +24,7 @@ import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
+import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, seedDemoNetwork, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { isPhoneLike, normalizePhone } from '@/utils/phone';
@@ -98,6 +104,7 @@ export default function ProfileScreen() {
   const [status, setStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'error' | 'success' } | null>(null);
   const { showToast } = useToast();
   const wasOfflineRef = useRef(false);
+  const [userStats, setUserStats] = useState<{ streakDays: number; totalCheckins: number; uniqueSpots: number } | null>(null);
   const fbAvailable = isFirebaseConfigured();
   const storyMode = preference === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : preference;
   const profileCompletion = useMemo(() => {
@@ -175,6 +182,14 @@ export default function ProfileScreen() {
         const saved = await getSavedSpots(10);
         setSavedSpots(saved);
       } catch {}
+
+      // Load user stats for gamification
+      try {
+        const stats = await getUserStats();
+        setUserStats(stats);
+      } catch (error) {
+        console.error('Failed to load user stats:', error);
+      }
     })();
   }, [loadCheckins, user]);
 
@@ -766,8 +781,12 @@ export default function ProfileScreen() {
         }
         ListHeaderComponent={
           <View style={styles.header}>
-            <Label style={{ color: muted, marginBottom: 8 }}>Profile</Label>
-            <H1 style={{ color: textColor }}>Your story, in real places.</H1>
+            <PolishedLargeHeader
+              title={user?.name || 'Profile'}
+              subtitle={user?.handle ? `@${user.handle}` : 'Add a username'}
+              rightIcon="gearshape.fill"
+              onRightPress={() => router.push('/settings')}
+            />
             {status ? (
               <StatusBanner
                 message={status.message}
@@ -780,7 +799,7 @@ export default function ProfileScreen() {
               />
             ) : null}
             <View style={{ height: 12 }} />
-            <View style={[styles.profileCard, { backgroundColor: cardBg, borderColor }]}>
+            <PolishedCard variant="elevated" animated style={styles.profileCard}>
             <View style={[{ flexDirection: 'row', alignItems: 'center' }, gapStyle(12)]}>
               <ProfilePicture size={84} />
               <View style={{ flex: 1 }}>
@@ -792,7 +811,38 @@ export default function ProfileScreen() {
                 </Text>
                 <Text style={{ color: muted, fontSize: 12 }}>{user?.email || 'Tap below to upgrade'}</Text>
               </View>
+              {userStats && userStats.streakDays > 0 && (
+                <StreakBadge days={userStats.streakDays} size="medium" />
+              )}
             </View>
+            {userStats && (
+              <>
+                <View style={{ marginTop: 16, flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 12, backgroundColor: withAlpha(primary, 0.05), borderRadius: 12 }}>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: textColor, fontSize: 20, fontWeight: '700' }}>{userStats.totalCheckins}</Text>
+                    <Text style={{ color: muted, fontSize: 12 }}>Check-ins</Text>
+                  </View>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: textColor, fontSize: 20, fontWeight: '700' }}>{userStats.uniqueSpots}</Text>
+                    <Text style={{ color: muted, fontSize: 12 }}>Spots</Text>
+                  </View>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={{ color: primary, fontSize: 20, fontWeight: '700' }}>🔥 {userStats.streakDays}</Text>
+                    <Text style={{ color: muted, fontSize: 12 }}>Day Streak</Text>
+                  </View>
+                </View>
+                <PremiumButton
+                  onPress={() => router.push('/achievements' as any)}
+                  variant="secondary"
+                  size="medium"
+                  icon="trophy.fill"
+                  fullWidth
+                  style={{ marginTop: 12 }}
+                >
+                  View Achievements
+                </PremiumButton>
+              </>
+            )}
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
                 onPress={() => router.push('/verify')}
@@ -1067,7 +1117,7 @@ export default function ProfileScreen() {
                   </Pressable>
                 </View>
               )}
-            </View>
+            </PolishedCard>
 
             <View style={{ height: 20 }} />
             <H2 style={{ color: textColor }}>Friends</H2>

@@ -2,6 +2,9 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, Label } from '@/components/ui/typography';
+import { PolishedHeader } from '@/components/ui/polished-header';
+import { PremiumButton } from '@/components/ui/premium-button';
+import { PolishedCard } from '@/components/ui/polished-card';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
@@ -275,6 +278,20 @@ export default function SpotDetail() {
   return (
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
+      <PolishedHeader
+        leftIcon="chevron.left"
+        onLeftPress={() => router.back()}
+        rightIcon="square.and.arrow.up"
+        onRightPress={async () => {
+          try {
+            await Share.share({
+              title: displayName,
+              message: `Check out ${displayName} on Perched!${mapsUrl ? `\n${mapsUrl}` : ''}`,
+            });
+          } catch {}
+        }}
+        blurred
+      />
       <Label style={{ color: muted, marginBottom: 8 }}>Spot</Label>
       <H1 style={{ color: text }}>{displayName}</H1>
       {normalizedName ? null : null}
@@ -347,17 +364,20 @@ export default function SpotDetail() {
       </View>
       <Text style={{ color: muted, marginTop: 6 }}>Past 12 hours</Text>
       <View style={{ height: 12 }} />
-      <Pressable
+      <PremiumButton
         onPress={() => {
           const name = encodeURIComponent(displayName);
           const lat = coords?.lat ? `&lat=${coords.lat}` : '';
           const lng = coords?.lng ? `&lng=${coords.lng}` : '';
           router.push(`/checkin?spot=${name}${lat}${lng}&placeId=${encodeURIComponent(placeId || '')}`);
         }}
-        style={[styles.cta, { backgroundColor: primary }]}
+        variant="primary"
+        size="large"
+        icon="plus.circle.fill"
+        fullWidth
       >
-        <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Tap in here</Text>
-      </Pressable>
+        Tap in here
+      </PremiumButton>
       <View style={styles.actionRow}>
         {coords ? (
 	          <Pressable
