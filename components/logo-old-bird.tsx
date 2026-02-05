@@ -3,14 +3,10 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
-import Svg, { Path, Defs, LinearGradient, Stop, Circle, Rect } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Circle } from 'react-native-svg';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
 
-/**
- * Modern Perched Logo - Clean, minimal, vibrant
- * Concept: Stylized "P" that also looks like a location pin with a perch
- */
 export default function Logo({
   size = 28,
   variant = 'auto',
@@ -22,45 +18,48 @@ export default function Logo({
 }) {
   const text = useThemeColor({}, 'text');
   const surface = useThemeColor({}, 'card');
-  const theme = useThemePreference().preference === 'system'
-    ? (useColorScheme() ?? 'light')
-    : useThemePreference().preference;
+  const primary = useThemeColor({}, 'primary');
+  const accent = useThemeColor({}, 'accent');
+  const { preference } = useThemePreference();
+  const systemScheme = useColorScheme() ?? 'light';
+  const theme = preference === 'system' ? systemScheme : preference;
 
-  // Modern gradient colors - purple to pink
-  const gradientStart = '#8B5CF6'; // Vibrant purple
-  const gradientEnd = '#EC4899';   // Hot pink
-
-  // Modern SVG Logo Mark Component
+  // SVG Logo Mark Component
   const LogoMarkSVG = ({ size }: { size: number }) => (
     <Svg width={size} height={size} viewBox="0 0 100 100">
       <Defs>
-        <LinearGradient id="modernGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <Stop offset="0%" stopColor={gradientStart} stopOpacity="1" />
-          <Stop offset="100%" stopColor={gradientEnd} stopOpacity="1" />
+        <LinearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <Stop offset="0%" stopColor={primary} stopOpacity="1" />
+          <Stop offset="100%" stopColor={accent} stopOpacity="1" />
         </LinearGradient>
       </Defs>
 
-      {/* Modern location pin shape - rounder, cleaner */}
+      {/* Location pin base with gradient */}
       <Path
-        d="M 50 15 C 35 15 23 27 23 42 C 23 52 28 60 38 69 L 50 82 L 62 69 C 72 60 77 52 77 42 C 77 27 65 15 50 15 Z"
-        fill="url(#modernGradient)"
+        d="M 50 20 C 38 20 28 30 28 42 C 28 50 32 57 40 64 L 50 75 L 60 64 C 68 57 72 50 72 42 C 72 30 62 20 50 20 Z"
+        fill="url(#logoGradient)"
       />
 
-      {/* Inner circle - white */}
-      <Circle cx="50" cy="40" r="14" fill="#FFFFFF" opacity="0.95" />
+      {/* White center circle */}
+      <Circle cx="50" cy="42" r="10" fill="#FFFFFF" opacity="0.95" />
 
-      {/* Stylized "P" inside that looks like a perch/branch */}
+      {/* Small heart/location dot */}
+      <Circle cx="50" cy="42" r="4" fill={primary} />
+
+      {/* Bird perched on top - simplified */}
       <Path
-        d="M 46 32 L 46 48 M 46 32 C 46 32 54 32 54 37 C 54 42 46 42 46 42"
-        stroke={gradientEnd}
-        strokeWidth="3"
+        d="M 50 12 L 44 18 L 50 15 L 56 18 Z"
+        fill="#FFFFFF"
+      />
+
+      {/* Bird wing */}
+      <Path
+        d="M 44 17 C 42 18 40 18 38 17"
+        stroke="#FFFFFF"
+        strokeWidth="2"
         fill="none"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
-
-      {/* Small dot accent - represents "perching" */}
-      <Circle cx="54" cy="37" r="2" fill={gradientEnd} />
     </Svg>
   );
 
@@ -93,7 +92,7 @@ export default function Logo({
           style={[
             styles.word,
             {
-              color: theme === 'dark' ? gradientEnd : text,
+              color: theme === 'dark' ? primary : text,
               fontSize: textSize,
               marginLeft: gap,
             }
@@ -105,7 +104,6 @@ export default function Logo({
     );
   }
 
-  // Wordmark variant
   const textSize = Math.max(18, Math.round(size));
   const showBackdrop = theme === 'dark';
   const padX = showBackdrop ? Math.max(10, Math.round(textSize * 0.5)) : 0;
@@ -120,7 +118,7 @@ export default function Logo({
               paddingVertical: padY,
               borderRadius: Math.round((textSize + padY * 2) / 2),
               borderWidth: 2,
-              borderColor: gradientEnd,
+              borderColor: primary,
               backgroundColor: surface,
             }
           : null,
@@ -138,7 +136,7 @@ const styles = StyleSheet.create({
   },
   word: {
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
     fontFamily: (Fonts as any)?.rounded || (Fonts as any)?.sans,
   },
 });
