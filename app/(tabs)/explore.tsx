@@ -275,6 +275,7 @@ export default function Explore() {
   const seedCacheRef = React.useRef<Map<string, any[]>>(new Map());
   const lastLocateFailRef = React.useRef(0);
   const lastOpenSettingsRef = React.useRef(0);
+  const mapViewRef = React.useRef<any>(null);
   const [preferenceScores, setPreferenceScores] = useState<Record<string, number>>({});
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [selectedSaved, setSelectedSaved] = useState(false);
@@ -401,6 +402,21 @@ export default function Explore() {
     if (!mapFocus) return;
     const id = setTimeout(() => setMapFetchFocus(mapFocus), 650);
     return () => clearTimeout(id);
+  }, [mapFocus]);
+
+  // Animate map to new focus when mapFocus changes (e.g., user clicks locate button)
+  useEffect(() => {
+    if (!mapFocus || !mapViewRef.current) return;
+    try {
+      mapViewRef.current.animateToRegion({
+        latitude: mapFocus.lat,
+        longitude: mapFocus.lng,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      }, 500);
+    } catch {
+      // Map ref may not support animateToRegion
+    }
   }, [mapFocus]);
 
   useEffect(() => {
@@ -1606,6 +1622,7 @@ export default function Explore() {
                   </View>
                 ) : null}
                 <MapView
+                  ref={mapViewRef}
                   provider={hasMapKey ? PROVIDER_GOOGLE : undefined}
                   style={styles.map}
                   initialRegion={{ latitude: mapCenter.lat, longitude: mapCenter.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}

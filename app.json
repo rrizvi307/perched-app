@@ -73,11 +73,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/brand/Perched App Logo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#FBFAF8",
           "dark": {
+            "image": "./assets/brand/Perched App Logo.png",
             "backgroundColor": "#0E0F12"
           }
         }
