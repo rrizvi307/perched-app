@@ -101,3 +101,15 @@ export async function resetAndReseedDemo(currentUserId?: string) {
   } catch {}
   await prefetchDemoImages();
 }
+
+/**
+ * Set demo mode on/off
+ */
+export async function setDemoMode(enabled: boolean) {
+  setGlobalDemoMode(enabled);
+  try {
+    await setDemoModeEnabled(enabled);
+  } catch (error) {
+    console.error('Failed to set demo mode:', error);
+  }
+}
