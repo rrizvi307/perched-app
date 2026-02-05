@@ -197,50 +197,263 @@ your friends are working today.
 
 ---
 
-## 🎯 HTML Structure (Minimal)
+## 🎯 HTML Structure (Responsive & Easy to Modify)
+
+**IMPORTANT**: This structure uses CSS variables and clear breakpoints for easy customization on both mobile and desktop.
 
 ```html
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Perched - Find Your Spot</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, sans-serif; color: #0A0A0A; }
-    .container { max-width: 1200px; margin: 0 auto; padding: 0 40px; }
-    .hero { text-align: center; padding: 120px 0; }
-    .hero h1 { font-size: 56px; font-weight: 800; margin-bottom: 24px; }
-    .hero p { font-size: 20px; color: #737373; max-width: 600px; margin: 0 auto 48px; }
+    /* ========================================
+       CSS VARIABLES - Easy to customize!
+       ======================================== */
+    :root {
+      /* Colors */
+      --color-bg: #FFFFFF;
+      --color-text: #0A0A0A;
+      --color-muted: #737373;
+      --color-gradient-start: #8B5CF6;
+      --color-gradient-end: #EC4899;
+
+      /* Spacing (change these to adjust all spacing at once) */
+      --spacing-xs: 8px;
+      --spacing-sm: 16px;
+      --spacing-md: 24px;
+      --spacing-lg: 40px;
+      --spacing-xl: 60px;
+      --spacing-2xl: 80px;
+      --spacing-3xl: 120px;
+
+      /* Typography */
+      --font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+      --font-size-base: 16px;
+      --font-size-lg: 18px;
+      --font-size-xl: 20px;
+      --font-size-2xl: 32px;
+      --font-size-3xl: 40px;
+      --font-size-4xl: 56px;
+
+      /* Container */
+      --container-max-width: 1200px;
+      --container-padding: var(--spacing-lg);
+    }
+
+    /* ========================================
+       BASE STYLES
+       ======================================== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-family);
+      font-size: var(--font-size-base);
+      color: var(--color-text);
+      background: var(--color-bg);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: var(--container-max-width);
+      margin: 0 auto;
+      padding: 0 var(--container-padding);
+    }
+
+    /* ========================================
+       HERO SECTION
+       ======================================== */
+    .hero {
+      text-align: center;
+      padding: var(--spacing-3xl) 0;
+    }
+
+    .hero-logo {
+      width: 80px;
+      height: 80px;
+      margin-bottom: var(--spacing-md);
+    }
+
+    .hero h1 {
+      font-size: var(--font-size-4xl);
+      font-weight: 800;
+      margin-bottom: var(--spacing-md);
+      line-height: 1.2;
+    }
+
+    .hero p {
+      font-size: var(--font-size-xl);
+      color: var(--color-muted);
+      max-width: 600px;
+      margin: 0 auto var(--spacing-lg);
+    }
+
+    /* ========================================
+       CTA BUTTON
+       ======================================== */
     .cta {
-      background: linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%);
+      background: linear-gradient(135deg, var(--color-gradient-start) 0%, var(--color-gradient-end) 100%);
       color: white;
-      padding: 16px 48px;
+      padding: var(--spacing-sm) var(--spacing-lg);
       border-radius: 12px;
       font-weight: 600;
       text-decoration: none;
       display: inline-block;
+      transition: transform 0.2s, box-shadow 0.2s;
     }
-    .features { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; padding: 80px 0; }
-    .feature { text-align: center; }
-    .feature-icon { font-size: 48px; margin-bottom: 16px; }
-    .feature h3 { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
-    .feature p { color: #737373; line-height: 1.6; }
-    .screenshots { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; padding: 80px 0; }
-    .screenshot img { width: 100%; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); }
-    footer { text-align: center; padding: 60px 0; color: #737373; }
+
+    .cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(139, 92, 246, 0.3);
+    }
+
+    /* ========================================
+       FEATURES SECTION
+       ======================================== */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--spacing-lg);
+      padding: var(--spacing-2xl) 0;
+    }
+
+    .feature {
+      text-align: center;
+    }
+
+    .feature-icon {
+      font-size: 48px;
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .feature h3 {
+      font-size: var(--font-size-2xl);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .feature p {
+      color: var(--color-muted);
+      line-height: 1.6;
+    }
+
+    /* ========================================
+       SCREENSHOTS SECTION
+       ======================================== */
+    .screenshots {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--spacing-lg);
+      padding: var(--spacing-2xl) 0;
+    }
+
+    .screenshot {
+      text-align: center;
+    }
+
+    .screenshot img {
+      width: 100%;
+      max-width: 300px;
+      border-radius: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    }
+
+    .screenshot-caption {
+      margin-top: var(--spacing-sm);
+      color: var(--color-muted);
+    }
+
+    /* ========================================
+       FOOTER
+       ======================================== */
+    footer {
+      text-align: center;
+      padding: var(--spacing-xl) 0;
+      color: var(--color-muted);
+      border-top: 1px solid #E5E5E5;
+      margin-top: var(--spacing-2xl);
+    }
+
+    footer p {
+      margin-bottom: 12px;
+    }
+
+    /* ========================================
+       RESPONSIVE - TABLET (768px and below)
+       ======================================== */
+    @media (max-width: 768px) {
+      :root {
+        --container-padding: 24px;
+        --font-size-4xl: 40px;
+        --font-size-3xl: 32px;
+        --font-size-2xl: 24px;
+        --spacing-3xl: 80px;
+        --spacing-2xl: 60px;
+      }
+
+      .features {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-xl);
+      }
+
+      .screenshots {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-lg);
+      }
+
+      .screenshot img {
+        max-width: 250px;
+      }
+    }
+
+    /* ========================================
+       RESPONSIVE - MOBILE (480px and below)
+       ======================================== */
+    @media (max-width: 480px) {
+      :root {
+        --container-padding: 20px;
+        --font-size-4xl: 32px;
+        --font-size-3xl: 28px;
+        --font-size-2xl: 20px;
+        --font-size-xl: 18px;
+        --spacing-3xl: 60px;
+        --spacing-2xl: 40px;
+      }
+
+      .hero-logo {
+        width: 60px;
+        height: 60px;
+      }
+
+      .cta {
+        padding: 14px 32px;
+        width: 100%;
+        max-width: 280px;
+      }
+
+      .screenshot img {
+        max-width: 200px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- Hero -->
+    <!-- ==================== HERO SECTION ==================== -->
     <section class="hero">
-      <img src="logo.svg" alt="Perched" width="80" height="80">
+      <img src="logo.svg" alt="Perched" class="hero-logo">
       <h1>Find Your Spot.<br>Work with Friends.</h1>
       <p>See where your classmates are studying right now. Discover coffee shops that match your vibe. Build daily streaks.</p>
       <a href="#" class="cta">Download on App Store</a>
     </section>
 
-    <!-- Features -->
+    <!-- ==================== FEATURES SECTION ==================== -->
     <section class="features">
       <div class="feature">
         <div class="feature-icon">📍</div>
@@ -259,37 +472,161 @@ your friends are working today.
       </div>
     </section>
 
-    <!-- Screenshots -->
+    <!-- ==================== SCREENSHOTS SECTION ==================== -->
     <section class="screenshots">
       <div class="screenshot">
         <img src="feed.png" alt="Feed">
-        <p style="text-align:center; margin-top:16px; color:#737373;">Your Friends Feed</p>
+        <p class="screenshot-caption">Your Friends Feed</p>
       </div>
       <div class="screenshot">
         <img src="explore.png" alt="Explore">
-        <p style="text-align:center; margin-top:16px; color:#737373;">Discover Nearby</p>
+        <p class="screenshot-caption">Discover Nearby</p>
       </div>
       <div class="screenshot">
         <img src="profile.png" alt="Profile">
-        <p style="text-align:center; margin-top:16px; color:#737373;">Your Stats</p>
+        <p class="screenshot-caption">Your Stats</p>
       </div>
     </section>
 
-    <!-- Final CTA -->
+    <!-- ==================== FINAL CTA SECTION ==================== -->
     <section class="hero">
-      <h2 style="font-size:40px; margin-bottom:24px;">Ready to find your spot?</h2>
+      <h2 style="font-size: var(--font-size-3xl); margin-bottom: var(--spacing-md);">Ready to find your spot?</h2>
       <p>Download Perched for iOS and discover where your friends are working today.</p>
       <a href="#" class="cta">Download on App Store</a>
     </section>
 
+    <!-- ==================== FOOTER ==================== -->
     <footer>
       <p>About · Privacy · Contact</p>
-      <p style="margin-top:12px;">© 2025 Perched</p>
+      <p>© 2025 Perched</p>
     </footer>
   </div>
 </body>
 </html>
 ```
+
+---
+
+## 🎨 How to Customize (Easy Guide)
+
+**This landing page is designed for EASY customization on both mobile and desktop.**
+
+### Quick Customization Guide
+
+#### 1. **Change Colors**
+Edit the CSS variables at the top:
+```css
+:root {
+  --color-bg: #FFFFFF;           /* Background color */
+  --color-text: #0A0A0A;         /* Main text color */
+  --color-muted: #737373;        /* Secondary text */
+  --color-gradient-start: #8B5CF6; /* Purple */
+  --color-gradient-end: #EC4899;   /* Pink */
+}
+```
+
+#### 2. **Adjust Spacing**
+All spacing uses variables - change once, applies everywhere:
+```css
+:root {
+  --spacing-xs: 8px;    /* Extra small spacing */
+  --spacing-sm: 16px;   /* Small spacing */
+  --spacing-md: 24px;   /* Medium spacing */
+  --spacing-lg: 40px;   /* Large spacing */
+  --spacing-xl: 60px;   /* Extra large */
+  --spacing-2xl: 80px;  /* 2X large */
+  --spacing-3xl: 120px; /* 3X large (hero padding) */
+}
+```
+
+#### 3. **Change Typography**
+Font sizes automatically adjust for mobile:
+```css
+:root {
+  --font-size-base: 16px;   /* Body text */
+  --font-size-lg: 18px;     /* Large body */
+  --font-size-xl: 20px;     /* Hero subtitle */
+  --font-size-2xl: 32px;    /* Feature headings */
+  --font-size-3xl: 40px;    /* CTA heading */
+  --font-size-4xl: 56px;    /* Main hero heading */
+}
+```
+
+#### 4. **Responsive Breakpoints**
+The page has 3 breakpoints that automatically adjust:
+- **Desktop** (default): 3-column layout, large text
+- **Tablet** (768px and below): 1-column layout, medium text
+- **Mobile** (480px and below): Optimized for phones, smaller text
+
+To adjust a breakpoint:
+```css
+@media (max-width: 768px) {
+  /* Tablet styles here */
+}
+
+@media (max-width: 480px) {
+  /* Mobile styles here */
+}
+```
+
+#### 5. **Layout Changes**
+
+**Want 2 columns on tablet instead of 1?**
+```css
+@media (max-width: 768px) {
+  .features {
+    grid-template-columns: 1fr 1fr; /* Change from 1fr */
+  }
+}
+```
+
+**Want larger screenshots on mobile?**
+```css
+@media (max-width: 480px) {
+  .screenshot img {
+    max-width: 280px; /* Increase from 200px */
+  }
+}
+```
+
+### Common Customizations
+
+**Make the hero more compact:**
+```css
+.hero {
+  padding: 60px 0; /* Reduce from var(--spacing-3xl) */
+}
+```
+
+**Change the CTA button style:**
+```css
+.cta {
+  background: solid #EC4899; /* Solid color instead of gradient */
+  border-radius: 999px;      /* Pill shape */
+}
+```
+
+**Add a section divider:**
+```css
+.features {
+  border-top: 1px solid #E5E5E5;
+  padding-top: var(--spacing-2xl);
+}
+```
+
+---
+
+## 📱 Mobile vs Desktop: Key Differences
+
+| Element | Desktop | Tablet | Mobile |
+|---------|---------|--------|--------|
+| Hero H1 | 56px | 40px | 32px |
+| Features Layout | 3 columns | 1 column | 1 column |
+| Screenshots Layout | 3 columns | 1 column | 1 column |
+| Container Padding | 40px | 24px | 20px |
+| CTA Button | 16px/48px padding | Same | 14px/32px padding, full width |
+
+**These adjustments happen automatically through CSS variables and media queries.**
 
 ---
 
@@ -302,9 +639,16 @@ Before deploying, verify:
 - [ ] Clean, actual app screenshots
 - [ ] Simple copy (no marketing fluff)
 - [ ] Lots of white space
-- [ ] Mobile responsive
+- [ ] **Mobile responsive** - Test on actual phones (iOS/Android)
+- [ ] **Tablet responsive** - Test at 768px width
+- [ ] **Desktop responsive** - Test at 1200px+ width
+- [ ] Text is readable on all screen sizes
+- [ ] Images scale properly without distortion
+- [ ] CTA buttons are easily tappable on mobile
+- [ ] No horizontal scrolling on mobile
 - [ ] Fast load time (<2s)
 - [ ] Matches the ACTUAL app aesthetic
+- [ ] Easy to modify using CSS variables
 
 ---
 
