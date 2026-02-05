@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Platform } from 'react-native';
-import { Marker, MarkerProps } from '@/components/map/index';
+import { Marker } from '@/components/map/index';
+import type { MarkerProps } from 'react-native-maps';
 import Animated, {
   useSharedValue,
   useAnimatedProps,

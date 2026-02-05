@@ -48,22 +48,29 @@ export function parseDeepLink(url: string): {
     // https://perched.app/c/checkin123 (short link)
 
     let route: DeepLinkRoute | null = null;
-    const params: DeepLinkParams = { ...queryParams };
+    const params: DeepLinkParams = {};
+
+    // Helper to convert query param to string
+    const getParam = (value: string | string[] | undefined): string | undefined => {
+      if (Array.isArray(value)) return value[0];
+      return value;
+    };
 
     if (hostname === 'profile' || path?.startsWith('/profile')) {
       route = 'profile';
-      const userId = path?.split('/profile/')[1] || queryParams?.userId;
+      const userId = path?.split('/profile/')[1] || getParam(queryParams?.userId);
       if (userId) params.userId = userId;
     } else if (hostname === 'checkin' || path?.startsWith('/checkin') || path?.startsWith('/c/')) {
       route = 'checkin';
-      const checkinId = path?.split('/checkin/')[1] || path?.split('/c/')[1] || queryParams?.checkinId;
+      const checkinId = path?.split('/checkin/')[1] || path?.split('/c/')[1] || getParam(queryParams?.checkinId);
       if (checkinId) params.checkinId = checkinId;
     } else if (hostname === 'spot' || path?.startsWith('/spot') || path?.startsWith('/s/')) {
       route = 'spot';
-      const spotId = path?.split('/spot/')[1] || path?.split('/s/')[1] || queryParams?.spotId;
+      const spotId = path?.split('/spot/')[1] || path?.split('/s/')[1] || getParam(queryParams?.spotId);
       if (spotId) {
         params.spotId = spotId;
-        params.placeId = queryParams?.placeId;
+        const placeId = getParam(queryParams?.placeId);
+        if (placeId) params.placeId = placeId;
       }
     } else if (hostname === 'explore' || path?.startsWith('/explore')) {
       route = 'explore';
@@ -71,13 +78,14 @@ export function parseDeepLink(url: string): {
       route = 'feed';
     } else if (hostname === 'friend-request' || path?.startsWith('/friend-request') || path?.startsWith('/fr/')) {
       route = 'friend-request';
-      const requestId = path?.split('/friend-request/')[1] || path?.split('/fr/')[1] || queryParams?.requestId;
+      const requestId = path?.split('/friend-request/')[1] || path?.split('/fr/')[1] || getParam(queryParams?.requestId);
       if (requestId) params.requestId = requestId;
     }
 
     // Extract referral code if present
-    if (queryParams?.ref) {
-      params.referralCode = queryParams.ref;
+    const ref = getParam(queryParams?.ref);
+    if (ref) {
+      params.referralCode = ref;
     }
 
     return { route, params };

@@ -238,8 +238,7 @@ function CampusCard({
       style={[
         styles.campusCard,
         isSelected ? { borderColor: primary, borderWidth: 2 } : undefined,
-      ] as any
-      ]}
+      ] as any}
     >
       <View style={styles.campusContent}>
         {/* Icon */}

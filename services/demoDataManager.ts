@@ -3,7 +3,7 @@
  * Provides toggle-able demo content that makes the app look populated
  */
 
-import { saveCheckin, getCheckins, clearAllData } from '@/storage/local';
+import { saveCheckin, getCheckins } from '@/storage/local';
 import { setDemoMode as setDemoModeFlag } from './demoMode';
 
 // Demo users with realistic profiles

@@ -57,6 +57,7 @@ export type AnalyticsEvent =
   | 'app_opened'
   | 'app_backgrounded'
   | 'app_foregrounded'
+  | 'app_session_tracked'
   | 'notification_received'
   | 'notification_opened'
   | 'share_opened'
@@ -66,6 +67,17 @@ export type AnalyticsEvent =
   | 'settings_opened'
   | 'theme_changed'
   | 'notifications_toggled'
+
+  // Gamification
+  | 'achievement_unlocked'
+
+  // App Rating
+  | 'rating_prompt_shown'
+  | 'rating_prompt_error'
+  | 'user_rated_app'
+  | 'user_declined_rating'
+  | 'rating_triggered_by_moment'
+  | 'rating_data_reset'
 
   // Errors & Issues
   | 'error_occurred'

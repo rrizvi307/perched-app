@@ -89,9 +89,9 @@ export const GradientPresets = {
 export function getGradient(
   gradientName: keyof typeof Gradients,
   isDark: boolean
-): typeof Gradients.instagram {
+): { colors: string[]; start: { x: number; y: number }; end: { x: number; y: number } } {
   if (isDark && gradientName in Gradients.dark) {
-    return Gradients.dark[gradientName as keyof typeof Gradients.dark];
+    return Gradients.dark[gradientName as keyof typeof Gradients.dark] as any;
   }
-  return Gradients[gradientName];
+  return Gradients[gradientName] as any;
 }
