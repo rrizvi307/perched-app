@@ -1490,6 +1490,11 @@ export default function Explore() {
                   style={styles.map}
                   initialRegion={{ latitude: mapCenter.lat, longitude: mapCenter.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
                   onRegionChangeComplete={handleRegionChange}
+                  showsUserLocation={true}
+                  showsMyLocationButton={true}
+                  showsCompass={true}
+                  rotateEnabled={true}
+                  pitchEnabled={true}
                 >
                   {loc ? (
                     <Marker
