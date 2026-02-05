@@ -31,8 +31,11 @@ export type AnalyticsEvent =
   | 'checkin_viewed'
   | 'checkin_deleted'
   | 'checkin_shared'
+  | 'checkin_share_failed'
 
   // Social/Friends
+  | 'invite_shared'
+  | 'invite_share_failed'
   | 'friend_request_sent'
   | 'friend_request_accepted'
   | 'friend_request_rejected'
@@ -40,6 +43,10 @@ export type AnalyticsEvent =
   | 'user_blocked'
   | 'user_unblocked'
   | 'user_reported'
+  | 'profile_shared'
+  | 'profile_share_failed'
+  | 'referral_link_copied'
+  | 'referral_signup'
 
   // Explore & Discovery
   | 'explore_viewed'
@@ -47,6 +54,8 @@ export type AnalyticsEvent =
   | 'explore_filter_applied'
   | 'spot_viewed'
   | 'spot_directions_requested'
+  | 'spot_shared'
+  | 'spot_share_failed'
 
   // Feed
   | 'feed_viewed'
@@ -60,8 +69,12 @@ export type AnalyticsEvent =
   | 'app_session_tracked'
   | 'notification_received'
   | 'notification_opened'
+  | 'notification_scheduled'
+  | 'notification_sent'
+  | 'push_notification_enabled'
   | 'share_opened'
   | 'deeplink_opened'
+  | 'checkin_reacted'
 
   // Settings
   | 'settings_opened'
