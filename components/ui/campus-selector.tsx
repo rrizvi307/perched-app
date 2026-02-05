@@ -1,17 +1,9 @@
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Platform } from 'react-native';
 import { useState, useEffect } from 'react';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-} from 'react-native-reanimated';
 import { IconSymbol } from './icon-symbol';
 import { PolishedCard } from './polished-card';
-import { PremiumButton } from './premium-button';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
-import { tokens } from '@/constants/tokens';
 import * as Haptics from 'expo-haptics';
 
 interface Campus {
@@ -113,7 +105,6 @@ const POPULAR_CAMPUSES: Campus[] = [
 export function CampusSelector({ onSelect, selectedCampus, onClose }: CampusSelectorProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredCampuses, setFilteredCampuses] = useState(POPULAR_CAMPUSES);
-  const [isSearching, setIsSearching] = useState(false);
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -124,7 +115,6 @@ export function CampusSelector({ onSelect, selectedCampus, onClose }: CampusSele
 
   useEffect(() => {
     if (searchQuery.trim()) {
-      setIsSearching(true);
       const query = searchQuery.toLowerCase();
       const filtered = POPULAR_CAMPUSES.filter(
         (campus) =>
@@ -133,7 +123,6 @@ export function CampusSelector({ onSelect, selectedCampus, onClose }: CampusSele
           campus.location.toLowerCase().includes(query)
       );
       setFilteredCampuses(filtered);
-      setIsSearching(false);
     } else {
       setFilteredCampuses(POPULAR_CAMPUSES);
     }
@@ -238,7 +227,6 @@ function CampusCard({
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const success = useThemeColor({}, 'success');
-  const border = useThemeColor({}, 'border');
 
   return (
     <PolishedCard
@@ -249,7 +237,8 @@ function CampusCard({
       onPress={() => onSelect(campus)}
       style={[
         styles.campusCard,
-        isSelected && { borderColor: primary, borderWidth: 2 },
+        isSelected ? { borderColor: primary, borderWidth: 2 } : undefined,
+      ] as any
       ]}
     >
       <View style={styles.campusContent}>

@@ -36,11 +36,11 @@ export function OptimizedImage({
   const [hasError, setHasError] = useState(false);
 
   const containerStyle = [
-    width && { width },
-    height && { height },
-    aspectRatio && { aspectRatio },
+    width ? { width } : undefined,
+    height ? { height } : undefined,
+    aspectRatio ? { aspectRatio } : undefined,
     style,
-  ];
+  ] as any;
 
   // Generate placeholder blurhash
   const placeholderBlurhash =
@@ -69,7 +69,7 @@ export function OptimizedImage({
       />
       {showLoader && isLoading && (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="small" color={tokens.color.primary} />
+          <ActivityIndicator size="small" color={tokens.color.accent} />
         </View>
       )}
       {hasError && (

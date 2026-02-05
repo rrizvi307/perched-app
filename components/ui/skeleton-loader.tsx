@@ -61,7 +61,7 @@ export function SkeletonLoader({
       style={[
         styles.container,
         {
-          width,
+          width: width as any,
           height,
           backgroundColor: shimmerColor,
         },

@@ -5,7 +5,6 @@ import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
 import { FriendRequestCard } from '@/components/ui/friend-request-card';
 import { PolishedCard } from '@/components/ui/polished-card';
-import { PremiumButton } from '@/components/ui/premium-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import SpotImage from '@/components/ui/spot-image';
@@ -49,11 +48,9 @@ export default function FriendsScreen() {
   const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
   const [selectedTab, setSelectedTab] = useState<'requests' | 'suggestions'>('requests');
 
-  const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
-  const surface = useThemeColor({}, 'surface');
 
   useEffect(() => {
     loadFriendData();

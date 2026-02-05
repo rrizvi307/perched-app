@@ -9,7 +9,6 @@ import { PremiumButton } from '@/components/ui/premium-button';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
-import { tokens } from '@/constants/tokens';
 
 interface Campus {
   id: string;
@@ -103,7 +102,7 @@ export default function CampusSyncScreen() {
           {/* Verification Methods */}
           <Text style={[styles.sectionTitle, { color: text }]}>Verify Your Campus</Text>
           <Text style={[styles.sectionDescription, { color: muted }]}>
-            Choose how you'd like to verify your university affiliation
+            Choose how you&apos;d like to verify your university affiliation
           </Text>
 
           {/* Email Verification */}
@@ -115,11 +114,11 @@ export default function CampusSyncScreen() {
             onPress={() => setVerificationMethod('email')}
             style={[
               styles.methodCard,
-              verificationMethod === 'email' && {
+              verificationMethod === 'email' ? {
                 borderColor: primary,
                 borderWidth: 2,
-              },
-            ]}
+              } : undefined,
+            ] as any}
           >
             <View style={styles.methodContent}>
               <View
@@ -159,11 +158,11 @@ export default function CampusSyncScreen() {
             onPress={() => setVerificationMethod('manual')}
             style={[
               styles.methodCard,
-              verificationMethod === 'manual' && {
+              verificationMethod === 'manual' ? {
                 borderColor: primary,
                 borderWidth: 2,
-              },
-            ]}
+              } : undefined,
+            ] as any}
           >
             <View style={styles.methodContent}>
               <View
