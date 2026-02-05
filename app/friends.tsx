@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
-import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
@@ -14,6 +14,19 @@ import { withAlpha } from '@/utils/colors';
 import { tokens } from '@/constants/tokens';
 import { getDemoFriendRequests, getDemoFriendSuggestions } from '@/services/demoDataManager';
 import { isDemoMode } from '@/services/demoMode';
+import { useAuth } from '@/contexts/AuthContext';
+import {
+  getIncomingFriendRequests,
+  acceptFriendRequest,
+  declineFriendRequest,
+  sendFriendRequest,
+  getUsersByIds,
+  getUsersByCampus,
+  getUserFriends,
+} from '@/services/firebaseClient';
+import { logEvent } from '@/services/logEvent';
+import { trackRatingTrigger, RatingTriggers } from '@/services/appRating';
+import { updateFriendsCount } from '@/services/gamification';
 
 interface FriendRequest {
   id: string;
@@ -43,6 +56,7 @@ interface FriendSuggestion {
  * Friend requests, suggestions with social proof, mutual connections
  */
 export default function FriendsScreen() {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
@@ -52,11 +66,12 @@ export default function FriendsScreen() {
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
 
-  useEffect(() => {
-    loadFriendData();
-  }, []);
+  const loadFriendData = useCallback(async () => {
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
 
-  const loadFriendData = async () => {
     setLoading(true);
     try {
       const isDemo = await isDemoMode();
@@ -72,34 +87,142 @@ export default function FriendsScreen() {
           setLoading(false);
         }, 800);
       } else {
-        // TODO: Load real friend requests and suggestions from Firebase
-        setTimeout(() => {
-          setRequests([]);
+        // Load real friend requests from Firebase
+        const [incomingRequests, currentFriends] = await Promise.all([
+          getIncomingFriendRequests(user.id),
+          getUserFriends(user.id),
+        ]);
+
+        // Get user details for incoming requests
+        const fromUserIds = incomingRequests.map((r: any) => r.fromId);
+        const fromUsers = fromUserIds.length > 0 ? await getUsersByIds(fromUserIds) : [];
+        const userMap = new Map(fromUsers.map((u: any) => [u.id, u]));
+
+        // Transform to FriendRequest format
+        const transformedRequests: FriendRequest[] = incomingRequests.map((r: any) => {
+          const fromUser = userMap.get(r.fromId) || {};
+          return {
+            id: r.id,
+            fromUser: {
+              id: r.fromId,
+              name: fromUser.name || 'Unknown',
+              handle: fromUser.handle,
+              photoUrl: fromUser.photoUrl,
+              campus: fromUser.campus || fromUser.campusOrCity,
+              mutualFriends: 0, // Could be computed if needed
+            },
+            timestamp: r.createdAt?.toDate?.() || new Date(),
+          };
+        });
+
+        setRequests(transformedRequests);
+
+        // Load friend suggestions - users from same campus who aren't already friends
+        const campus = user.campus || user.campusOrCity;
+        if (campus) {
+          const campusUsers = await getUsersByCampus(campus, 20);
+          const friendSet = new Set(currentFriends);
+          const pendingSet = new Set(fromUserIds);
+
+          const suggestionUsers = campusUsers.filter(
+            (u: any) => u.id !== user.id && !friendSet.has(u.id) && !pendingSet.has(u.id)
+          );
+
+          const transformedSuggestions: FriendSuggestion[] = suggestionUsers.slice(0, 10).map((u: any) => ({
+            id: u.id,
+            name: u.name || 'Unknown',
+            handle: u.handle,
+            photoUrl: u.photoUrl,
+            campus: u.campus || u.campusOrCity,
+            mutualFriends: 0, // Could be computed
+            reason: 'Same campus',
+          }));
+
+          setSuggestions(transformedSuggestions);
+        } else {
           setSuggestions([]);
-          setLoading(false);
-        }, 800);
+        }
+
+        setLoading(false);
       }
     } catch (error) {
       console.error('Failed to load friend data:', error);
       setLoading(false);
     }
-  };
+  }, [user?.id, user?.campus, user?.campusOrCity]);
+
+  useEffect(() => {
+    loadFriendData();
+  }, [loadFriendData]);
 
   const handleAcceptRequest = async (id: string) => {
-    // TODO: Implement accept logic
-    console.log('Accepting request:', id);
-    setRequests((prev) => prev.filter((req) => req.id !== id));
+    if (!user?.id) return;
+
+    // Find the request to get fromId
+    const request = requests.find((r) => r.id === id);
+    if (!request) return;
+
+    try {
+      // Optimistic UI update
+      setRequests((prev) => prev.filter((req) => req.id !== id));
+
+      // Accept in Firebase
+      await acceptFriendRequest(id, request.fromUser.id, user.id);
+
+      // Track analytics
+      void logEvent('friend_request_accepted', user.id, { fromUserId: request.fromUser.id });
+      void trackRatingTrigger(RatingTriggers.FRIEND_ADDED);
+
+      // Update gamification stats
+      const friends = await getUserFriends(user.id);
+      void updateFriendsCount(friends.length);
+    } catch (error) {
+      console.error('Failed to accept friend request:', error);
+      // Revert on error
+      loadFriendData();
+      Alert.alert('Error', 'Failed to accept friend request. Please try again.');
+    }
   };
 
   const handleDeclineRequest = async (id: string) => {
-    // TODO: Implement decline logic
-    console.log('Declining request:', id);
-    setRequests((prev) => prev.filter((req) => req.id !== id));
+    if (!user?.id) return;
+
+    const request = requests.find((r) => r.id === id);
+
+    try {
+      // Optimistic UI update
+      setRequests((prev) => prev.filter((req) => req.id !== id));
+
+      // Decline in Firebase
+      await declineFriendRequest(id);
+
+      // Track analytics
+      void logEvent('friend_request_rejected', user.id, { fromUserId: request?.fromUser.id });
+    } catch (error) {
+      console.error('Failed to decline friend request:', error);
+      // Revert on error
+      loadFriendData();
+      Alert.alert('Error', 'Failed to decline friend request. Please try again.');
+    }
   };
 
-  const handleAddFriend = async (userId: string) => {
-    // TODO: Implement add friend logic
-    console.log('Adding friend:', userId);
+  const handleAddFriend = async (targetUserId: string) => {
+    if (!user?.id) return;
+
+    try {
+      // Send friend request
+      await sendFriendRequest(user.id, targetUserId);
+
+      // Remove from suggestions
+      setSuggestions((prev) => prev.filter((s) => s.id !== targetUserId));
+
+      // Track analytics
+      void logEvent('friend_request_sent', user.id, { toUserId: targetUserId });
+    } catch (error) {
+      console.error('Failed to send friend request:', error);
+      Alert.alert('Error', 'Failed to send friend request. Please try again.');
+      throw error; // Re-throw so SuggestionCard can handle UI state
+    }
   };
 
   return (
@@ -109,9 +232,7 @@ export default function FriendsScreen() {
         leftIcon="chevron.left"
         onLeftPress={() => router.back()}
         rightIcon="person.badge.plus"
-        onRightPress={() => {
-          // TODO: Navigate to find friends screen
-        }}
+        onRightPress={() => router.push('/find-friends')}
       />
 
       {/* Tab Selector */}
@@ -209,9 +330,7 @@ export default function FriendsScreen() {
                 title="No friend requests"
                 description="When someone sends you a friend request, it will appear here."
                 actionLabel="Find friends"
-                onAction={() => {
-                  // TODO: Navigate to find friends
-                }}
+                onAction={() => router.push('/find-friends')}
               />
             ) : (
               <>

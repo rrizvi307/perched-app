@@ -18,6 +18,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
+import { savePushToken } from '@/services/firebaseClient';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
@@ -146,9 +147,9 @@ function InnerApp() {
     const setupNotifications = async () => {
       try {
         const token = await initPushNotifications();
-        if (token) {
-          // TODO: Save token to user profile in Firebase if needed
-          // await updateUserRemote(user.id, { pushToken: token });
+        if (token && user?.id) {
+          // Save token to Firebase for Cloud Function notifications
+          await savePushToken(user.id, token);
         }
         // Schedule weekly recap
         await scheduleWeeklyRecap();

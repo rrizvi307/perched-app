@@ -1,12 +1,15 @@
 import { Share, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { track } from './analytics';
-import { updateUserRemote } from './firebaseClient';
+import { ensureFirebase } from './firebaseClient';
+import { createDeepLink } from './deepLinking';
+import Constants from 'expo-constants';
 
 const APP_NAME = 'Perched';
-const APP_STORE_URL = 'https://apps.apple.com/app/perched'; // TODO: Replace with actual
-const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.perched'; // TODO: Replace
-const WEB_URL = 'https://perched.app'; // TODO: Replace with actual domain
+const extra = ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
+const APP_STORE_URL = (extra.APP_STORE_URL as string) || 'https://apps.apple.com/app/perched/id6739514696';
+const PLAY_STORE_URL = (extra.PLAY_STORE_URL as string) || 'https://play.google.com/store/apps/details?id=com.perched.app';
+const WEB_URL = 'https://perched.app';
 
 interface ShareOptions {
   title?: string;
@@ -26,12 +29,31 @@ export function generateReferralCode(userId: string, handle?: string): string {
 
 /**
  * Get shareable app download link with referral tracking
+ * Uses Firebase Dynamic Links format for proper attribution
  */
 export function getInviteLink(referralCode: string): string {
-  // TODO: Implement branch.io or Firebase Dynamic Links for proper attribution
-  // For now, use simple query param
-  const baseUrl = Platform.OS === 'ios' ? APP_STORE_URL : PLAY_STORE_URL;
-  return `${baseUrl}?ref=${referralCode}`;
+  // Firebase Dynamic Link format
+  // When configured in Firebase console, these links will:
+  // 1. Open the app directly if installed
+  // 2. Redirect to app store if not installed
+  // 3. Pass referral code through the install process
+  const dynamicLinkDomain = (extra.DYNAMIC_LINK_DOMAIN as string) || 'perched.page.link';
+  const bundleId = 'com.perched.app';
+  const appStoreId = '6739514696';
+
+  // Build the deep link that will open in the app
+  const deepLink = encodeURIComponent(`${WEB_URL}/invite?ref=${referralCode}`);
+
+  // Construct Firebase Dynamic Link
+  // Note: For full functionality, configure in Firebase Console > Dynamic Links
+  const dynamicLink = `https://${dynamicLinkDomain}/?` +
+    `link=${deepLink}` +
+    `&apn=${bundleId}` +
+    `&ibi=${bundleId}` +
+    `&isi=${appStoreId}` +
+    `&efr=1`; // Skip preview page
+
+  return dynamicLink;
 }
 
 /**
@@ -83,8 +105,8 @@ export async function shareCheckin(
   userName: string,
   photoUrl?: string
 ): Promise<{ success: boolean }> {
-  // TODO: Implement deep link to check-in detail
-  const deepLink = `${WEB_URL}/checkin/${checkinId}`;
+  // Use deep linking service for proper URL generation
+  const deepLink = createDeepLink('checkin', { checkinId });
   const message = `Check out where ${userName} is at ${spotName} on ${APP_NAME}! ${deepLink}`;
 
   try {
@@ -119,7 +141,7 @@ export async function shareSpot(
   placeId: string,
   userName?: string
 ): Promise<{ success: boolean }> {
-  const deepLink = `${WEB_URL}/spot/${placeId}`;
+  const deepLink = createDeepLink('spot', { placeId });
   const message = userName
     ? `${userName} recommends checking out ${spotName} on ${APP_NAME}! ${deepLink}`
     : `Check out ${spotName} on ${APP_NAME}! ${deepLink}`;
@@ -156,7 +178,7 @@ export async function shareProfile(
   userName: string,
   handle: string
 ): Promise<{ success: boolean }> {
-  const deepLink = `${WEB_URL}/@${handle}`;
+  const deepLink = createDeepLink('profile', { userId });
   const message = `Check out ${userName}'s profile on ${APP_NAME}! ${deepLink}`;
 
   try {
@@ -209,6 +231,7 @@ export async function copyReferralLink(
 
 /**
  * Track referral signup (call this after successful signup)
+ * Stores referral info for the new user and triggers referrer credit
  */
 export async function trackReferralSignup(
   newUserId: string,
@@ -221,8 +244,34 @@ export async function trackReferralSignup(
     referral_code: referralCode,
   });
 
-  // TODO: Credit referrer with premium time
-  // This should be done in Cloud Functions for security
+  const fb = ensureFirebase();
+  if (!fb) return;
+
+  try {
+    const db = fb.firestore();
+
+    // Store referral info on the new user's profile
+    await db.collection('users').doc(newUserId).set({
+      referredBy: referralCode.toUpperCase(),
+      referredAt: fb.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    // Create a referral record for tracking and Cloud Function processing
+    // Cloud Function should watch this collection to credit premium time
+    await db.collection('referrals').add({
+      referralCode: referralCode.toUpperCase(),
+      newUserId,
+      status: 'pending', // Will be updated to 'credited' by Cloud Function
+      createdAt: fb.firestore.FieldValue.serverTimestamp(),
+    });
+
+    track('referral_recorded', {
+      new_user_id: newUserId,
+      referral_code: referralCode,
+    });
+  } catch (error) {
+    console.error('Failed to track referral signup:', error);
+  }
 }
 
 /**
@@ -236,14 +285,54 @@ export interface InviteStats {
 }
 
 export async function getInviteStats(userId: string): Promise<InviteStats> {
-  // TODO: Implement with Firestore queries
-  // For now, return mock data
-  return {
-    totalInvites: 0,
-    acceptedInvites: 0,
-    pendingInvites: 0,
-    premiumWeeksEarned: 0,
-  };
+  const fb = ensureFirebase();
+  if (!fb || !userId) {
+    return {
+      totalInvites: 0,
+      acceptedInvites: 0,
+      pendingInvites: 0,
+      premiumWeeksEarned: 0,
+    };
+  }
+
+  try {
+    const db = fb.firestore();
+    const referralCode = generateReferralCode(userId);
+
+    // Query users who signed up with this referral code
+    const referralsSnap = await db.collection('users')
+      .where('referredBy', '==', referralCode)
+      .get();
+
+    const totalInvites = referralsSnap.size;
+    let acceptedInvites = 0;
+
+    // Count accepted invites (users who completed onboarding)
+    referralsSnap.forEach((doc) => {
+      const data = doc.data();
+      if (data.onboardingComplete) {
+        acceptedInvites++;
+      }
+    });
+
+    // Each accepted invite = 1 week of premium
+    const premiumWeeksEarned = acceptedInvites;
+
+    return {
+      totalInvites,
+      acceptedInvites,
+      pendingInvites: totalInvites - acceptedInvites,
+      premiumWeeksEarned,
+    };
+  } catch (error) {
+    console.error('Failed to get invite stats:', error);
+    return {
+      totalInvites: 0,
+      acceptedInvites: 0,
+      pendingInvites: 0,
+      premiumWeeksEarned: 0,
+    };
+  }
 }
 
 /**
