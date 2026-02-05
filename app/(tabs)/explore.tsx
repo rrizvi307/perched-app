@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
 import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
+import SpotListItem from '@/components/ui/spot-list-item';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
@@ -19,7 +20,7 @@ import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagSc
 import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
 import { useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { withAlpha } from '@/utils/colors';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
@@ -1286,6 +1287,34 @@ export default function Explore() {
     return next;
   }, [filteredByOpen, aiMode, scoreNearby]);
   const showRanks = !query.trim() || aiMode;
+
+  // Memoize spot tags to avoid recomputing on every render
+  const spotTagsMap = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    rankedSpots.forEach((spot) => {
+      const key = spotKey(spot.example?.spotPlaceId || spot.placeId, spot.name || 'spot');
+      map.set(key, buildSpotTags(spot));
+    });
+    return map;
+  }, [rankedSpots]);
+
+  // Memoize spot press handler
+  const handleSpotPress = useCallback((item: any) => {
+    try {
+      const category = classifySpotCategory(item.name, item.types);
+      const eventPayload = {
+        event: 'tap' as const,
+        ts: Date.now(),
+        userId: userId || undefined,
+        placeId: item.example?.spotPlaceId || null,
+        name: item.name,
+        category,
+      };
+      recordPlaceEvent(eventPayload);
+      recordPlaceEventRemote(eventPayload);
+      openSpotSheet(item);
+    } catch {}
+  }, [userId]);
   const listData = React.useMemo(() => {
     if (!rankedSpots.length) return [];
     if (query.trim()) return rankedSpots;
@@ -1438,8 +1467,11 @@ export default function Explore() {
         data={listData}
         keyExtractor={listKeyExtractor}
         contentContainerStyle={styles.listContent}
-        initialNumToRender={6}
-        maxToRenderPerBatch={8}
+        initialNumToRender={5}
+        maxToRenderPerBatch={5}
+        windowSize={5}
+        removeClippedSubviews={true}
+        updateCellsBatchingPeriod={100}
         windowSize={7}
         updateCellsBatchingPeriod={40}
         removeClippedSubviews={Platform.OS !== 'web'}
@@ -1785,81 +1817,27 @@ export default function Explore() {
           </View>
         }
         renderItem={({ item, index }) => {
-          const coords = item.example?.spotLatLng || item.example?.location;
-          const tags = buildSpotTags(item);
           const key = spotKey(item.example?.spotPlaceId || item.placeId, item.name || 'spot');
+          const tags = spotTagsMap.get(key) || [];
           const friendCount = friendSpotCounts.get(key) || 0;
           const subtitle = friendCount
             ? `${friendCount} friend${friendCount === 1 ? '' : 's'} live now`
             : item.seed ? 'Suggested spot' : `${item.count} check-ins`;
+
           return (
-            <Pressable
-              onPress={() => {
-                try {
-                  const category = classifySpotCategory(item.name, item.types);
-                  const eventPayload = {
-                    event: 'tap' as const,
-                    ts: Date.now(),
-                    userId: userId || undefined,
-                    placeId: item.example?.spotPlaceId || null,
-                    name: item.name,
-                    category,
-                  };
-                  recordPlaceEvent(eventPayload);
-                  recordPlaceEventRemote(eventPayload);
-                  openSpotSheet(item);
-                } catch {}
-              }}
-              style={({ pressed }) => [
-                styles.row,
-                { borderColor: border, backgroundColor: pressed ? highlight : card },
-              ]}
-            >
-              {mapKey && coords ? (
-                <SpotImage
-                  source={{
-                    uri: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=300x150&markers=color:red%7C${coords.lat},${coords.lng}${mapKey ? `&key=${mapKey}` : ''}`,
-                  }}
-                  style={styles.thumb}
-                />
-              ) : (
-                <View style={[styles.thumb, { backgroundColor: border, alignItems: 'center', justifyContent: 'center' }]}>
-                  <Text style={{ color: muted, fontSize: 11 }}>Map preview unavailable</Text>
-                </View>
-              )}
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={{ color, fontWeight: '700' }}>{item.name}</Text>
-                <Text style={{ color: muted, marginTop: 6 }}>{subtitle}</Text>
-                <Text style={{ color: muted, marginTop: 6 }}>
-                  {item.description || describeSpot(item.name, item.example?.address)}
-                  {item.distance !== undefined && item.distance !== Infinity ? ` · ${formatDistance(item.distance)}` : ''}
-                </Text>
-                {tags.length ? (
-                  <View style={styles.tagRow}>
-                    {tags.map((tag) => (
-                      <View key={`${item.name}-${tag}`} style={[styles.tagChip, { backgroundColor: badgeFill, borderColor: border }]}>
-                        <Text style={{ color: accent, fontSize: 11, fontWeight: '600' }}>{tag}</Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-                {item.seed && item.rating ? (
-                  <Text style={{ color: muted, marginTop: 6 }}>
-                    {item.rating ? `${item.rating.toFixed(1)} ★${item.ratingCount ? ` · ${item.ratingCount} reviews` : ''}` : ''}
-                  </Text>
-                ) : null}
-                {!item.seed ? (
-                  <View style={[styles.countBar, { backgroundColor: border }]}>
-                    <View style={[styles.countFill, { backgroundColor: primary, width: `${Math.max(6, (item.count / maxSpotCount) * 100)}%` }]} />
-                  </View>
-                ) : null}
-              </View>
-              {showRanks ? (
-                <View style={[styles.rankBadge, { backgroundColor: badgeFill, borderColor: border }]}>
-                  <Text style={{ color: accent, fontSize: 11, fontWeight: '700' }}>{`#${index + 1}`}</Text>
-                </View>
-              ) : null}
-            </Pressable>
+            <SpotListItem
+              item={item}
+              index={index}
+              tags={tags}
+              friendCount={friendCount}
+              subtitle={subtitle}
+              mapKey={mapKey}
+              maxSpotCount={maxSpotCount}
+              showRanks={showRanks}
+              onPress={() => handleSpotPress(item)}
+              describeSpot={describeSpot}
+              formatDistance={formatDistance}
+            />
           );
         }}
         ListEmptyComponent={
