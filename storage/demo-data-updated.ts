@@ -1,5 +1,5 @@
 // NEW IMPROVED DEMO DATA WITH UTILITY METRICS
-// Updated to showcase the polished metrics system (WiFi, Noise, Busyness, Laptop-Friendly)
+// Updated with realistic photos matching captions and study context
 
 export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, string>) => [
   // 🔥 TRENDING COFFEE SHOPS WITH ENGAGING CAPTIONS
@@ -16,7 +16,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Blue Bottle Coffee',
     spotPlaceId: 'demo-place-bluebottle',
     spotLatLng: { lat: 29.7172, lng: -95.4018 },
-    photoUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1400&q=80', // Coffee shop interior with laptop
     caption: '☕ Perfect spot for deep work. Got the window seat with amazing natural light. Staying here till 3pm!',
     tags: ['Study', 'Wi-Fi', 'Bright', 'Quiet'],
     openNow: true,
@@ -40,7 +40,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Fondren Library - 4th Floor',
     spotPlaceId: 'demo-place-fondren',
     spotLatLng: { lat: 29.7174, lng: -95.4011 },
-    photoUrl: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=1400&q=80', // Modern library with students
     caption: '📚 Silent floor = productivity heaven. Every seat has outlets and USB ports. Study group forming at 4!',
     tags: ['Quiet', 'Study', 'Outlets', 'Seating'],
     openNow: true,
@@ -63,7 +63,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'The Coffee Bean & Tea Leaf',
     spotPlaceId: 'demo-place-coffeebean',
     spotLatLng: { lat: 29.7346, lng: -95.3896 },
-    photoUrl: 'https://images.unsplash.com/photo-1522992319-0365e5f11656?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=1400&q=80', // Coffee cup on table with laptop
     caption: '✨ Just discovered my new favorite study spot! The vibe here is immaculate. Cold brew + notes = perfect combo',
     tags: ['Bright', 'Social', 'Wi-Fi', 'Coworking'],
     openNow: true,
@@ -87,7 +87,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'WeWork - River Oaks',
     spotPlaceId: 'demo-place-wework',
     spotLatLng: { lat: 29.7372, lng: -95.3915 },
-    photoUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1400&q=80', // Modern coworking space
     caption: '💼 Private booth secured! Working on my startup pitch deck. Free coffee bar is a game changer ☕',
     tags: ['Coworking', 'Outlets', 'Wi-Fi', 'Spacious'],
     openNow: true,
@@ -110,7 +110,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Starbucks Reserve - Heights',
     spotPlaceId: 'demo-place-starbucksreserve',
     spotLatLng: { lat: 29.7396, lng: -95.4012 },
-    photoUrl: 'https://images.unsplash.com/photo-1453614512568-c4024d13c247?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1511920170033-f8396924c348?auto=format&fit=crop&w=1400&q=80', // Busy coffee shop interior
     caption: '🎧 Noise-canceling headphones + oat milk latte = locked in for the next 3 hours. Mid-terms aren\'t gonna study themselves!',
     tags: ['Social', 'Wi-Fi', 'Late-night', 'Seating'],
     openNow: true,
@@ -133,7 +133,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Blacksmith - Montrose',
     spotPlaceId: 'demo-place-blacksmith',
     spotLatLng: { lat: 29.7604, lng: -95.3698 },
-    photoUrl: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=1400&q=80', // Cappuccino art close-up
     caption: '🔥 This place is FIRE. Literally the best cappuccino I\'ve ever had. Plus they have almond croissants 🥐',
     tags: ['Study', 'Wi-Fi', 'Outlets', 'Bright'],
     openNow: true,
@@ -156,7 +156,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Memorial Park Running Trails',
     spotPlaceId: 'demo-place-memorialpark',
     spotLatLng: { lat: 29.7392, lng: -95.3856 },
-    photoUrl: 'https://images.unsplash.com/photo-1552674605-db6ffd4facb5?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=1400&q=80', // Running trail in park
     caption: '🏃‍♀️ Study break = running break. Beautiful day outside! Anyone want to join for a 5K?',
     tags: ['Social', 'Outdoor'],
     openNow: true,
@@ -175,7 +175,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Catalina Coffee - Rice Village',
     spotPlaceId: 'demo-place-catalina',
     spotLatLng: { lat: 29.7367, lng: -95.4197 },
-    photoUrl: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1453614512568-c4024d13c247?auto=format&fit=crop&w=1400&q=80', // Aesthetic cafe interior with plants
     caption: '📖 Reading week grind. This spot has the aesthetic + they play good lo-fi beats. Highly recommend 🎵',
     tags: ['Study', 'Wi-Fi', 'Spacious', 'Quiet'],
     openNow: true,
@@ -198,7 +198,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Southside Espresso',
     spotPlaceId: 'demo-place-southside',
     spotLatLng: { lat: 29.7285, lng: -95.3911 },
-    photoUrl: 'https://images.unsplash.com/photo-1442512595331-e89e73853f31?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1517502884422-41eaead166d4?auto=format&fit=crop&w=1400&q=80', // Person coding on laptop
     caption: '💻 Coding session in progress! Free refills on drip coffee = unlimited productivity. Anyone else working on CS projects?',
     tags: ['Coworking', 'Wi-Fi', 'Outlets', 'Late-night'],
     openNow: true,
@@ -221,7 +221,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Double Trouble Coffee',
     spotPlaceId: 'demo-place-doubletrouble',
     spotLatLng: { lat: 29.7445, lng: -95.3587 },
-    photoUrl: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=1400&q=80', // Coffee with latte art
     caption: '☕☕ Name checks out - got a double shot to power through this essay. Cozy vibes + fast wifi = chef\'s kiss 👨‍🍳',
     tags: ['Study', 'Wi-Fi', 'Bright', 'Social'],
     openNow: true,
@@ -244,7 +244,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Boomtown Coffee - Rice University',
     spotPlaceId: 'demo-place-boomtown',
     spotLatLng: { lat: 29.7175, lng: -95.4022 },
-    photoUrl: 'https://images.unsplash.com/photo-1511920170033-f8396924c348?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1522992319-0365e5f11656?auto=format&fit=crop&w=1400&q=80', // Group study session
     caption: '📝 Group study sesh! 5 of us just posted up here for the afternoon. They have board games too if you need a break 🎲',
     tags: ['Social', 'Coworking', 'Wi-Fi', 'Seating'],
     openNow: true,
@@ -267,7 +267,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'The Roastery Coffee Kitchen',
     spotPlaceId: 'demo-place-roastery',
     spotLatLng: { lat: 29.7298, lng: -95.3965 },
-    photoUrl: 'https://images.unsplash.com/photo-1543007631-283050bb3e8c?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1497515114629-f71d768fd07c?auto=format&fit=crop&w=1400&q=80', // Bagel and coffee breakfast
     caption: '🥯 Bagel + coffee = breakfast of champions. Just finished my morning pages here. Great spot for creative work!',
     tags: ['Bright', 'Wi-Fi', 'Spacious', 'Study'],
     openNow: true,
@@ -291,7 +291,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Blue Bottle Coffee',
     spotPlaceId: 'demo-place-bluebottle',
     spotLatLng: { lat: 29.7172, lng: -95.4018 },
-    photoUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1442512595331-e89e73853f31?auto=format&fit=crop&w=1400&q=80', // Coffee shop with laptop
     caption: 'Back at Blue Bottle again! Can never get enough of this place 💙',
     tags: ['Study', 'Wi-Fi'],
     openNow: true,
@@ -313,7 +313,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Fondren Library - 4th Floor',
     spotPlaceId: 'demo-place-fondren',
     spotLatLng: { lat: 29.7174, lng: -95.4011 },
-    photoUrl: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?auto=format&fit=crop&w=1400&q=80', // Library reading room
     caption: 'Finals week = library life. See you all in 8 hours 😅',
     tags: ['Quiet', 'Study'],
     openNow: true,
@@ -335,7 +335,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     spotName: 'Southside Espresso',
     spotPlaceId: 'demo-place-southside',
     spotLatLng: { lat: 29.7285, lng: -95.3911 },
-    photoUrl: 'https://images.unsplash.com/photo-1442512595331-e89e73853f31?auto=format&fit=crop&w=1400&q=80',
+    photoUrl: 'https://images.unsplash.com/photo-1484480974693-6ca0a78fb36b?auto=format&fit=crop&w=1400&q=80', // Coffee and laptop debugging
     caption: 'Debugging life 🐛 This place keeps me sane during crunch time',
     tags: ['Coworking', 'Wi-Fi'],
     openNow: true,
@@ -348,11 +348,16 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
 ];
 
 // INSTRUCTIONS TO UPDATE:
-// 1. Find the line starting with `let demoCheckins = [` in storage/local.ts (around line 797)
-// 2. Replace the entire array with: BETTER_DEMO_CHECKINS(now, demoAvatars)
-// 3. Make sure to import this file at the top: import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
-// 4. Save and restart the app
-// 5. The demo feed will now showcase the full utility metrics system!
+// 1. This file is automatically imported in storage/local.ts
+// 2. Demo data seeds automatically when demo mode is enabled
+// 3. To toggle demo mode: Settings → Enable Demo Mode
+// 4. All demo data uses 'demo-' prefixed IDs for easy cleanup
+
+// PRODUCTION SAFETY:
+// - Demo data is isolated with 'demo-' ID prefixes
+// - Can be filtered out before production deployment
+// - resetDemoNetwork() clears all demo data
+// - Demo mode is disabled by default
 
 // WHAT THIS DEMONSTRATES:
 // ✅ Quality-coded badges (green/yellow/orange-red)
@@ -360,4 +365,4 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
 // ✅ Varied metrics showing all 5 levels for each metric
 // ✅ Quality-based ranking (high WiFi + quiet spots rank higher)
 // ✅ Spots with missing metrics (Memorial Park has no work metrics)
-// ✅ Realistic data matching caption descriptions
+// ✅ Realistic photos matching captions and study context
