@@ -87,6 +87,7 @@ export default function CheckinScreen() {
 	const inputBg = useThemeColor({}, 'surface');
 	const text = useThemeColor({}, 'text');
 	const muted = useThemeColor({}, 'muted');
+	const success = useThemeColor({}, 'success');
 	const backgroundAltLight = withAlpha(surface, 0.92);
 	const backgroundAltLibrary = withAlpha(primary, 0.14);
 	const { user } = useAuth();
@@ -547,6 +548,12 @@ export default function CheckinScreen() {
 				setPostStatus({ message: 'Add a short caption or select a tag.', tone: 'warning' });
 				return;
 			}
+		// Gentle encouragement for metrics (non-blocking)
+		const metricsProvided = [wifiSpeed, noiseLevel, busyness, laptopFriendly !== null].filter(Boolean).length;
+		if (metricsProvided === 0) {
+			showToast('💡 Consider adding Spot Intel to help others!', 'info');
+			// Still allow posting - don't block
+		}
 		const last = await getLastCheckinAt();
 		const now = Date.now();
 			// rate-limit public posts: 10 minutes for public posts, 5 for others
@@ -934,10 +941,54 @@ export default function CheckinScreen() {
 						</View>
 						<Text style={{ color: muted, marginBottom: 8 }}>Pick up to {MAX_TAGS} tags to describe the vibe.</Text>
 
+
+						{/* Calculate metrics completion */}
+						{(() => {
+							const metricsCompleted = [
+								wifiSpeed !== null,
+								noiseLevel !== null,
+								busyness !== null,
+								laptopFriendly !== null,
+							].filter(Boolean).length;
+							const metricsTotal = 4;
+							const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
+
+							return (
+								<>
+
 						{/* Spot Intel Section - Utility Metrics */}
 						<View style={{ marginTop: 16, marginBottom: 8 }}>
-							<Text style={{ color: text, fontWeight: '700', fontSize: 16, marginBottom: 12 }}>Spot Intel (optional)</Text>
-							<Text style={{ color: muted, marginBottom: 12 }}>Help others find the perfect spot</Text>
+						<View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+							<Text style={{ color: text, fontWeight: '700', fontSize: 16 }}>
+								Spot Intel (optional)
+							</Text>
+							{metricsCompleted > 0 && (
+								<View style={{
+									marginLeft: 8,
+									paddingHorizontal: 8,
+									paddingVertical: 2,
+									borderRadius: 12,
+									backgroundColor: metricsPercentage === 100
+										? withAlpha(success, 0.15)
+										: withAlpha(primary, 0.15)
+								}}>
+									<Text style={{
+										color: metricsPercentage === 100 ? success : primary,
+										fontSize: 11,
+										fontWeight: '700'
+									}}>
+										{metricsCompleted}/{metricsTotal} ✓
+									</Text>
+								</View>
+							)}
+						</View>
+						<Text style={{ color: muted, marginBottom: 12 }}>
+							{metricsCompleted === 0
+								? 'Help others find the perfect spot by sharing a few quick details'
+								: metricsPercentage === 100
+								? '🎉 Thanks for helping the community!'
+								: `Great start! ${metricsTotal - metricsCompleted} more to go`}
+						</Text>
 
 							{/* WiFi Speed */}
 							<View style={{ marginBottom: 16 }}>
@@ -1060,6 +1111,9 @@ export default function CheckinScreen() {
 								</View>
 							</View>
 						</View>
+								</>
+							);
+						})()}
 
 						<View style={{ height: 8 }} />
 						{spot ? (
