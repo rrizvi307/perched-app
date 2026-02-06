@@ -16,16 +16,16 @@ const app = initializeApp({
 
 const db = getFirestore(app);
 
-// Demo users with realistic profiles
+// Demo users - Houston-based (Rice, UH, local professionals)
 const DEMO_USERS = [
   {
     id: 'demo-user-sarah',
     name: 'Sarah Chen',
     handle: 'sarahc',
-    email: 'sarah@stanford.edu',
+    email: 'sarah@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=5',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
+    campus: 'Rice University',
+    city: 'Houston, TX',
     bio: 'CS major | Coffee enthusiast',
     friends: ['demo-user-maya', 'demo-user-jon', 'demo-user-emma'],
     totalCheckins: 47,
@@ -34,11 +34,11 @@ const DEMO_USERS = [
     id: 'demo-user-maya',
     name: 'Maya Patel',
     handle: 'mayap',
-    email: 'maya@stanford.edu',
+    email: 'maya@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=45',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
-    bio: 'Product Design @ Stanford',
+    campus: 'Rice University',
+    city: 'Houston, TX',
+    bio: 'Architecture @ Rice',
     friends: ['demo-user-sarah', 'demo-user-alex', 'demo-user-david'],
     totalCheckins: 32,
   },
@@ -46,11 +46,11 @@ const DEMO_USERS = [
     id: 'demo-user-jon',
     name: 'Jon Rodriguez',
     handle: 'jonstudy',
-    email: 'jon@stanford.edu',
+    email: 'jon@uh.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=12',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
-    bio: 'Econ + Data Science',
+    campus: 'University of Houston',
+    city: 'Houston, TX',
+    bio: 'Business + Data Science',
     friends: ['demo-user-sarah', 'demo-user-emma'],
     totalCheckins: 28,
   },
@@ -58,11 +58,11 @@ const DEMO_USERS = [
     id: 'demo-user-alex',
     name: 'Alex Kim',
     handle: 'alexk',
-    email: 'alex@berkeley.edu',
+    email: 'alex@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=33',
-    campus: 'UC Berkeley',
-    city: 'Berkeley, CA',
-    bio: 'EECS @ Cal | Builder',
+    campus: 'Rice University',
+    city: 'Houston, TX',
+    bio: 'ECE @ Rice | Builder',
     friends: ['demo-user-maya', 'demo-user-david'],
     totalCheckins: 53,
   },
@@ -70,10 +70,10 @@ const DEMO_USERS = [
     id: 'demo-user-emma',
     name: 'Emma Wilson',
     handle: 'emmaw',
-    email: 'emma@stanford.edu',
+    email: 'emma@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=24',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
+    campus: 'Rice University',
+    city: 'Houston, TX',
     bio: 'Pre-med | Study buddy finder',
     friends: ['demo-user-sarah', 'demo-user-jon', 'demo-user-david'],
     totalCheckins: 41,
@@ -82,11 +82,11 @@ const DEMO_USERS = [
     id: 'demo-user-david',
     name: 'David Lee',
     handle: 'davidl',
-    email: 'david@stanford.edu',
+    email: 'david@uh.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=15',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
-    bio: 'MS&E | Startup life',
+    campus: 'University of Houston',
+    city: 'Houston, TX',
+    bio: 'MBA | Startup life',
     friends: ['demo-user-maya', 'demo-user-alex', 'demo-user-emma'],
     totalCheckins: 65,
   },
@@ -94,11 +94,11 @@ const DEMO_USERS = [
     id: 'demo-user-lisa',
     name: 'Lisa Thompson',
     handle: 'lisat',
-    email: 'lisa@berkeley.edu',
+    email: 'lisa@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=48',
-    campus: 'UC Berkeley',
-    city: 'Berkeley, CA',
-    bio: 'Haas MBA | Networking',
+    campus: 'Rice University',
+    city: 'Houston, TX',
+    bio: 'Jones MBA | Networking',
     friends: ['demo-user-alex'],
     totalCheckins: 22,
   },
@@ -106,106 +106,171 @@ const DEMO_USERS = [
     id: 'demo-user-marcus',
     name: 'Marcus Johnson',
     handle: 'marcusj',
-    email: 'marcus@stanford.edu',
+    email: 'marcus@rice.edu',
     photoUrl: 'https://i.pravatar.cc/150?img=53',
-    campus: 'Stanford University',
-    city: 'Palo Alto, CA',
+    campus: 'Rice University',
+    city: 'Houston, TX',
     bio: 'PhD Physics | Late night coder',
     friends: ['demo-user-sarah', 'demo-user-jon'],
     totalCheckins: 89,
   },
 ];
 
-// Demo spots - cafes, libraries, coworking spaces
+// Real Houston spots - cafes, libraries, coworking spaces
+// Coordinates are in Houston area (around 29.7° N, 95.4° W)
 const DEMO_SPOTS = [
   {
-    name: 'Blue Bottle Coffee',
-    placeId: 'ChIJN1t_tDeuEmsRUsoyG83frY4',
-    location: { lat: 37.4419, lng: -122.1430 },
-    tags: ['Wi-Fi', 'Quiet', 'Outlets'],
+    name: 'Boomtown Coffee',
+    placeId: 'ChIJQaJNnMq_QIYRgGPBBisuZ4I',
+    location: { lat: 29.8024, lng: -95.4101 },
+    tags: ['Wi-Fi', 'Spacious', 'Outlets'],
     category: 'cafe',
-    address: '456 University Ave, Palo Alto, CA',
+    address: '242 W 19th St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=800&q=80', // Coffee shop interior
+      'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=800&q=80', // Cafe with laptop
+    ],
   },
   {
-    name: 'Philz Coffee',
-    placeId: 'ChIJrTLr-ByuEmsRdS2mBRaV9Xw',
-    location: { lat: 37.4435, lng: -122.1612 },
-    tags: ['Social', 'Wi-Fi', 'Bright'],
+    name: 'Retrospect Coffee Bar',
+    placeId: 'ChIJd8BlQ2XBQIYRvp8aREjr-jQ',
+    location: { lat: 29.7386, lng: -95.3865 },
+    tags: ['Cozy', 'Wi-Fi', 'Quiet'],
     category: 'cafe',
-    address: '101 Forest Ave, Palo Alto, CA',
+    address: '3709 La Branch St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1559496417-e7f25cb247f3?w=800&q=80', // Minimal coffee shop
+      'https://images.unsplash.com/photo-1511920170033-f8396924c348?w=800&q=80', // Coffee and pastry
+    ],
   },
   {
-    name: 'Green Library',
-    placeId: 'ChIJ9zPnPKe6j4ARfWLpBMEljSw',
-    location: { lat: 37.4275, lng: -122.1697 },
+    name: 'Fondren Library',
+    placeId: 'ChIJyxKlzLTBQIYRTKCTnOXaR3Y',
+    location: { lat: 29.7182, lng: -95.4019 },
     tags: ['Quiet', 'Study', 'Seating'],
     category: 'library',
-    address: 'Stanford University, Stanford, CA',
+    address: 'Rice University, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=800&q=80', // Library interior
+      'https://images.unsplash.com/photo-1568667256549-094345857637?w=800&q=80', // Study tables
+    ],
   },
   {
-    name: 'Coupa Cafe',
-    placeId: 'ChIJIQBpAG2xhYAR_6128GcTUEo',
-    location: { lat: 37.4267, lng: -122.1690 },
-    tags: ['Social', 'Wi-Fi', 'Late-night'],
+    name: 'Tout Suite',
+    placeId: 'ChIJE0JZQR7AQIYRV_7R6a-Yb3g',
+    location: { lat: 29.7537, lng: -95.3531 },
+    tags: ['Bright', 'Social', 'Wi-Fi'],
     category: 'cafe',
-    address: '538 Ramona St, Palo Alto, CA',
+    address: '2001 Commerce St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=800&q=80', // Modern cafe
+      'https://images.unsplash.com/photo-1493857671505-72967e2e2760?w=800&q=80', // Coffee and work
+    ],
   },
   {
-    name: 'Bytes Cafe',
-    placeId: 'demo-place-bytes',
-    location: { lat: 37.4320, lng: -122.1756 },
-    tags: ['Campus', 'Quick bites', 'Seating'],
+    name: 'Campesino Coffee House',
+    placeId: 'demo-place-campesino',
+    location: { lat: 29.7476, lng: -95.3694 },
+    tags: ['Wi-Fi', 'Chill', 'Outlets'],
     category: 'cafe',
-    address: 'Gates Building, Stanford, CA',
+    address: '2602 Waugh Dr, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1442512595331-e89e73853f31?w=800&q=80', // Latte art
+      'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=800&q=80', // Cafe atmosphere
+    ],
   },
   {
-    name: 'Doe Library',
-    placeId: 'demo-place-doe',
-    location: { lat: 37.8723, lng: -122.2595 },
-    tags: ['Quiet', 'Historic', 'Study'],
+    name: 'MD Anderson Library',
+    placeId: 'demo-place-mdanderson',
+    location: { lat: 29.7215, lng: -95.3430 },
+    tags: ['Quiet', 'Study', '24/7'],
     category: 'library',
-    address: 'UC Berkeley, Berkeley, CA',
+    address: 'University of Houston, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=800&q=80', // Library bookshelves
+      'https://images.unsplash.com/photo-1507842217343-583bb7270b66?w=800&q=80', // Study area
+    ],
   },
   {
-    name: 'Free Speech Cafe',
-    placeId: 'demo-place-freespeech',
-    location: { lat: 37.8695, lng: -122.2590 },
-    tags: ['Wi-Fi', 'Busy', 'Social'],
+    name: 'Common Bond Bistro',
+    placeId: 'demo-place-commonbond',
+    location: { lat: 29.7430, lng: -95.3908 },
+    tags: ['Bright', 'Wi-Fi', 'Social'],
     category: 'cafe',
-    address: 'Moffitt Library, UC Berkeley, CA',
+    address: '1706 Westheimer Rd, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1559925393-8be0ec4767c8?w=800&q=80', // Bakery cafe
+      'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&q=80', // Restaurant interior
+    ],
   },
   {
-    name: 'Sightglass Coffee',
-    placeId: 'demo-place-sightglass',
-    location: { lat: 37.7743, lng: -122.4097 },
-    tags: ['Wi-Fi', 'Spacious', 'Bright'],
+    name: 'Siphon Coffee',
+    placeId: 'demo-place-siphon',
+    location: { lat: 29.8015, lng: -95.4085 },
+    tags: ['Specialty', 'Quiet', 'Cozy'],
     category: 'cafe',
-    address: '270 7th St, San Francisco, CA',
+    address: '701 W 19th St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=800&q=80', // Pour over coffee
+      'https://images.unsplash.com/photo-1498804103079-a6351b050096?w=800&q=80', // Coffee brewing
+    ],
   },
   {
-    name: 'Ritual Coffee Roasters',
-    placeId: 'demo-place-ritual',
-    location: { lat: 37.7565, lng: -122.4211 },
-    tags: ['Hip', 'Outlets', 'Music'],
+    name: 'The Nook Cafe',
+    placeId: 'demo-place-nook',
+    location: { lat: 29.7603, lng: -95.3628 },
+    tags: ['Cozy', 'Wi-Fi', 'Pastries'],
     category: 'cafe',
-    address: '1026 Valencia St, San Francisco, CA',
+    address: '1006 McGowen St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1453614512568-c4024d13c247?w=800&q=80', // Cozy cafe corner
+      'https://images.unsplash.com/photo-1464979681340-bdd28a61699e?w=800&q=80', // Coffee and book
+    ],
   },
   {
-    name: 'The Study Hall',
-    placeId: 'demo-place-studyhall',
-    location: { lat: 37.4445, lng: -122.1601 },
-    tags: ['Coworking', 'Quiet', '24/7'],
-    category: 'coworking',
-    address: '200 Hamilton Ave, Palo Alto, CA',
+    name: 'Agora',
+    placeId: 'demo-place-agora',
+    location: { lat: 29.7445, lng: -95.3907 },
+    tags: ['Late-night', 'Social', 'Wi-Fi'],
+    category: 'cafe',
+    address: '1712 Westheimer Rd, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1521017432531-fbd92d768814?w=800&q=80', // Evening cafe vibes
+      'https://images.unsplash.com/photo-1485182708500-e8f1f318ba72?w=800&q=80', // Late night coffee
+    ],
+  },
+  {
+    name: 'Brazos Bookstore & Cafe',
+    placeId: 'demo-place-brazos',
+    location: { lat: 29.7291, lng: -95.4134 },
+    tags: ['Quiet', 'Books', 'Cozy'],
+    category: 'cafe',
+    address: '2421 Bissonnet St, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1524578271613-d550eacf6090?w=800&q=80', // Bookstore interior
+      'https://images.unsplash.com/photo-1526243741027-444d633d7365?w=800&q=80', // Reading nook
+    ],
+  },
+  {
+    name: 'Station Coffee Co',
+    placeId: 'demo-place-station',
+    location: { lat: 29.8041, lng: -95.4120 },
+    tags: ['Wi-Fi', 'Industrial', 'Spacious'],
+    category: 'cafe',
+    address: '1809 N Durham Dr, Houston, TX',
+    photos: [
+      'https://images.unsplash.com/photo-1497935586351-b67a49e012bf?w=800&q=80', // Industrial coffee shop
+      'https://images.unsplash.com/photo-1461023058943-07fcbe16d735?w=800&q=80', // Coffee close up
+    ],
   },
 ];
 
-// Captions
+// Captions that feel authentic for study/work spots
 const DEMO_CAPTIONS = [
   'Perfect spot for deep work',
   'Great vibes here today!',
   'Finally found a quiet corner',
-  'Best coffee in the area',
+  'Best cold brew in Houston',
   'Crushing this project',
   'Study sesh with the crew',
   'Love the natural lighting here',
@@ -218,29 +283,16 @@ const DEMO_CAPTIONS = [
   'Perfect for morning meetings',
   'Cozy and focused',
   'Midterms grind mode activated',
-  'Best matcha latte in town',
+  'Best oat milk latte in town',
   'Found my new favorite spot',
   'Late night coding session',
   'Sunday study vibes',
+  'The baristas here are so nice',
+  'AC is perfect on hot days',
+  'Always come back here',
   '',
   '',
   '', // Some without captions
-];
-
-// Photo URLs
-const DEMO_PHOTOS = [
-  'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=800&q=80',
-  'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=800&q=80',
-  'https://images.unsplash.com/photo-1521017432531-fbd92d768814?w=800&q=80',
-  'https://images.unsplash.com/photo-1481833761820-0509d3217039?w=800&q=80',
-  'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=800&q=80',
-  'https://images.unsplash.com/photo-1501959915551-4e8d30928317?w=800&q=80',
-  'https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=800&q=80',
-  'https://images.unsplash.com/photo-1559056199-641a0ac8b55e?w=800&q=80',
-  'https://images.unsplash.com/photo-1453614512568-c4024d13c247?w=800&q=80',
-  'https://images.unsplash.com/photo-1497935586351-b67a49e012bf?w=800&q=80',
-  'https://images.unsplash.com/photo-1442512595331-e89e73853f31?w=800&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&q=80',
 ];
 
 function randomElement<T>(arr: T[]): T {
@@ -268,12 +320,12 @@ async function seedUsers() {
   }
 
   await batch.commit();
-  console.log(`✅ Created ${DEMO_USERS.length} demo users`);
+  console.log(`Created ${DEMO_USERS.length} demo users`);
 }
 
 async function seedCheckins() {
   console.log('Seeding check-ins...');
-  const checkinsToCreate = 40;
+  const checkinsToCreate = 45;
   const batch = db.batch();
 
   // Utility metric options
@@ -285,7 +337,8 @@ async function seedCheckins() {
     const user = randomElement(DEMO_USERS);
     const spot = randomElement(DEMO_SPOTS);
     const caption = randomElement(DEMO_CAPTIONS);
-    const photo = randomElement(DEMO_PHOTOS);
+    // Use spot-specific photo
+    const photo = randomElement(spot.photos);
     const hoursAgo = Math.random() * 20; // Within last 20 hours
     const createdAt = generateTimestamp(hoursAgo);
     const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
@@ -328,7 +381,7 @@ async function seedCheckins() {
   }
 
   await batch.commit();
-  console.log(`✅ Created ${checkinsToCreate} demo check-ins with utility metrics`);
+  console.log(`Created ${checkinsToCreate} demo check-ins with utility metrics`);
 }
 
 async function seedFriendRequests() {
@@ -354,7 +407,7 @@ async function seedFriendRequests() {
   }
 
   await batch.commit();
-  console.log(`✅ Created ${requests.length} demo friend requests`);
+  console.log(`Created ${requests.length} demo friend requests`);
 }
 
 async function clearDemoData() {
@@ -382,7 +435,7 @@ async function clearDemoData() {
   });
 
   await batch.commit();
-  console.log('✅ Cleared existing demo data');
+  console.log('Cleared existing demo data');
 }
 
 async function main() {
@@ -402,8 +455,9 @@ async function main() {
   await seedCheckins();
   await seedFriendRequests();
 
-  console.log('\n🎉 Firestore seeded successfully!');
+  console.log('\nFirestore seeded successfully!');
   console.log('Demo users:', DEMO_USERS.map(u => u.handle).join(', '));
+  console.log('Houston spots:', DEMO_SPOTS.map(s => s.name).join(', '));
   process.exit(0);
 }
 
