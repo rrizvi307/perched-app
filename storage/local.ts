@@ -1149,6 +1149,15 @@ export async function seedDemoNetwork(currentUserId?: string) {
             await store.setItem(KEY, JSON.stringify(adjusted));
           }
         } catch {}
+        // Seed comprehensive demo data (stats, achievements, saved spots, friend requests, impact)
+        if (currentUserId) {
+          try {
+            const { seedComprehensiveDemoData } = await import('./seed-comprehensive-demo');
+            await seedComprehensiveDemoData(currentUserId);
+          } catch (e) {
+            console.warn('Failed to seed comprehensive demo data:', e);
+          }
+        }
       } else {
         memory = next;
       }
