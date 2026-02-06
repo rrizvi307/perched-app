@@ -18,6 +18,7 @@ import { requestForegroundLocation } from '@/services/location';
 import { classifySpotCategory, spotKey } from '@/services/spotUtils';
 import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot } from '@/storage/local';
 import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
+import { calculateCompositeScore } from '@/services/metricsUtils';
 import { useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -629,7 +630,12 @@ export default function Explore() {
           });
           arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
         } else {
-          arr.sort((a, b) => b.count - a.count);
+          // Use quality-based ranking when no location
+          arr.sort((a, b) => {
+            const scoreA = calculateCompositeScore(a, loc);
+            const scoreB = calculateCompositeScore(b, loc);
+            return scoreB - scoreA;
+          });
         }
         if (!active) return;
         const baseSpots = arr.slice(0, 30);
@@ -711,7 +717,11 @@ export default function Explore() {
           Object.assign(spot, metrics);
           delete spot._checkins;
         });
-        const offlineArr = Object.values(grouped).sort((a, b) => b.count - a.count);
+        const offlineArr = Object.values(grouped).sort((a: any, b: any) => {
+          const scoreA = calculateCompositeScore(a, loc);
+          const scoreB = calculateCompositeScore(b, loc);
+          return scoreB - scoreA;
+        });
         if (!active) return;
         setSpots(offlineArr);
         setStatus({ message: 'Offline right now. Showing saved spots.', tone: 'warning' });
