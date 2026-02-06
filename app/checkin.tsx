@@ -189,6 +189,11 @@ export default function CheckinScreen() {
 						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
+					// Load metrics from edit mode
+					if (check.wifiSpeed) setWifiSpeed(check.wifiSpeed);
+					if (check.noiseLevel) setNoiseLevel(check.noiseLevel);
+					if (check.busyness) setBusyness(check.busyness);
+					if (check.laptopFriendly !== undefined) setLaptopFriendly(check.laptopFriendly);
 					}
 				} catch {
 					try {
@@ -200,6 +205,11 @@ export default function CheckinScreen() {
 							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
+							// Load metrics from edit mode (local fallback)
+							if (found.wifiSpeed) setWifiSpeed(found.wifiSpeed);
+							if (found.noiseLevel) setNoiseLevel(found.noiseLevel);
+							if (found.busyness) setBusyness(found.busyness);
+							if (found.laptopFriendly !== undefined) setLaptopFriendly(found.laptopFriendly);
 						}
 					} catch {}
 					}
@@ -295,6 +305,11 @@ export default function CheckinScreen() {
 							location: draft.location,
 						});
 					}
+					// Load metrics from draft
+					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
+					if (draft.noiseLevel) setNoiseLevel(draft.noiseLevel);
+					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
+					if (draft.laptopFriendly !== undefined) setLaptopFriendly(draft.laptopFriendly);
 				}
 			} catch {}
 			const seen = await getPermissionPrimerSeen('camera');
@@ -343,10 +358,14 @@ export default function CheckinScreen() {
 				tags: selectedTags,
 				placeId: placeInfo?.placeId || detectedPlace?.placeId,
 				location: placeInfo?.location || detectedPlace?.location,
+				wifiSpeed,
+				noiseLevel,
+				busyness,
+				laptopFriendly,
 			});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, wifiSpeed, noiseLevel, busyness, laptopFriendly]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
