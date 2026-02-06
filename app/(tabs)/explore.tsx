@@ -43,37 +43,35 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
 function aggregateSpotMetrics(checkins: any[]) {
   const wifiSpeeds: number[] = [];
   const busynessValues: number[] = [];
-  const noiseLevels: { quiet: number; moderate: number; lively: number } = { quiet: 0, moderate: 0, lively: 0 };
+  const noiseLevels: number[] = [];
   let laptopYes = 0;
   let laptopNo = 0;
 
   checkins.forEach((c) => {
     if (c.wifiSpeed && typeof c.wifiSpeed === 'number') wifiSpeeds.push(c.wifiSpeed);
     if (c.busyness && typeof c.busyness === 'number') busynessValues.push(c.busyness);
-    if (c.noiseLevel === 'quiet') noiseLevels.quiet++;
-    else if (c.noiseLevel === 'moderate') noiseLevels.moderate++;
-    else if (c.noiseLevel === 'lively') noiseLevels.lively++;
+
+    // Handle both old string format and new numeric format
+    if (c.noiseLevel) {
+      const convertedNoise = typeof c.noiseLevel === 'string'
+        ? (c.noiseLevel === 'quiet' ? 2 : c.noiseLevel === 'moderate' ? 3 : 4)
+        : c.noiseLevel;
+      if (typeof convertedNoise === 'number') noiseLevels.push(convertedNoise);
+    }
+
     if (c.laptopFriendly === true) laptopYes++;
     else if (c.laptopFriendly === false) laptopNo++;
   });
 
   const avgWifiSpeed = wifiSpeeds.length > 0 ? Math.round(wifiSpeeds.reduce((a, b) => a + b, 0) / wifiSpeeds.length * 10) / 10 : null;
   const avgBusyness = busynessValues.length > 0 ? Math.round(busynessValues.reduce((a, b) => a + b, 0) / busynessValues.length * 10) / 10 : null;
-
-  // Determine top noise level
-  let topNoiseLevel: 'quiet' | 'moderate' | 'lively' | null = null;
-  const totalNoise = noiseLevels.quiet + noiseLevels.moderate + noiseLevels.lively;
-  if (totalNoise > 0) {
-    if (noiseLevels.quiet >= noiseLevels.moderate && noiseLevels.quiet >= noiseLevels.lively) topNoiseLevel = 'quiet';
-    else if (noiseLevels.moderate >= noiseLevels.lively) topNoiseLevel = 'moderate';
-    else topNoiseLevel = 'lively';
-  }
+  const avgNoiseLevel = noiseLevels.length > 0 ? Math.round(noiseLevels.reduce((a, b) => a + b, 0) / noiseLevels.length * 10) / 10 : null;
 
   // Calculate laptop-friendly percentage
   const totalLaptop = laptopYes + laptopNo;
   const laptopFriendlyPct = totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
 
-  return { avgWifiSpeed, avgBusyness, topNoiseLevel, laptopFriendlyPct };
+  return { avgWifiSpeed, avgBusyness, avgNoiseLevel, laptopFriendlyPct };
 }
 
 function formatTime(input: string | { seconds?: number } | undefined) {

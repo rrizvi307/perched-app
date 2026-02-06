@@ -72,7 +72,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
           {item.distance !== undefined && item.distance !== Infinity ? ` · ${formatDistance(item.distance)}` : ''}
         </Text>
         {/* Utility Metrics Row */}
-        {(item.avgWifiSpeed || item.avgBusyness || item.topNoiseLevel || item.laptopFriendlyPct !== undefined) && (
+        {(item.avgWifiSpeed || item.avgBusyness || item.avgNoiseLevel || item.laptopFriendlyPct !== undefined) && (
           <View style={styles.metricsRow}>
             {item.avgWifiSpeed ? (
               <View style={[styles.metricBadge, { backgroundColor: withAlpha(primary, 0.12) }]}>
@@ -84,13 +84,13 @@ const SpotListItem = React.memo<SpotListItemProps>(({
                 </Text>
               </View>
             ) : null}
-            {item.topNoiseLevel ? (
+            {item.avgNoiseLevel ? (
               <View style={[styles.metricBadge, { backgroundColor: withAlpha(accent, 0.12) }]}>
                 <Text style={{ fontSize: 10 }}>
-                  {item.topNoiseLevel === 'quiet' ? '🤫' : item.topNoiseLevel === 'moderate' ? '💬' : '🎉'}
+                  {item.avgNoiseLevel <= 2 ? '🤫' : item.avgNoiseLevel <= 3.5 ? '💬' : '🎉'}
                 </Text>
                 <Text style={{ color: accent, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
-                  {item.topNoiseLevel === 'quiet' ? 'Quiet' : item.topNoiseLevel === 'moderate' ? 'Moderate' : 'Lively'}
+                  {item.avgNoiseLevel <= 2 ? 'Quiet' : item.avgNoiseLevel <= 3.5 ? 'Moderate' : 'Lively'}
                 </Text>
               </View>
             ) : null}

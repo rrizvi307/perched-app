@@ -71,7 +71,7 @@ export default function CheckinScreen() {
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
 	// Utility metrics for spot intel
 	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
-	const [noiseLevel, setNoiseLevel] = useState<'quiet' | 'moderate' | 'lively' | null>(null);
+	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
@@ -191,7 +191,12 @@ export default function CheckinScreen() {
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
 					// Load metrics from edit mode
 					if (check.wifiSpeed) setWifiSpeed(check.wifiSpeed);
-					if (check.noiseLevel) setNoiseLevel(check.noiseLevel);
+					if (check.noiseLevel) {
+						const convertedNoise = typeof check.noiseLevel === 'string'
+							? (check.noiseLevel === 'quiet' ? 2 : check.noiseLevel === 'moderate' ? 3 : 4)
+							: check.noiseLevel;
+						setNoiseLevel(convertedNoise);
+					}
 					if (check.busyness) setBusyness(check.busyness);
 					if (check.laptopFriendly !== undefined) setLaptopFriendly(check.laptopFriendly);
 					}
@@ -207,7 +212,12 @@ export default function CheckinScreen() {
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 							// Load metrics from edit mode (local fallback)
 							if (found.wifiSpeed) setWifiSpeed(found.wifiSpeed);
-							if (found.noiseLevel) setNoiseLevel(found.noiseLevel);
+							if (found.noiseLevel) {
+								const convertedNoise = typeof found.noiseLevel === 'string'
+									? (found.noiseLevel === 'quiet' ? 2 : found.noiseLevel === 'moderate' ? 3 : 4)
+									: found.noiseLevel;
+								setNoiseLevel(convertedNoise);
+							}
 							if (found.busyness) setBusyness(found.busyness);
 							if (found.laptopFriendly !== undefined) setLaptopFriendly(found.laptopFriendly);
 						}
@@ -307,7 +317,12 @@ export default function CheckinScreen() {
 					}
 					// Load metrics from draft
 					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
-					if (draft.noiseLevel) setNoiseLevel(draft.noiseLevel);
+					if (draft.noiseLevel) {
+						const convertedNoise = typeof draft.noiseLevel === 'string' 
+							? (draft.noiseLevel === 'quiet' ? 2 : draft.noiseLevel === 'moderate' ? 3 : 4)
+							: draft.noiseLevel;
+						setNoiseLevel(convertedNoise);
+					}
 					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
 					if (draft.laptopFriendly !== undefined) setLaptopFriendly(draft.laptopFriendly);
 				}
@@ -952,30 +967,33 @@ export default function CheckinScreen() {
 								</Text>
 							</View>
 
-							{/* Noise Level */}
-							<View style={{ marginBottom: 16 }}>
-								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Noise Level</Text>
-								<View style={{ flexDirection: 'row', gap: 8 }}>
-									{(['quiet', 'moderate', 'lively'] as const).map((level) => (
-										<Pressable
-											key={`noise-${level}`}
-											onPress={() => setNoiseLevel(noiseLevel === level ? null : level)}
-											style={[
-												styles.metricChip,
-												{
-													borderColor: inputBorder,
-													backgroundColor: noiseLevel === level ? primary : 'transparent',
-													paddingHorizontal: 16,
-												},
-											]}
-										>
-											<Text style={{ color: noiseLevel === level ? '#FFFFFF' : text, fontWeight: '600' }}>
-												{level === 'quiet' ? '🤫 Quiet' : level === 'moderate' ? '💬 Moderate' : '🎉 Lively'}
-											</Text>
-										</Pressable>
-									))}
-								</View>
+						{/* Noise Level */}
+						<View style={{ marginBottom: 16 }}>
+							<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Noise Level</Text>
+							<View style={{ flexDirection: 'row', gap: 8 }}>
+								{([1, 2, 3, 4, 5] as const).map((level) => (
+									<Pressable
+										key={`noise-${level}`}
+										onPress={() => setNoiseLevel(noiseLevel === level ? null : level)}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: noiseLevel === level ? primary : 'transparent',
+												minWidth: 50,
+											},
+										]}
+									>
+										<Text style={{ color: noiseLevel === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+											{level === 1 ? '🔇' : level === 2 ? '🤫' : level === 3 ? '💬' : level === 4 ? '🎉' : '📢'}
+										</Text>
+									</Pressable>
+								))}
 							</View>
+							<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+								{noiseLevel === 1 ? 'Silent' : noiseLevel === 2 ? 'Quiet' : noiseLevel === 3 ? 'Moderate' : noiseLevel === 4 ? 'Lively' : noiseLevel === 5 ? 'Loud' : 'Tap to rate noise'}
+							</Text>
+						</View>
 
 							{/* Busyness */}
 							<View style={{ marginBottom: 16 }}>

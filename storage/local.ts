@@ -32,7 +32,7 @@ type Checkin = {
   tags?: string[];
   // New utility metrics
   wifiSpeed?: 1 | 2 | 3 | 4 | 5; // 1=unusable, 5=blazing fast
-  noiseLevel?: 'quiet' | 'moderate' | 'lively';
+  noiseLevel?: 'quiet' | 'moderate' | 'lively' | 1 | 2 | 3 | 4 | 5; // Legacy string or new 1-5 scale (1=silent, 5=loud)
   busyness?: 1 | 2 | 3 | 4 | 5; // 1=empty, 5=packed
   laptopFriendly?: boolean; // would you recommend for laptop work?
 };
