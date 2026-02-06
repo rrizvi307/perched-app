@@ -1,6 +1,7 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
 import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
@@ -159,6 +160,17 @@ export default function CheckinScreen() {
 			return null;
 		}
 	})();
+
+	// Celebrate when all metrics are completed
+	const prevMetricsCompleteRef = useRef(false);
+	useEffect(() => {
+		const allComplete = wifiSpeed !== null && noiseLevel !== null && busyness !== null && laptopFriendly !== null;
+		if (allComplete && !prevMetricsCompleteRef.current) {
+			// Just completed all metrics - celebrate!
+			Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+		}
+		prevMetricsCompleteRef.current = allComplete;
+	}, [wifiSpeed, noiseLevel, busyness, laptopFriendly]);
 
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
@@ -1012,7 +1024,10 @@ export default function CheckinScreen() {
 									{([1, 2, 3, 4, 5] as const).map((level) => (
 										<Pressable
 											key={`wifi-${level}`}
-											onPress={() => setWifiSpeed(wifiSpeed === level ? null : level)}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setWifiSpeed(wifiSpeed === level ? null : level);
+											}}
 											style={[
 												styles.metricChip,
 												{
@@ -1040,7 +1055,10 @@ export default function CheckinScreen() {
 								{([1, 2, 3, 4, 5] as const).map((level) => (
 									<Pressable
 										key={`noise-${level}`}
-										onPress={() => setNoiseLevel(noiseLevel === level ? null : level)}
+										onPress={() => {
+											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+											setNoiseLevel(noiseLevel === level ? null : level);
+										}}
 										style={[
 											styles.metricChip,
 											{
@@ -1068,7 +1086,10 @@ export default function CheckinScreen() {
 									{([1, 2, 3, 4, 5] as const).map((level) => (
 										<Pressable
 											key={`busy-${level}`}
-											onPress={() => setBusyness(busyness === level ? null : level)}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setBusyness(busyness === level ? null : level);
+											}}
 											style={[
 												styles.metricChip,
 												{
@@ -1094,7 +1115,10 @@ export default function CheckinScreen() {
 								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Good for Laptop Work?</Text>
 								<View style={{ flexDirection: 'row', gap: 8 }}>
 									<Pressable
-										onPress={() => setLaptopFriendly(laptopFriendly === true ? null : true)}
+										onPress={() => {
+											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+											setLaptopFriendly(laptopFriendly === true ? null : true);
+										}}
 										style={[
 											styles.metricChip,
 											{
@@ -1109,7 +1133,10 @@ export default function CheckinScreen() {
 										</Text>
 									</Pressable>
 									<Pressable
-										onPress={() => setLaptopFriendly(laptopFriendly === false ? null : false)}
+										onPress={() => {
+											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+											setLaptopFriendly(laptopFriendly === false ? null : false);
+										}}
 										style={[
 											styles.metricChip,
 											{

@@ -75,31 +75,64 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         {(item.avgWifiSpeed || item.avgBusyness || item.avgNoiseLevel || item.laptopFriendlyPct !== undefined) && (
           <View style={styles.metricsRow}>
             {item.avgWifiSpeed ? (
-              <View style={[styles.metricBadge, { backgroundColor: withAlpha(primary, 0.12) }]}>
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgWifiSpeed >= 4
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgWifiSpeed >= 3
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#EF4444', 0.15)
+              }]}>
                 <Text style={{ fontSize: 10 }}>
                   {item.avgWifiSpeed >= 4 ? '🚀' : item.avgWifiSpeed >= 3 ? '📶' : '📶'}
                 </Text>
-                <Text style={{ color: primary, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                <Text style={{
+                  color: item.avgWifiSpeed >= 4 ? '#22C55E' : item.avgWifiSpeed >= 3 ? '#F59E0B' : '#EF4444',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
                   {item.avgWifiSpeed >= 4 ? 'Fast' : item.avgWifiSpeed >= 3 ? 'OK' : 'Slow'}
                 </Text>
               </View>
             ) : null}
             {item.avgNoiseLevel ? (
-              <View style={[styles.metricBadge, { backgroundColor: withAlpha(accent, 0.12) }]}>
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgNoiseLevel <= 2
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgNoiseLevel <= 3.5
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#F97316', 0.15)
+              }]}>
                 <Text style={{ fontSize: 10 }}>
                   {item.avgNoiseLevel <= 2 ? '🤫' : item.avgNoiseLevel <= 3.5 ? '💬' : '🎉'}
                 </Text>
-                <Text style={{ color: accent, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                <Text style={{
+                  color: item.avgNoiseLevel <= 2 ? '#22C55E' : item.avgNoiseLevel <= 3.5 ? '#F59E0B' : '#F97316',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
                   {item.avgNoiseLevel <= 2 ? 'Quiet' : item.avgNoiseLevel <= 3.5 ? 'Moderate' : 'Lively'}
                 </Text>
               </View>
             ) : null}
             {item.avgBusyness ? (
-              <View style={[styles.metricBadge, { backgroundColor: withAlpha(muted, 0.15) }]}>
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgBusyness <= 2
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgBusyness <= 3
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#F97316', 0.15)
+              }]}>
                 <Text style={{ fontSize: 10 }}>
                   {item.avgBusyness <= 2 ? '🧘' : item.avgBusyness <= 3 ? '👥' : '🔥'}
                 </Text>
-                <Text style={{ color: text, fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                <Text style={{
+                  color: item.avgBusyness <= 2 ? '#22C55E' : item.avgBusyness <= 3 ? '#F59E0B' : '#F97316',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
                   {item.avgBusyness <= 2 ? 'Calm' : item.avgBusyness <= 3 ? 'Moderate' : 'Busy'}
                 </Text>
               </View>
