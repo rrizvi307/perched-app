@@ -591,6 +591,13 @@ export default function CheckinScreen() {
 						const local = await import('@/storage/local');
 						await local.updateCheckinLocalById(editId, updates as any);
 						publishCheckin({ id: editId, ...updates });
+						// Track metrics impact for edits
+						try {
+							const { updateMetricsImpact } = await import('@/services/metricsImpact');
+							await updateMetricsImpact(uid, updates);
+						} catch (error) {
+							console.error('Failed to update metrics impact:', error);
+						}
 						showToast('Check-in updated.', 'success');
 						try {
 							await clearCheckinDraft();
@@ -697,6 +704,14 @@ export default function CheckinScreen() {
 					} catch (error) {
 						console.error('Failed to update gamification stats:', error);
 					}
+				}
+
+				// Track metrics impact
+				try {
+					const { updateMetricsImpact } = await import('@/services/metricsImpact');
+					await updateMetricsImpact(uid, localPayload);
+				} catch (error) {
+					console.error('Failed to update metrics impact:', error);
 				}
 			} catch {}
 			setPendingRemote(pendingPayload);

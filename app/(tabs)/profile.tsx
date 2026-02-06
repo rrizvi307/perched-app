@@ -6,6 +6,7 @@ import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, H2, Label } from '@/components/ui/typography';
 import { StreakBadge } from '@/components/ui/streak-badge';
 import { PolishedCard } from '@/components/ui/polished-card';
+import MetricsImpactCard from '@/components/ui/metrics-impact-card';
 import { PolishedLargeHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
 import { SkeletonProfile } from '@/components/ui/skeleton-loader';
@@ -843,6 +844,7 @@ export default function ProfileScreen() {
                 </PremiumButton>
               </>
             )}
+            <MetricsImpactCard />
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
                 onPress={() => router.push('/verify')}
