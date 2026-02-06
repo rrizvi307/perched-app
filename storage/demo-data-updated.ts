@@ -1,4 +1,5 @@
-// NEW IMPROVED DEMO DATA - Copy this into local.ts to replace the current demo check-ins
+// NEW IMPROVED DEMO DATA WITH UTILITY METRICS
+// Updated to showcase the polished metrics system (WiFi, Noise, Busyness, Laptop-Friendly)
 
 export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, string>) => [
   // 🔥 TRENDING COFFEE SHOPS WITH ENGAGING CAPTIONS
@@ -20,6 +21,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Study', 'Wi-Fi', 'Bright', 'Quiet'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - High quality study spot
+    wifiSpeed: 5, // Blazing fast
+    noiseLevel: 2, // Quiet
+    busyness: 2, // Calm
+    laptopFriendly: true,
   },
   {
     id: `demo-c2-${now}`,
@@ -39,6 +45,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Quiet', 'Study', 'Outlets', 'Seating'],
     openNow: true,
     visibility: 'friends',
+    // Spot Intel - Best for focus
+    wifiSpeed: 4, // Fast university wifi
+    noiseLevel: 1, // Silent floor
+    busyness: 1, // Empty/peaceful
+    laptopFriendly: true,
   },
   {
     id: `demo-c3-${now}`,
@@ -57,6 +68,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Bright', 'Social', 'Wi-Fi', 'Coworking'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Social but workable
+    wifiSpeed: 4, // Fast
+    noiseLevel: 3, // Moderate - social atmosphere
+    busyness: 3, // Some people
+    laptopFriendly: true,
   },
   {
     id: `demo-c4-${now}`,
@@ -76,6 +92,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Coworking', 'Outlets', 'Wi-Fi', 'Spacious'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Premium coworking
+    wifiSpeed: 5, // Blazing - enterprise grade
+    noiseLevel: 2, // Quiet in private booth
+    busyness: 2, // Not crowded
+    laptopFriendly: true,
   },
   {
     id: `demo-c5-${now}`,
@@ -94,6 +115,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Social', 'Wi-Fi', 'Late-night', 'Seating'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Busy but WiFi is decent
+    wifiSpeed: 3, // OK - typical Starbucks
+    noiseLevel: 4, // Lively - needs headphones
+    busyness: 4, // Busy - popular spot
+    laptopFriendly: true,
   },
   {
     id: `demo-c6-${now}`,
@@ -112,6 +138,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Study', 'Wi-Fi', 'Outlets', 'Bright'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Good all-around
+    wifiSpeed: 4, // Fast
+    noiseLevel: 3, // Moderate
+    busyness: 3, // Moderate
+    laptopFriendly: true,
   },
   {
     id: `demo-c7-${now}`,
@@ -130,6 +161,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Social', 'Outdoor'],
     openNow: true,
     visibility: 'friends',
+    // Spot Intel - Outdoor spot, no work metrics (intentionally sparse to show variety)
   },
   {
     id: `demo-c8-${now}`,
@@ -148,6 +180,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Study', 'Wi-Fi', 'Spacious', 'Quiet'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Great for reading/studying
+    wifiSpeed: 4, // Fast
+    noiseLevel: 2, // Quiet with lo-fi music
+    busyness: 2, // Calm, spacious
+    laptopFriendly: true,
   },
   {
     id: `demo-c9-${now}`,
@@ -166,6 +203,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Coworking', 'Wi-Fi', 'Outlets', 'Late-night'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Developer friendly
+    wifiSpeed: 5, // Blazing - perfect for coding
+    noiseLevel: 3, // Moderate
+    busyness: 3, // Some people
+    laptopFriendly: true,
   },
   {
     id: `demo-c10-${now}`,
@@ -184,6 +226,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Study', 'Wi-Fi', 'Bright', 'Social'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - "fast wifi" mentioned in caption
+    wifiSpeed: 5, // Blazing as mentioned
+    noiseLevel: 3, // Moderate, social
+    busyness: 3, // Some people
+    laptopFriendly: true,
   },
   {
     id: `demo-c11-${now}`,
@@ -202,6 +249,11 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Social', 'Coworking', 'Wi-Fi', 'Seating'],
     openNow: true,
     visibility: 'public',
+    // Spot Intel - Group study means busier/louder
+    wifiSpeed: 3, // OK - can get slow when busy
+    noiseLevel: 4, // Lively - group study atmosphere
+    busyness: 4, // Busy - popular gathering spot
+    laptopFriendly: true,
   },
   {
     id: `demo-c12-${now}`,
@@ -220,11 +272,92 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     tags: ['Bright', 'Wi-Fi', 'Spacious', 'Study'],
     openNow: true,
     visibility: 'friends',
+    // Spot Intel - Morning creative spot
+    wifiSpeed: 4, // Fast
+    noiseLevel: 2, // Quiet in the morning
+    busyness: 2, // Calm, spacious
+    laptopFriendly: true,
+  },
+  // ADD MORE CHECK-INS FOR THE SAME SPOTS (to show aggregation working)
+  {
+    id: `demo-c13-${now}`,
+    createdAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
+    expiresAt: new Date(now + 10 * 60 * 60 * 1000).toISOString(),
+    userId: 'demo-u3',
+    userName: 'Ava Brooks',
+    userHandle: 'avab',
+    userPhotoUrl: demoAvatars['demo-u3'],
+    city: 'Houston',
+    spotName: 'Blue Bottle Coffee',
+    spotPlaceId: 'demo-place-bluebottle',
+    spotLatLng: { lat: 29.7172, lng: -95.4018 },
+    photoUrl: 'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1400&q=80',
+    caption: 'Back at Blue Bottle again! Can never get enough of this place 💙',
+    tags: ['Study', 'Wi-Fi'],
+    openNow: true,
+    visibility: 'public',
+    wifiSpeed: 4, // Slightly different rating
+    noiseLevel: 3, // Busier now
+    busyness: 3,
+    laptopFriendly: true,
+  },
+  {
+    id: `demo-c14-${now}`,
+    createdAt: new Date(now - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
+    expiresAt: new Date(now + 7 * 60 * 60 * 1000).toISOString(),
+    userId: 'demo-u4',
+    userName: 'Leo Nguyen',
+    userHandle: 'leon',
+    userPhotoUrl: demoAvatars['demo-u4'],
+    city: 'Houston',
+    spotName: 'Fondren Library - 4th Floor',
+    spotPlaceId: 'demo-place-fondren',
+    spotLatLng: { lat: 29.7174, lng: -95.4011 },
+    photoUrl: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=1400&q=80',
+    caption: 'Finals week = library life. See you all in 8 hours 😅',
+    tags: ['Quiet', 'Study'],
+    openNow: true,
+    visibility: 'friends',
+    wifiSpeed: 5, // Different user's rating
+    noiseLevel: 1, // Still silent
+    busyness: 2, // A bit busier during finals
+    laptopFriendly: true,
+  },
+  {
+    id: `demo-c15-${now}`,
+    createdAt: new Date(now - 3 * 60 * 60 * 1000).toISOString(), // 3 hours ago
+    expiresAt: new Date(now + 9 * 60 * 60 * 1000).toISOString(),
+    userId: 'demo-u6',
+    userName: 'Noah Johnson',
+    userHandle: 'noahj',
+    userPhotoUrl: demoAvatars['demo-u6'],
+    city: 'Houston',
+    spotName: 'Southside Espresso',
+    spotPlaceId: 'demo-place-southside',
+    spotLatLng: { lat: 29.7285, lng: -95.3911 },
+    photoUrl: 'https://images.unsplash.com/photo-1442512595331-e89e73853f31?auto=format&fit=crop&w=1400&q=80',
+    caption: 'Debugging life 🐛 This place keeps me sane during crunch time',
+    tags: ['Coworking', 'Wi-Fi'],
+    openNow: true,
+    visibility: 'public',
+    wifiSpeed: 5,
+    noiseLevel: 2, // Different time, quieter
+    busyness: 2, // Less busy
+    laptopFriendly: true,
   },
 ];
 
 // INSTRUCTIONS TO UPDATE:
 // 1. Find the line starting with `let demoCheckins = [` in storage/local.ts (around line 797)
 // 2. Replace the entire array with: BETTER_DEMO_CHECKINS(now, demoAvatars)
-// 3. Save and restart the app
-// 4. The demo feed will now have much better content!
+// 3. Make sure to import this file at the top: import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
+// 4. Save and restart the app
+// 5. The demo feed will now showcase the full utility metrics system!
+
+// WHAT THIS DEMONSTRATES:
+// ✅ Quality-coded badges (green/yellow/orange-red)
+// ✅ Multiple check-ins for same spot showing aggregation
+// ✅ Varied metrics showing all 5 levels for each metric
+// ✅ Quality-based ranking (high WiFi + quiet spots rank higher)
+// ✅ Spots with missing metrics (Memorial Park has no work metrics)
+// ✅ Realistic data matching caption descriptions
