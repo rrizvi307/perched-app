@@ -1355,6 +1355,20 @@ export default function Explore() {
         if (!hoursMatch) return false;
       }
 
+      // Spot Intel filters (utility metrics from check-ins)
+      const spotIntelFilters = selectedFilters.spotIntel || [];
+      if (spotIntelFilters.length > 0) {
+        const intelMatch = spotIntelFilters.every(filter => {
+          if (filter === 'fast-wifi') return s.avgWifiSpeed && s.avgWifiSpeed >= 4;
+          if (filter === 'laptop-friendly') return s.laptopFriendlyPct && s.laptopFriendlyPct >= 70;
+          if (filter === 'not-busy') return s.avgBusyness && s.avgBusyness <= 2;
+          if (filter === 'quiet-spot') return s.topNoiseLevel === 'quiet';
+          if (filter === 'lively-spot') return s.topNoiseLevel === 'lively';
+          return true;
+        });
+        if (!intelMatch) return false;
+      }
+
       // Legacy vibe filter (for backward compatibility)
       if (vibe !== 'all' && !matchesVibe(hay, vibe)) return false;
 
