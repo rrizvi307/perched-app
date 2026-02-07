@@ -1677,10 +1677,11 @@ export default function Explore() {
 
     // Fetch smart data and lifestyle data from external sources
     const placeId = getSpotPlaceId(spot);
+    const spotLocation = spot.example?.spotLatLng || spot.example?.location || spot.location;
     try {
       const category = classifySpotCategory(spot.name);
       const [smartResult, lifestyleResult] = await Promise.all([
-        getSmartSpotData(placeId, spot.name, category),
+        getSmartSpotData(placeId, spot.name, category, spotLocation),
         getLifestyleSpotData(placeId),
       ]);
       setSmartData(smartResult);

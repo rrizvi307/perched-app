@@ -296,20 +296,41 @@ function generateFallbackData(spotName: string, category?: string): Partial<Smar
   };
 }
 
+import { fetchExternalSpotData, type ExternalSpotData } from './externalDataAPI';
+
 /**
  * Get enriched data for a spot from external sources
+ * Priority: 1) External APIs (Yelp/Foursquare) 2) Demo data 3) Generated fallback
  */
-export async function getSmartSpotData(placeId?: string, spotName?: string, category?: string): Promise<SmartSpotData> {
-  // In production, this would make real API calls to Google Places, Yelp, etc.
-  // For now, we use pre-seeded demo data
-
+export async function getSmartSpotData(
+  placeId?: string,
+  spotName?: string,
+  category?: string,
+  location?: { lat: number; lng: number }
+): Promise<SmartSpotData> {
   let data: Partial<SmartSpotData> = {};
 
-  if (placeId && EXTERNAL_SPOT_DATA[placeId]) {
-    data = EXTERNAL_SPOT_DATA[placeId];
-  } else {
-    // Generate fallback data based on spot characteristics
-    data = generateFallbackData(spotName || '', category);
+  // 1. Try to fetch from external APIs (with caching)
+  if (placeId && spotName && location) {
+    try {
+      const externalData = await fetchExternalSpotData(placeId, spotName, location);
+      if (externalData) {
+        data = mapExternalToSmartData(externalData);
+      }
+    } catch (error) {
+      console.log('[SmartData] External API fetch failed, using fallback');
+    }
+  }
+
+  // 2. Fall back to demo data if no external data
+  if (!data.yelpRating && placeId && EXTERNAL_SPOT_DATA[placeId]) {
+    data = { ...EXTERNAL_SPOT_DATA[placeId], ...data };
+  }
+
+  // 3. Generate fallback data if still empty
+  if (!data.bestFor?.length) {
+    const fallback = generateFallbackData(spotName || '', category);
+    data = { ...fallback, ...data };
   }
 
   // Calculate combined rating (weighted average)
@@ -339,6 +360,45 @@ export async function getSmartSpotData(placeId?: string, spotName?: string, cate
     vibes: data.vibes || [],
     lastEnriched: Date.now(),
   } as SmartSpotData;
+}
+
+/**
+ * Map external API data to SmartSpotData format
+ */
+function mapExternalToSmartData(external: ExternalSpotData): Partial<SmartSpotData> {
+  // Map price level
+  const priceMap: Record<number, PriceLevel> = { 1: '$', 2: '$$', 3: '$$$', 4: '$$$$' };
+  const priceLevel = external.priceLevel ? priceMap[external.priceLevel] : undefined;
+
+  // Derive bestFor from attributes
+  const bestFor: BestForCategory[] = [];
+  if (external.attributes?.goodForDates) bestFor.push('dates');
+  if (external.attributes?.goodForGroups) bestFor.push('groups', 'casual_hangout');
+  if (external.attributes?.goodForWorking) bestFor.push('laptop_work', 'studying');
+  if (external.attributes?.noiseLevel === 'quiet') bestFor.push('reading', 'solo');
+  if (external.categories?.some(c => c.toLowerCase().includes('brunch'))) bestFor.push('brunch');
+  if (bestFor.length === 0) bestFor.push('casual_hangout', 'quick_coffee');
+
+  // Derive vibes from attributes and categories
+  const vibes: VibeTag[] = [];
+  if (external.attributes?.noiseLevel === 'quiet') vibes.push('quiet');
+  if (external.attributes?.noiseLevel === 'loud') vibes.push('lively');
+  if (external.attributes?.ambience?.includes('trendy')) vibes.push('trendy');
+  if (external.attributes?.ambience?.includes('cozy') || external.attributes?.ambience?.includes('intimate')) vibes.push('cozy');
+  if (external.attributes?.ambience?.includes('hipster')) vibes.push('artsy');
+  if (vibes.length === 0) vibes.push('modern');
+
+  return {
+    yelpRating: external.source === 'yelp' ? external.rating : undefined,
+    yelpReviewCount: external.source === 'yelp' ? external.reviewCount : undefined,
+    priceLevel,
+    bestFor,
+    vibes,
+    hasOutdoorSeating: external.attributes?.hasOutdoorSeating,
+    servesFood: external.attributes?.servesFood,
+    servesAlcohol: external.attributes?.servesAlcohol,
+    petFriendly: external.attributes?.dogFriendly,
+  };
 }
 
 /**
