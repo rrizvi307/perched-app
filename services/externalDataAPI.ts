@@ -15,6 +15,7 @@
  */
 
 import { ensureFirebase } from './firebaseClient';
+import Constants from 'expo-constants';
 
 // ============ TYPES ============
 
@@ -95,10 +96,23 @@ export type ExternalSpotData = {
 
 // ============ API CONFIGURATION ============
 
-// API keys should be stored in environment variables
-// For development, we'll use placeholder values
-const YELP_API_KEY = process.env.EXPO_PUBLIC_YELP_API_KEY || '';
-const FOURSQUARE_API_KEY = process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY || '';
+// Get API keys from Expo Constants (set via app.config.js / environment)
+function getApiKey(key: string): string {
+  // Try Expo config extra first
+  const extra = (Constants.expoConfig as any)?.extra;
+  if (extra?.[key]) return extra[key];
+
+  // Try process.env as fallback
+  const envKey = `EXPO_PUBLIC_${key}`;
+  if (typeof process !== 'undefined' && process.env?.[envKey]) {
+    return process.env[envKey] as string;
+  }
+
+  return '';
+}
+
+const YELP_API_KEY = getApiKey('YELP_API_KEY');
+const FOURSQUARE_API_KEY = getApiKey('FOURSQUARE_API_KEY');
 
 // Cache duration: 7 days
 const CACHE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
