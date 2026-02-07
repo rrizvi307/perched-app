@@ -10,7 +10,10 @@ import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
 import SpotListItem from '@/components/ui/spot-list-item';
 import PopularTimes from '@/components/ui/popular-times';
 import SmartSpotInfo from '@/components/ui/smart-spot-info';
+import LifestyleSpotInfo from '@/components/ui/lifestyle-spot-info';
+import CuratedLists, { MoodSelector, LifestyleQuickFilters } from '@/components/ui/curated-lists';
 import { getSmartSpotData, getTimeAwareRecommendations, type SmartSpotData } from '@/services/smartDataService';
+import { getLifestyleSpotData, type LifestyleSpotData, type CuratedList } from '@/services/lifestyleDataService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
@@ -257,10 +260,12 @@ function formatVibeLabel(vibe: ExploreVibe) {
 }
 
 const ASK_PRESETS = [
-  { label: 'Quiet + outlets', query: 'quiet cafe with outlets' },
-  { label: 'Study + Wi‑Fi', query: 'study spot with wifi' },
-  { label: 'Coworking', query: 'coworking space' },
-  { label: 'Open now', query: 'open now' },
+  { label: '💎 Hidden gems', query: 'hidden gem' },
+  { label: '☀️ Patio vibes', query: 'outdoor patio seating' },
+  { label: '💕 Date spots', query: 'romantic date spot' },
+  { label: '🐕 Dog friendly', query: 'dog friendly patio' },
+  { label: '🥞 Brunch', query: 'brunch spot' },
+  { label: '📸 Instagrammable', query: 'instagram worthy aesthetic' },
 ] as const;
 
 const FILTER_GROUPS: FilterGroup[] = [
@@ -394,7 +399,9 @@ export default function Explore() {
   const [selectedSaved, setSelectedSaved] = useState(false);
   const [savedNote, setSavedNote] = useState('');
   const [smartData, setSmartData] = useState<SmartSpotData | null>(null);
+  const [lifestyleData, setLifestyleData] = useState<LifestyleSpotData | null>(null);
   const [timeContext, setTimeContext] = useState<{ timeContext: string; recommendedCategories: string[] } | null>(null);
+  const [lifestyleFilters, setLifestyleFilters] = useState<string[]>([]);
   const hasRealSpots = spots.length > 0;
   const mapKey = getMapsKey();
   const hasMapKey = !!mapKey;
@@ -1665,16 +1672,21 @@ export default function Explore() {
   async function openSpotSheet(spot: any) {
     setSelectedSpot(spot);
     setSmartData(null); // Reset while loading
+    setLifestyleData(null);
     void refreshSelectedSaved(spot);
 
-    // Fetch smart data from external sources
+    // Fetch smart data and lifestyle data from external sources
+    const placeId = getSpotPlaceId(spot);
     try {
-      const placeId = getSpotPlaceId(spot);
       const category = classifySpotCategory(spot.name);
-      const data = await getSmartSpotData(placeId, spot.name, category);
-      setSmartData(data);
+      const [smartResult, lifestyleResult] = await Promise.all([
+        getSmartSpotData(placeId, spot.name, category),
+        getLifestyleSpotData(placeId),
+      ]);
+      setSmartData(smartResult);
+      setLifestyleData(lifestyleResult);
     } catch {
-      // Smart data is optional, fail silently
+      // Data enrichment is optional, fail silently
     }
   }
 
@@ -1682,6 +1694,30 @@ export default function Explore() {
     setSelectedSpot(null);
     setSelectedSaved(false);
     setSmartData(null);
+    setLifestyleData(null);
+  }
+
+  function handleLifestyleFilter(filter: string) {
+    setLifestyleFilters((prev) =>
+      prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+    );
+  }
+
+  function handleCuratedListSelect(list: CuratedList) {
+    // For now, just set a search query - could navigate to a filtered view
+    setQuery(list.title.toLowerCase());
+  }
+
+  function handleMoodSelect(mood: string) {
+    // Map moods to search queries
+    const moodQueries: Record<string, string> = {
+      chill: 'quiet cozy spot',
+      social: 'lively hangout',
+      romantic: 'date spot romantic',
+      productive: 'quiet wifi outlets',
+      adventurous: 'hidden gem',
+    };
+    setQuery(moodQueries[mood] || '');
   }
 
   const selectedTags = React.useMemo(() => (
@@ -1708,23 +1744,38 @@ export default function Explore() {
         }
         ListHeaderComponent={
           <View style={styles.header}>
-            <Label style={{ color: muted, marginBottom: 8 }}>Explore</Label>
-            <H1 style={{ color }}>Find your next third place.</H1>
+            <Label style={{ color: muted, marginBottom: 8 }}>Discover</Label>
+            <H1 style={{ color }}>Find your perfect spot.</H1>
             <Body style={{ color: muted }}>
-              See trending spots and live check-ins near you.
+              {timeContext?.timeContext || 'Coffee shops, cafes, and hidden gems near you.'}
             </Body>
             <View style={{ height: 12 }} />
             <TextInput
-              placeholder="Search, or ask Perched…"
+              placeholder="Search cafes, vibes, or ask anything…"
               placeholderTextColor={muted}
               value={query}
               onChangeText={setQuery}
               returnKeyType="search"
               style={[styles.searchInput, { borderColor: border, backgroundColor: card, color }]}
             />
+            {/* Lifestyle Quick Filters */}
+            {!query.trim() && (
+              <LifestyleQuickFilters
+                onSelectFilter={handleLifestyleFilter}
+                activeFilters={lifestyleFilters}
+              />
+            )}
+            {/* Mood Selector */}
+            {!query.trim() && (
+              <MoodSelector onSelectMood={handleMoodSelect} />
+            )}
+            {/* Curated Discovery Lists */}
+            {!query.trim() && (
+              <CuratedLists onSelectList={handleCuratedListSelect} compact />
+            )}
             {!query.trim() ? (
               <View style={{ marginTop: 10 }}>
-                <Text style={{ color: muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Try:</Text>
+                <Text style={{ color: muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Quick search:</Text>
                 <View style={styles.vibeRow}>
                   {ASK_PRESETS.map((preset) => (
                     <Pressable
@@ -2142,6 +2193,10 @@ export default function Explore() {
             {/* Smart Data from External Sources */}
             {smartData && (
               <SmartSpotInfo smartData={smartData} compact />
+            )}
+            {/* Lifestyle Data - Drinks, Tags, Features */}
+            {lifestyleData && (
+              <LifestyleSpotInfo data={lifestyleData} compact />
             )}
             {/* Popular Times Chart */}
             <PopularTimes
