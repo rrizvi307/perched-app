@@ -25,7 +25,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5, // Blazing fast
     noiseLevel: 2, // Quiet
     busyness: 2, // Calm
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c2-${now}`,
@@ -49,7 +49,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Fast university wifi
     noiseLevel: 1, // Silent floor
     busyness: 1, // Empty/peaceful
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c3-${now}`,
@@ -72,7 +72,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Fast
     noiseLevel: 3, // Moderate - social atmosphere
     busyness: 3, // Some people
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c4-${now}`,
@@ -96,7 +96,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5, // Blazing - enterprise grade
     noiseLevel: 2, // Quiet in private booth
     busyness: 2, // Not crowded
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c5-${now}`,
@@ -119,7 +119,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 3, // OK - typical Starbucks
     noiseLevel: 4, // Lively - needs headphones
     busyness: 4, // Busy - popular spot
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c6-${now}`,
@@ -142,7 +142,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Fast
     noiseLevel: 3, // Moderate
     busyness: 3, // Moderate
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c7-${now}`,
@@ -184,7 +184,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Fast
     noiseLevel: 2, // Quiet with lo-fi music
     busyness: 2, // Calm, spacious
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c9-${now}`,
@@ -207,7 +207,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5, // Blazing - perfect for coding
     noiseLevel: 3, // Moderate
     busyness: 3, // Some people
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c10-${now}`,
@@ -230,7 +230,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5, // Blazing as mentioned
     noiseLevel: 3, // Moderate, social
     busyness: 3, // Some people
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c11-${now}`,
@@ -253,7 +253,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 3, // OK - can get slow when busy
     noiseLevel: 4, // Lively - group study atmosphere
     busyness: 4, // Busy - popular gathering spot
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c12-${now}`,
@@ -276,7 +276,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Fast
     noiseLevel: 2, // Quiet in the morning
     busyness: 2, // Calm, spacious
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   // ADD MORE CHECK-INS FOR THE SAME SPOTS (to show aggregation working)
   {
@@ -299,7 +299,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 4, // Slightly different rating
     noiseLevel: 3, // Busier now
     busyness: 3,
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c14-${now}`,
@@ -321,7 +321,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5, // Different user's rating
     noiseLevel: 1, // Still silent
     busyness: 2, // A bit busier during finals
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
   {
     id: `demo-c15-${now}`,
@@ -343,7 +343,7 @@ export const BETTER_DEMO_CHECKINS = (now: number, demoAvatars: Record<string, st
     wifiSpeed: 5,
     noiseLevel: 2, // Different time, quieter
     busyness: 2, // Less busy
-    laptopFriendly: true,
+    outletAvailability: 'plenty',
   },
 ];
 

@@ -57,7 +57,7 @@ export async function updateMetricsImpact(
 		checkinData.wifiSpeed,
 		checkinData.noiseLevel,
 		checkinData.busyness,
-		checkinData.laptopFriendly !== null && checkinData.laptopFriendly !== undefined,
+		checkinData.outletAvailability,
 	].filter(Boolean).length;
 
 	if (metricsCount > 0) {

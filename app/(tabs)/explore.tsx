@@ -45,8 +45,12 @@ function aggregateSpotMetrics(checkins: any[]) {
   const wifiSpeeds: number[] = [];
   const busynessValues: number[] = [];
   const noiseLevels: number[] = [];
-  let laptopYes = 0;
-  let laptopNo = 0;
+  const outletCounts: Record<string, number> = { plenty: 0, some: 0, few: 0, none: 0 };
+
+  // Track "here now" - check-ins within last 2 hours
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  const now = Date.now();
+  const hereNowUsers: Array<{ userId: string; userName: string; userPhotoUrl?: string }> = [];
 
   checkins.forEach((c) => {
     if (c.wifiSpeed && typeof c.wifiSpeed === 'number') wifiSpeeds.push(c.wifiSpeed);
@@ -60,19 +64,47 @@ function aggregateSpotMetrics(checkins: any[]) {
       if (typeof convertedNoise === 'number') noiseLevels.push(convertedNoise);
     }
 
-    if (c.laptopFriendly === true) laptopYes++;
-    else if (c.laptopFriendly === false) laptopNo++;
+    if (c.outletAvailability && outletCounts[c.outletAvailability] !== undefined) {
+      outletCounts[c.outletAvailability]++;
+    }
+
+    // Check if check-in is within last 2 hours
+    const checkinTime = c.createdAt?.seconds
+      ? c.createdAt.seconds * 1000
+      : typeof c.createdAt === 'number'
+        ? c.createdAt
+        : new Date(c.createdAt).getTime();
+
+    if (now - checkinTime <= TWO_HOURS_MS && c.userId) {
+      // Avoid duplicates (same user checking in multiple times)
+      if (!hereNowUsers.find(u => u.userId === c.userId)) {
+        hereNowUsers.push({
+          userId: c.userId,
+          userName: c.userName || 'Someone',
+          userPhotoUrl: c.userPhotoUrl,
+        });
+      }
+    }
   });
 
   const avgWifiSpeed = wifiSpeeds.length > 0 ? Math.round(wifiSpeeds.reduce((a, b) => a + b, 0) / wifiSpeeds.length * 10) / 10 : null;
   const avgBusyness = busynessValues.length > 0 ? Math.round(busynessValues.reduce((a, b) => a + b, 0) / busynessValues.length * 10) / 10 : null;
   const avgNoiseLevel = noiseLevels.length > 0 ? Math.round(noiseLevels.reduce((a, b) => a + b, 0) / noiseLevels.length * 10) / 10 : null;
 
-  // Calculate laptop-friendly percentage
-  const totalLaptop = laptopYes + laptopNo;
-  const laptopFriendlyPct = totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
+  // Find most common outlet availability
+  const outletEntries = Object.entries(outletCounts).filter(([_, count]) => count > 0);
+  const topOutletAvailability = outletEntries.length > 0
+    ? outletEntries.sort((a, b) => b[1] - a[1])[0][0] as 'plenty' | 'some' | 'few' | 'none'
+    : null;
 
-  return { avgWifiSpeed, avgBusyness, avgNoiseLevel, laptopFriendlyPct };
+  return {
+    avgWifiSpeed,
+    avgBusyness,
+    avgNoiseLevel,
+    topOutletAvailability,
+    hereNowCount: hereNowUsers.length,
+    hereNowUsers: hereNowUsers.slice(0, 3), // Only show up to 3 avatars
+  };
 }
 
 function formatTime(input: string | { seconds?: number } | undefined) {
@@ -102,7 +134,13 @@ function fuzzLocation(coords: { lat: number; lng: number }, key: string) {
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
   const miles = distanceKm * 0.621371;
-  return `${Math.round(miles)} mi`;
+  // Calculate walk time assuming 5 km/h walking speed (about 3.1 mph)
+  const walkMinutes = Math.round(distanceKm / 5 * 60);
+  if (miles < 0.1) return '< 1 min walk';
+  if (miles < 2) {
+    return `${miles.toFixed(1)} mi · ${walkMinutes} min walk`;
+  }
+  return `${miles.toFixed(1)} mi`;
 }
 
 function describeSpot(name?: string, address?: string) {
@@ -244,7 +282,7 @@ const FILTER_GROUPS: FilterGroup[] = [
     multiSelect: true,
     options: [
       { id: 'fast-wifi', label: '🚀 Fast WiFi', value: 'fast-wifi' },
-      { id: 'laptop-friendly', label: '💻 Laptop OK', value: 'laptop-friendly' },
+      { id: 'has-outlets', label: '🔌 Has Outlets', value: 'has-outlets' },
       { id: 'not-busy', label: '🧘 Not Busy', value: 'not-busy' },
       { id: 'quiet-spot', label: '🤫 Quiet', value: 'quiet-spot' },
       { id: 'lively-spot', label: '🎉 Lively', value: 'lively-spot' },
@@ -1368,10 +1406,10 @@ export default function Explore() {
       if (spotIntelFilters.length > 0) {
         const intelMatch = spotIntelFilters.every(filter => {
           if (filter === 'fast-wifi') return s.avgWifiSpeed && s.avgWifiSpeed >= 4;
-          if (filter === 'laptop-friendly') return s.laptopFriendlyPct && s.laptopFriendlyPct >= 70;
+          if (filter === 'has-outlets') return s.topOutletAvailability === 'plenty' || s.topOutletAvailability === 'some';
           if (filter === 'not-busy') return s.avgBusyness && s.avgBusyness <= 2;
-          if (filter === 'quiet-spot') return s.topNoiseLevel === 'quiet';
-          if (filter === 'lively-spot') return s.topNoiseLevel === 'lively';
+          if (filter === 'quiet-spot') return s.avgNoiseLevel && s.avgNoiseLevel <= 2;
+          if (filter === 'lively-spot') return s.avgNoiseLevel && s.avgNoiseLevel >= 4;
           return true;
         });
         if (!intelMatch) return false;

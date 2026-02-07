@@ -2,7 +2,7 @@
  * Utility Metrics calculation and aggregation
  *
  * Handles temporal tracking (recent vs all-time) and quality scoring
- * for spot metrics (WiFi, noise, busyness, laptop-friendly)
+ * for spot metrics (WiFi, noise, busyness, outlets)
  */
 
 export interface TemporalMetrics {
@@ -14,7 +14,7 @@ export interface MetricsData {
 	avgWifiSpeed: number | null;
 	avgBusyness: number | null;
 	avgNoiseLevel: number | null;
-	laptopFriendlyPct: number | null;
+	topOutletAvailability: 'plenty' | 'some' | 'few' | 'none' | null;
 	count: number;
 }
 
@@ -54,8 +54,7 @@ function calculateMetrics(checkins: any[]): MetricsData {
 	const wifiSpeeds: number[] = [];
 	const busynessValues: number[] = [];
 	const noiseLevels: number[] = [];
-	let laptopYes = 0;
-	let laptopNo = 0;
+	const outletCounts: Record<string, number> = { plenty: 0, some: 0, few: 0, none: 0 };
 
 	checkins.forEach((c) => {
 		if (c.wifiSpeed && typeof c.wifiSpeed === 'number') {
@@ -80,8 +79,9 @@ function calculateMetrics(checkins: any[]): MetricsData {
 			}
 		}
 
-		if (c.laptopFriendly === true) laptopYes++;
-		else if (c.laptopFriendly === false) laptopNo++;
+		if (c.outletAvailability && outletCounts[c.outletAvailability] !== undefined) {
+			outletCounts[c.outletAvailability]++;
+		}
 	});
 
 	const avgWifiSpeed =
@@ -99,15 +99,17 @@ function calculateMetrics(checkins: any[]): MetricsData {
 			? Math.round((noiseLevels.reduce((a, b) => a + b, 0) / noiseLevels.length) * 10) / 10
 			: null;
 
-	const totalLaptop = laptopYes + laptopNo;
-	const laptopFriendlyPct =
-		totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
+	// Find most common outlet availability
+	const outletEntries = Object.entries(outletCounts).filter(([_, count]) => count > 0);
+	const topOutletAvailability = outletEntries.length > 0
+		? outletEntries.sort((a, b) => b[1] - a[1])[0][0] as 'plenty' | 'some' | 'few' | 'none'
+		: null;
 
 	return {
 		avgWifiSpeed,
 		avgBusyness,
 		avgNoiseLevel,
-		laptopFriendlyPct,
+		topOutletAvailability,
 		count: checkins.length,
 	};
 }
@@ -119,7 +121,7 @@ function calculateMetrics(checkins: any[]): MetricsData {
  * - WiFi: 1.5x (most important for productivity)
  * - Noise: 1.2x (quieter is better for focus)
  * - Busyness: 1.0x (less busy is better)
- * - Laptop-friendly: 1.3x (important for work)
+ * - Outlets: 1.3x (important for work)
  *
  * @param spot - Spot object with metrics
  * @returns Quality score from 0-1
@@ -148,9 +150,13 @@ export function calculateQualityScore(spot: any): number {
 		factorCount += 1.0;
 	}
 
-	// Laptop friendly (weight: 1.3x)
-	if (spot.laptopFriendlyPct !== null && spot.laptopFriendlyPct !== undefined) {
-		score += (spot.laptopFriendlyPct / 100) * 1.3;
+	// Outlets (weight: 1.3x)
+	if (spot.topOutletAvailability) {
+		const outletScore = spot.topOutletAvailability === 'plenty' ? 1.0
+			: spot.topOutletAvailability === 'some' ? 0.7
+			: spot.topOutletAvailability === 'few' ? 0.3
+			: 0;
+		score += outletScore * 1.3;
 		factorCount += 1.3;
 	}
 

@@ -4,6 +4,8 @@ export type NoisePreference = 'any' | 'quiet' | 'moderate' | 'lively';
 export type WifiPreference = 'any' | 'fast' | 'ok';
 export type BusynessPreference = 'any' | 'empty' | 'moderate' | 'busy';
 
+export type OutletPreference = 'any' | 'has-outlets';
+
 export type PerchedIntent = {
   raw: string;
   vibe: ExploreVibe;
@@ -13,7 +15,7 @@ export type PerchedIntent = {
   wifiSpeed: WifiPreference;
   noiseLevel: NoisePreference;
   busyness: BusynessPreference;
-  laptopFriendly: boolean | null;
+  outlets: OutletPreference;
 };
 
 const TAG_CANONICAL: Array<{ match: RegExp; tag: string }> = [
@@ -106,11 +108,10 @@ function pickBusyness(text: string): BusynessPreference {
   return 'any';
 }
 
-function pickLaptopFriendly(text: string): boolean | null {
+function pickOutlets(text: string): OutletPreference {
   const t = text.toLowerCase();
-  if (/\blaptop\s*(friendly|ok|welcome|allowed)\b|\bgood for laptop\b|\bcan work\b|\bwork on laptop\b|\bremote work\b|\bwfh\b|\bwork from\b/.test(t)) return true;
-  if (/\bno laptop\b|\blaptop not\b/.test(t)) return false;
-  return null;
+  if (/\boutlet(s)?\b|\bpower\b|\bcharger\b|\bcharging\b|\bplug(s)?\b|\bcharge my\b/.test(t)) return 'has-outlets';
+  return 'any';
 }
 
 function pickTags(text: string): string[] {
@@ -133,8 +134,8 @@ export function parsePerchedQuery(raw: string): PerchedIntent | null {
   const wifiSpeed = pickWifiSpeed(text);
   const noiseLevel = pickNoiseLevel(text);
   const busyness = pickBusyness(text);
-  const laptopFriendly = pickLaptopFriendly(text);
-  return { raw: trimmed, vibe, openFilter, tags, wifiSpeed, noiseLevel, busyness, laptopFriendly };
+  const outlets = pickOutlets(text);
+  return { raw: trimmed, vibe, openFilter, tags, wifiSpeed, noiseLevel, busyness, outlets };
 }
 
 export function formatIntentChips(intent: PerchedIntent | null): string[] {
@@ -153,7 +154,7 @@ export function formatIntentChips(intent: PerchedIntent | null): string[] {
   if (intent.noiseLevel === 'moderate') chips.push('Moderate noise');
   if (intent.busyness === 'empty') chips.push('Not busy');
   if (intent.busyness === 'busy') chips.push('Busy spot');
-  if (intent.laptopFriendly === true) chips.push('Laptop OK');
+  if (intent.outlets === 'has-outlets') chips.push('Has Outlets');
   intent.tags.forEach((t) => chips.push(t));
   return uniq(chips).slice(0, 6);
 }

@@ -332,6 +332,7 @@ async function seedCheckins() {
   const wifiSpeeds = [3, 3, 4, 4, 4, 5, 5] as const; // Mostly good WiFi
   const noiseLevels = ['quiet', 'quiet', 'moderate', 'moderate', 'lively'] as const;
   const busynessLevels = [1, 2, 2, 3, 3, 3, 4, 4, 5] as const;
+  const outletOptions = ['plenty', 'plenty', 'some', 'some', 'few', 'none'] as const;
 
   for (let i = 0; i < checkinsToCreate; i++) {
     const user = randomElement(DEMO_USERS);
@@ -347,7 +348,7 @@ async function seedCheckins() {
     const wifiSpeed = Math.random() > 0.3 ? randomElement([...wifiSpeeds]) : undefined;
     const noiseLevel = Math.random() > 0.3 ? randomElement([...noiseLevels]) : undefined;
     const busyness = Math.random() > 0.3 ? randomElement([...busynessLevels]) : undefined;
-    const laptopFriendly = Math.random() > 0.3 ? (Math.random() > 0.2) : undefined; // 80% say yes when provided
+    const outletAvailability = Math.random() > 0.3 ? randomElement([...outletOptions]) : undefined;
 
     const checkinId = `demo-checkin-${Date.now()}-${i}`;
     const checkinRef = db.collection('checkins').doc(checkinId);
@@ -375,7 +376,7 @@ async function seedCheckins() {
       ...(wifiSpeed && { wifiSpeed }),
       ...(noiseLevel && { noiseLevel }),
       ...(busyness && { busyness }),
-      ...(laptopFriendly !== undefined && { laptopFriendly }),
+      ...(outletAvailability && { outletAvailability }),
       __demo: true,
     });
   }

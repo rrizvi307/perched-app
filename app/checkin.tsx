@@ -74,7 +74,7 @@ export default function CheckinScreen() {
 	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
-	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
+	const [outletAvailability, setOutletAvailability] = useState<'plenty' | 'some' | 'few' | 'none' | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -164,13 +164,13 @@ export default function CheckinScreen() {
 	// Celebrate when all metrics are completed
 	const prevMetricsCompleteRef = useRef(false);
 	useEffect(() => {
-		const allComplete = wifiSpeed !== null && noiseLevel !== null && busyness !== null && laptopFriendly !== null;
+		const allComplete = wifiSpeed !== null && noiseLevel !== null && busyness !== null && outletAvailability !== null;
 		if (allComplete && !prevMetricsCompleteRef.current) {
 			// Just completed all metrics - celebrate!
 			Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 		}
 		prevMetricsCompleteRef.current = allComplete;
-	}, [wifiSpeed, noiseLevel, busyness, laptopFriendly]);
+	}, [wifiSpeed, noiseLevel, busyness, outletAvailability]);
 
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
@@ -211,7 +211,7 @@ export default function CheckinScreen() {
 						setNoiseLevel(convertedNoise);
 					}
 					if (check.busyness) setBusyness(check.busyness);
-					if (check.laptopFriendly !== undefined) setLaptopFriendly(check.laptopFriendly);
+					if (check.outletAvailability) setOutletAvailability(check.outletAvailability);
 					}
 				} catch {
 					try {
@@ -232,7 +232,7 @@ export default function CheckinScreen() {
 								setNoiseLevel(convertedNoise);
 							}
 							if (found.busyness) setBusyness(found.busyness);
-							if (found.laptopFriendly !== undefined) setLaptopFriendly(found.laptopFriendly);
+							if (found.outletAvailability) setOutletAvailability(found.outletAvailability);
 						}
 					} catch {}
 					}
@@ -337,7 +337,7 @@ export default function CheckinScreen() {
 						setNoiseLevel(convertedNoise);
 					}
 					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
-					if (draft.laptopFriendly !== undefined) setLaptopFriendly(draft.laptopFriendly);
+					if (draft.outletAvailability) setOutletAvailability(draft.outletAvailability);
 				}
 			} catch {}
 			const seen = await getPermissionPrimerSeen('camera');
@@ -389,11 +389,11 @@ export default function CheckinScreen() {
 				wifiSpeed,
 				noiseLevel,
 				busyness,
-				laptopFriendly,
+				outletAvailability,
 			});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, wifiSpeed, noiseLevel, busyness, laptopFriendly]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, wifiSpeed, noiseLevel, busyness, outletAvailability]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -561,7 +561,7 @@ export default function CheckinScreen() {
 				return;
 			}
 		// Gentle encouragement for metrics (non-blocking)
-		const metricsProvided = [wifiSpeed, noiseLevel, busyness, laptopFriendly !== null].filter(Boolean).length;
+		const metricsProvided = [wifiSpeed, noiseLevel, busyness, outletAvailability].filter(Boolean).length;
 		if (metricsProvided === 0) {
 			showToast('💡 Consider adding Spot Intel to help others!', 'info');
 			// Still allow posting - don't block
@@ -596,7 +596,7 @@ export default function CheckinScreen() {
 							...(wifiSpeed && { wifiSpeed }),
 							...(noiseLevel && { noiseLevel }),
 							...(busyness && { busyness }),
-							...(laptopFriendly !== null && { laptopFriendly }),
+							...(outletAvailability && { outletAvailability }),
 						};
 						await fb.updateCheckinRemote(editId, updates);
 						// update local copy
@@ -658,7 +658,7 @@ export default function CheckinScreen() {
 				...(wifiSpeed && { wifiSpeed }),
 				...(noiseLevel && { noiseLevel }),
 				...(busyness && { busyness }),
-				...(laptopFriendly !== null && { laptopFriendly }),
+				...(outletAvailability && { outletAvailability }),
 			} as any;
 			const pendingPayload = {
 				userId: uid,
@@ -680,7 +680,7 @@ export default function CheckinScreen() {
 				...(wifiSpeed && { wifiSpeed }),
 				...(noiseLevel && { noiseLevel }),
 				...(busyness && { busyness }),
-				...(laptopFriendly !== null && { laptopFriendly }),
+				...(outletAvailability && { outletAvailability }),
 			};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
@@ -975,7 +975,7 @@ export default function CheckinScreen() {
 								wifiSpeed !== null,
 								noiseLevel !== null,
 								busyness !== null,
-								laptopFriendly !== null,
+								outletAvailability !== null,
 							].filter(Boolean).length;
 							const metricsTotal = 4;
 							const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
@@ -1110,46 +1110,31 @@ export default function CheckinScreen() {
 								</Text>
 							</View>
 
-							{/* Laptop Friendly */}
+							{/* Outlet Availability */}
 							<View style={{ marginBottom: 8 }}>
-								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Good for Laptop Work?</Text>
-								<View style={{ flexDirection: 'row', gap: 8 }}>
-									<Pressable
-										onPress={() => {
-											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-											setLaptopFriendly(laptopFriendly === true ? null : true);
-										}}
-										style={[
-											styles.metricChip,
-											{
-												borderColor: inputBorder,
-												backgroundColor: laptopFriendly === true ? primary : 'transparent',
-												paddingHorizontal: 20,
-											},
-										]}
-									>
-										<Text style={{ color: laptopFriendly === true ? '#FFFFFF' : text, fontWeight: '600' }}>
-											💻 Yes
-										</Text>
-									</Pressable>
-									<Pressable
-										onPress={() => {
-											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-											setLaptopFriendly(laptopFriendly === false ? null : false);
-										}}
-										style={[
-											styles.metricChip,
-											{
-												borderColor: inputBorder,
-												backgroundColor: laptopFriendly === false ? primary : 'transparent',
-												paddingHorizontal: 20,
-											},
-										]}
-									>
-										<Text style={{ color: laptopFriendly === false ? '#FFFFFF' : text, fontWeight: '600' }}>
-											☕ Not really
-										</Text>
-									</Pressable>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Power Outlets</Text>
+								<View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+									{(['plenty', 'some', 'few', 'none'] as const).map((level) => (
+										<Pressable
+											key={`outlet-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setOutletAvailability(outletAvailability === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: outletAvailability === level ? primary : 'transparent',
+													paddingHorizontal: 12,
+												},
+											]}
+										>
+											<Text style={{ color: outletAvailability === level ? '#FFFFFF' : text, fontWeight: '600' }}>
+												{level === 'plenty' ? '🔌 Plenty' : level === 'some' ? '🔌 Some' : level === 'few' ? '🔌 Few' : '❌ None'}
+											</Text>
+										</Pressable>
+									))}
 								</View>
 							</View>
 						</View>

@@ -66,13 +66,48 @@ const SpotListItem = React.memo<SpotListItemProps>(({
       )}
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
-        <Text style={{ color: muted, marginTop: 6 }} numberOfLines={1}>{subtitle}</Text>
-        <Text style={{ color: muted, marginTop: 6 }} numberOfLines={2}>
-          {item.description || describeSpot(item.name, item.example?.address)}
-          {item.distance !== undefined && item.distance !== Infinity ? ` · ${formatDistance(item.distance)}` : ''}
-        </Text>
+        {/* Distance and walk time - prominent display */}
+        {item.distance !== undefined && item.distance !== Infinity && item.distance > 0 ? (
+          <Text style={{ color: primary, fontSize: 12, fontWeight: '600', marginTop: 4 }}>
+            📍 {formatDistance(item.distance)}
+          </Text>
+        ) : null}
+        {/* Here Now indicator */}
+        {item.hereNowCount > 0 ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+            <View style={[styles.hereNowBadge, { backgroundColor: withAlpha('#10B981', 0.15) }]}>
+              <View style={styles.hereNowDot} />
+              <Text style={{ color: '#10B981', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
+                {item.hereNowCount} here now
+              </Text>
+            </View>
+            {item.hereNowUsers && item.hereNowUsers.length > 0 ? (
+              <View style={styles.avatarStack}>
+                {item.hereNowUsers.slice(0, 3).map((user: any, idx: number) => (
+                  <View
+                    key={user.userId}
+                    style={[
+                      styles.miniAvatar,
+                      { marginLeft: idx > 0 ? -8 : 4, zIndex: 3 - idx, borderColor: card }
+                    ]}
+                  >
+                    {user.userPhotoUrl ? (
+                      <SpotImage
+                        source={{ uri: user.userPhotoUrl }}
+                        style={{ width: 20, height: 20, borderRadius: 10 }}
+                      />
+                    ) : (
+                      <Text style={{ fontSize: 10 }}>👤</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        <Text style={{ color: muted, marginTop: 4, fontSize: 12 }} numberOfLines={1}>{subtitle}</Text>
         {/* Utility Metrics Row */}
-        {(item.avgWifiSpeed || item.avgBusyness || item.avgNoiseLevel || item.laptopFriendlyPct !== undefined) && (
+        {(item.avgWifiSpeed || item.avgBusyness || item.avgNoiseLevel || item.topOutletAvailability) && (
           <View style={styles.metricsRow}>
             {item.avgWifiSpeed ? (
               <View style={[styles.metricBadge, {
@@ -137,10 +172,12 @@ const SpotListItem = React.memo<SpotListItemProps>(({
                 </Text>
               </View>
             ) : null}
-            {item.laptopFriendlyPct >= 70 ? (
+            {item.topOutletAvailability && (item.topOutletAvailability === 'plenty' || item.topOutletAvailability === 'some') ? (
               <View style={[styles.metricBadge, { backgroundColor: withAlpha('#22C55E', 0.15) }]}>
-                <Text style={{ fontSize: 10 }}>💻</Text>
-                <Text style={{ color: '#22C55E', fontSize: 10, fontWeight: '600', marginLeft: 2 }}>Laptop OK</Text>
+                <Text style={{ fontSize: 10 }}>🔌</Text>
+                <Text style={{ color: '#22C55E', fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                  {item.topOutletAvailability === 'plenty' ? 'Outlets' : 'Some Outlets'}
+                </Text>
               </View>
             ) : null}
           </View>
@@ -177,6 +214,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   return (
     prevProps.item.name === nextProps.item.name &&
     prevProps.item.count === nextProps.item.count &&
+    prevProps.item.hereNowCount === nextProps.item.hereNowCount &&
     prevProps.friendCount === nextProps.friendCount &&
     prevProps.index === nextProps.index &&
     prevProps.showRanks === nextProps.showRanks &&
@@ -236,6 +274,34 @@ const styles = StyleSheet.create({
   countFill: {
     height: '100%',
     borderRadius: 2,
+  },
+  hereNowBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  hereNowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  miniAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#f0f0f0',
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
   rankBadge: {
     paddingHorizontal: 8,
