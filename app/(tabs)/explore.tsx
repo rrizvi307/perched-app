@@ -8,6 +8,7 @@ import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
 import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
 import SpotListItem from '@/components/ui/spot-list-item';
+import PopularTimes from '@/components/ui/popular-times';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
@@ -16,7 +17,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { getMapsKey, getPlaceDetails, searchPlaces, searchPlacesNearby, searchPlacesWithBias } from '@/services/googleMaps';
 import { requestForegroundLocation } from '@/services/location';
 import { classifySpotCategory, spotKey } from '@/services/spotUtils';
-import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot } from '@/storage/local';
+import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getSavedSpotNote, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot, updateSavedSpotNote } from '@/storage/local';
 import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
 import { calculateCompositeScore } from '@/services/metricsUtils';
 import { useRouter } from 'expo-router';
@@ -52,6 +53,9 @@ function aggregateSpotMetrics(checkins: any[]) {
   const now = Date.now();
   const hereNowUsers: Array<{ userId: string; userName: string; userPhotoUrl?: string }> = [];
 
+  // Track popular times by hour (0-23)
+  const popularHours = new Array(24).fill(0);
+
   checkins.forEach((c) => {
     if (c.wifiSpeed && typeof c.wifiSpeed === 'number') wifiSpeeds.push(c.wifiSpeed);
     if (c.busyness && typeof c.busyness === 'number') busynessValues.push(c.busyness);
@@ -68,13 +72,20 @@ function aggregateSpotMetrics(checkins: any[]) {
       outletCounts[c.outletAvailability]++;
     }
 
-    // Check if check-in is within last 2 hours
+    // Get check-in timestamp
     const checkinTime = c.createdAt?.seconds
       ? c.createdAt.seconds * 1000
       : typeof c.createdAt === 'number'
         ? c.createdAt
         : new Date(c.createdAt).getTime();
 
+    // Track popular hours
+    if (checkinTime) {
+      const hour = new Date(checkinTime).getHours();
+      popularHours[hour]++;
+    }
+
+    // Check if check-in is within last 2 hours
     if (now - checkinTime <= TWO_HOURS_MS && c.userId) {
       // Avoid duplicates (same user checking in multiple times)
       if (!hereNowUsers.find(u => u.userId === c.userId)) {
@@ -104,6 +115,8 @@ function aggregateSpotMetrics(checkins: any[]) {
     topOutletAvailability,
     hereNowCount: hereNowUsers.length,
     hereNowUsers: hereNowUsers.slice(0, 3), // Only show up to 3 avatars
+    popularHours,
+    checkinCount: checkins.length,
   };
 }
 
@@ -250,6 +263,17 @@ const ASK_PRESETS = [
 
 const FILTER_GROUPS: FilterGroup[] = [
   {
+    id: 'sort',
+    title: 'Sort By',
+    icon: 'arrow.up.arrow.down',
+    multiSelect: false,
+    options: [
+      { id: 'popular', label: '🔥 Popular', value: 'popular' },
+      { id: 'nearest', label: '📍 Nearest', value: 'nearest' },
+      { id: 'quality', label: '⭐ Top Rated', value: 'quality' },
+    ],
+  },
+  {
     id: 'atmosphere',
     title: 'Atmosphere',
     icon: 'sparkles',
@@ -366,6 +390,7 @@ export default function Explore() {
   const [preferenceScores, setPreferenceScores] = useState<Record<string, number>>({});
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [selectedSaved, setSelectedSaved] = useState(false);
+  const [savedNote, setSavedNote] = useState('');
   const hasRealSpots = spots.length > 0;
   const mapKey = getMapsKey();
   const hasMapKey = !!mapKey;
@@ -1430,12 +1455,35 @@ export default function Explore() {
       return appliedOpenFilter === 'open' ? s.openNow : !s.openNow;
     });
   }, [filteredSpots, appliedOpenFilter]);
+  const sortOption = selectedFilters.sort?.[0] || 'popular';
   const rankedSpots = React.useMemo(() => {
-    if (!aiMode) return filteredByOpen;
     const next = filteredByOpen.slice();
-    next.sort((a: any, b: any) => scoreNearby(b) - scoreNearby(a));
+
+    // Apply sorting based on selected sort option
+    if (sortOption === 'nearest') {
+      // Sort by distance (nearest first)
+      next.sort((a: any, b: any) => {
+        const distA = a.distance ?? Infinity;
+        const distB = b.distance ?? Infinity;
+        return distA - distB;
+      });
+    } else if (sortOption === 'quality') {
+      // Sort by quality score (WiFi, noise, busyness, outlets)
+      next.sort((a: any, b: any) => {
+        const scoreA = calculateCompositeScore(a, null);
+        const scoreB = calculateCompositeScore(b, null);
+        return scoreB - scoreA;
+      });
+    } else if (aiMode) {
+      // Default AI mode sorting
+      next.sort((a: any, b: any) => scoreNearby(b) - scoreNearby(a));
+    } else {
+      // Default: sort by popularity (check-in count)
+      next.sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
+    }
+
     return next;
-  }, [filteredByOpen, aiMode, scoreNearby]);
+  }, [filteredByOpen, aiMode, scoreNearby, sortOption]);
   const showRanks = !query.trim() || aiMode;
 
   // Memoize spot tags to avoid recomputing on every render
@@ -1590,9 +1638,12 @@ export default function Explore() {
       const list = await getSavedSpots(200);
       const placeId = getSpotPlaceId(spot);
       const key = placeId ? `place:${placeId}` : `name:${spot.name || ''}`;
-      setSelectedSaved(list.some((s: any) => s.key === key));
+      const saved = list.find((s: any) => s.key === key);
+      setSelectedSaved(!!saved);
+      setSavedNote(saved?.note || '');
     } catch {
       setSelectedSaved(false);
+      setSavedNote('');
     }
   }
 
@@ -2061,6 +2112,12 @@ export default function Explore() {
                 {`${selectedSpot.rating.toFixed(1)} ★${selectedSpot.ratingCount ? ` · ${selectedSpot.ratingCount} reviews` : ''}`}
               </Text>
             ) : null}
+            {/* Popular Times Chart */}
+            <PopularTimes
+              popularHours={selectedSpot.popularHours}
+              checkinCount={selectedSpot.checkinCount || selectedSpot.count || 0}
+              compact
+            />
             <View style={styles.sheetActions}>
               <Pressable
                 onPress={() => {
@@ -2113,6 +2170,26 @@ export default function Explore() {
                 </Text>
               </Pressable>
             </View>
+            {/* Personal Note Input - shows when saved */}
+            {selectedSaved && (
+              <View style={[styles.noteContainer, { borderColor: border }]}>
+                <Text style={{ color: muted, fontSize: 12, marginBottom: 6 }}>Personal note</Text>
+                <TextInput
+                  style={[styles.noteInput, { borderColor: border, color, backgroundColor: withAlpha(border, 0.3) }]}
+                  placeholder="Add a note (e.g., 'good matcha', 'outlet by window')"
+                  placeholderTextColor={muted}
+                  value={savedNote}
+                  onChangeText={setSavedNote}
+                  onBlur={async () => {
+                    try {
+                      await updateSavedSpotNote(getSpotPlaceId(selectedSpot), selectedSpot.name, savedNote);
+                    } catch {}
+                  }}
+                  multiline
+                  numberOfLines={2}
+                />
+              </View>
+            )}
             <Pressable
               onPress={() => {
                 try {
@@ -2198,6 +2275,8 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 20, fontWeight: '700' },
   sheetActions: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 14 },
   sheetButton: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, marginRight: 10, marginBottom: 10 },
+  noteContainer: { marginTop: 12, marginBottom: 8 },
+  noteInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, minHeight: 50 },
   sheetLink: { marginTop: 12, borderWidth: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center' },
   sectionHeader: {
     marginTop: 18,

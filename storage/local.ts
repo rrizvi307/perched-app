@@ -1584,11 +1584,11 @@ export async function isSavedSpot(placeId?: string, name?: string) {
   return list.some((s: any) => (s.key || '') === key);
 }
 
-export async function toggleSavedSpot(spot: { placeId?: string; name?: string }) {
+export async function toggleSavedSpot(spot: { placeId?: string; name?: string; note?: string }) {
   const placeId = spot.placeId || '';
   const name = spot.name || '';
   const key = placeId ? `place:${placeId}` : `name:${name}`;
-  const entry = { key, placeId: placeId || null, name: name || 'Unknown', savedAt: Date.now() };
+  const entry = { key, placeId: placeId || null, name: name || 'Unknown', savedAt: Date.now(), note: spot.note || '' };
   if (isWeb()) {
     try {
       const raw = window.localStorage.getItem(SAVED_SPOTS_KEY);
@@ -1611,6 +1611,37 @@ export async function toggleSavedSpot(spot: { placeId?: string; name?: string })
   await writeNativeJson(SAVED_SPOTS_KEY, next);
   savedSpotListeners.forEach((cb) => cb(next));
   return !exists;
+}
+
+export async function updateSavedSpotNote(placeId: string | undefined, name: string | undefined, note: string) {
+  const key = placeId ? `place:${placeId}` : `name:${name || ''}`;
+  if (isWeb()) {
+    try {
+      const raw = window.localStorage.getItem(SAVED_SPOTS_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const next = Array.isArray(list) ? list.map((s: any) =>
+        s.key === key ? { ...s, note } : s
+      ) : [];
+      window.localStorage.setItem(SAVED_SPOTS_KEY, JSON.stringify(next));
+      savedSpotListeners.forEach((cb) => cb(next));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const list = await readNativeJson<any[]>(SAVED_SPOTS_KEY, []);
+  const safeList = Array.isArray(list) ? list : [];
+  const next = safeList.map((s: any) => s.key === key ? { ...s, note } : s);
+  await writeNativeJson(SAVED_SPOTS_KEY, next);
+  savedSpotListeners.forEach((cb) => cb(next));
+  return true;
+}
+
+export async function getSavedSpotNote(placeId?: string, name?: string): Promise<string> {
+  const list = await getSavedSpots(200);
+  const key = placeId ? `place:${placeId}` : `name:${name || ''}`;
+  const spot = list.find((s: any) => (s.key || '') === key);
+  return spot?.note || '';
 }
 
 export function subscribeSavedSpots(callback: (spots: any[]) => void) {
