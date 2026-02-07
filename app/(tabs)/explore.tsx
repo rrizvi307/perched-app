@@ -9,6 +9,8 @@ import StatusBanner from '@/components/ui/status-banner';
 import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
 import SpotListItem from '@/components/ui/spot-list-item';
 import PopularTimes from '@/components/ui/popular-times';
+import SmartSpotInfo from '@/components/ui/smart-spot-info';
+import { getSmartSpotData, getTimeAwareRecommendations, type SmartSpotData } from '@/services/smartDataService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
@@ -391,6 +393,8 @@ export default function Explore() {
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [selectedSaved, setSelectedSaved] = useState(false);
   const [savedNote, setSavedNote] = useState('');
+  const [smartData, setSmartData] = useState<SmartSpotData | null>(null);
+  const [timeContext, setTimeContext] = useState<{ timeContext: string; recommendedCategories: string[] } | null>(null);
   const hasRealSpots = spots.length > 0;
   const mapKey = getMapsKey();
   const hasMapKey = !!mapKey;
@@ -537,6 +541,17 @@ export default function Explore() {
     const url = `https://maps.googleapis.com/maps/api/staticmap?center=${center}&zoom=13&size=800x300&scale=2&key=${mapKey}`;
     setMapUrl(url);
   }, [mapKey, mapCenter]);
+
+  // Fetch time-aware recommendations on mount and every hour
+  useEffect(() => {
+    const updateTimeContext = () => {
+      const ctx = getTimeAwareRecommendations();
+      setTimeContext(ctx);
+    };
+    updateTimeContext();
+    const interval = setInterval(updateTimeContext, 60 * 60 * 1000); // Update hourly
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -1647,14 +1662,26 @@ export default function Explore() {
     }
   }
 
-  function openSpotSheet(spot: any) {
+  async function openSpotSheet(spot: any) {
     setSelectedSpot(spot);
+    setSmartData(null); // Reset while loading
     void refreshSelectedSaved(spot);
+
+    // Fetch smart data from external sources
+    try {
+      const placeId = getSpotPlaceId(spot);
+      const category = classifySpotCategory(spot.name);
+      const data = await getSmartSpotData(placeId, spot.name, category);
+      setSmartData(data);
+    } catch {
+      // Smart data is optional, fail silently
+    }
   }
 
   function closeSpotSheet() {
     setSelectedSpot(null);
     setSelectedSaved(false);
+    setSmartData(null);
   }
 
   const selectedTags = React.useMemo(() => (
@@ -2112,6 +2139,10 @@ export default function Explore() {
                 {`${selectedSpot.rating.toFixed(1)} ★${selectedSpot.ratingCount ? ` · ${selectedSpot.ratingCount} reviews` : ''}`}
               </Text>
             ) : null}
+            {/* Smart Data from External Sources */}
+            {smartData && (
+              <SmartSpotInfo smartData={smartData} compact />
+            )}
             {/* Popular Times Chart */}
             <PopularTimes
               popularHours={selectedSpot.popularHours}
