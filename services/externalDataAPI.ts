@@ -374,12 +374,16 @@ async function fetchFromOSM(
   location: { lat: number; lng: number }
 ): Promise<Partial<ExternalSpotData> | null> {
   try {
+    // Sanitize name for OSM query (remove special characters that could break the query)
+    const sanitizedName = name.replace(/['"\\<>]/g, '').substring(0, 100);
+    if (!sanitizedName) return null;
+
     // Search for amenity near location
     const query = `
       [out:json][timeout:10];
       (
-        node["amenity"~"cafe|library"]["name"~"${name.replace(/['"]/g, '')}"](around:200,${location.lat},${location.lng});
-        way["amenity"~"cafe|library"]["name"~"${name.replace(/['"]/g, '')}"](around:200,${location.lat},${location.lng});
+        node["amenity"~"cafe|library"]["name"~"${sanitizedName}",i](around:200,${location.lat},${location.lng});
+        way["amenity"~"cafe|library"]["name"~"${sanitizedName}",i](around:200,${location.lat},${location.lng});
       );
       out body;
     `;
