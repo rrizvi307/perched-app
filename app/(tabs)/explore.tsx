@@ -22,7 +22,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { getMapsKey, getPlaceDetails, searchPlaces, searchPlacesNearby, searchPlacesWithBias } from '@/services/googleMaps';
 import { requestForegroundLocation } from '@/services/location';
 import { classifySpotCategory, spotKey } from '@/services/spotUtils';
-import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getSavedSpotNote, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot, updateSavedSpotNote } from '@/storage/local';
+import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot, updateSavedSpotNote } from '@/storage/local';
 import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
 import { calculateCompositeScore } from '@/services/metricsUtils';
 import { useRouter } from 'expo-router';
@@ -1459,28 +1459,6 @@ export default function Explore() {
     });
     return map;
   }, [rankedSpots]);
-
-  const refreshSelectedSaved = React.useCallback(async (spot: any) => {
-    if (!spot) return;
-    try {
-      const list = await getSavedSpots(200);
-      const placeId = getSpotPlaceId(spot);
-      const key = placeId ? `place:${placeId}` : `name:${spot.name || ''}`;
-      setSelectedSaved(list.some((s: any) => s.key === key));
-    } catch {
-      setSelectedSaved(false);
-    }
-  }, []);
-
-  const openSpotSheet = React.useCallback((spot: any) => {
-    setSelectedSpot(spot);
-    void refreshSelectedSaved(spot);
-  }, [refreshSelectedSaved]);
-
-  const closeSpotSheet = React.useCallback(() => {
-    setSelectedSpot(null);
-    setSelectedSaved(false);
-  }, []);
 
   // Memoize spot press handler
   const handleSpotPress = useCallback((item: any) => {
