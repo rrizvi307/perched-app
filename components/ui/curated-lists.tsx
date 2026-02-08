@@ -80,7 +80,7 @@ export function MoodSelector({ onSelectMood }: { onSelectMood: (mood: string) =>
 
   return (
     <View style={styles.moodContainer}>
-      <Text style={[styles.moodTitle, { color: text }]}>What's your mood?</Text>
+      <Text style={[styles.moodTitle, { color: text }]}>What&apos;s your mood?</Text>
       <View style={styles.moodRow}>
         {moods.map((mood) => (
           <Pressable

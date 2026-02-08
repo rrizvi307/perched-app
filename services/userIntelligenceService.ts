@@ -125,7 +125,7 @@ export async function buildUserPreferenceProfile(userId: string): Promise<UserPr
 
     if (checkinsSnap.empty) return null;
 
-    const checkins = checkinsSnap.docs.map(d => d.data());
+    const checkins = checkinsSnap.docs.map((d: any) => d.data());
 
     // Analyze patterns
     let quietCount = 0;
@@ -293,7 +293,7 @@ export async function buildSpotIntelligence(placeId: string, spotName: string): 
 
     if (checkinsSnap.empty) return null;
 
-    const checkins = checkinsSnap.docs.map(d => d.data());
+    const checkins = checkinsSnap.docs.map((d: any) => d.data());
     const now = Date.now();
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
     const twoWeeksAgo = now - 14 * 24 * 60 * 60 * 1000;
@@ -460,7 +460,7 @@ export async function getTrendingSpots(limit = 10): Promise<TrendingSpot[]> {
       prev7: number;
     }> = {};
 
-    recentSnap.docs.forEach(doc => {
+    recentSnap.docs.forEach((doc: any) => {
       const c = doc.data();
       const placeId = c.spotPlaceId;
       if (!placeId) return;
@@ -541,7 +541,7 @@ export async function getPersonalizedRecommendations(
 
     const recommendations: PersonalizedRecommendation[] = [];
 
-    allSpotsSnap.docs.forEach(doc => {
+    allSpotsSnap.docs.forEach((doc: any) => {
       const intel = doc.data() as SpotIntelligence;
 
       // Skip already visited
@@ -633,7 +633,7 @@ export async function findSimilarSpots(placeId: string, limit = 5): Promise<stri
       .limit(100)
       .get();
 
-    const visitorIds = new Set(visitorsSnap.docs.map(d => d.data().userId).filter(Boolean));
+    const visitorIds = new Set(visitorsSnap.docs.map((d: any) => d.data().userId).filter(Boolean));
 
     if (visitorIds.size < 2) return [];
 
@@ -647,7 +647,7 @@ export async function findSimilarSpots(placeId: string, limit = 5): Promise<stri
         .limit(50)
         .get();
 
-      userCheckinsSnap.docs.forEach(doc => {
+      userCheckinsSnap.docs.forEach((doc: any) => {
         const c = doc.data();
         const otherPlaceId = c.spotPlaceId;
         if (otherPlaceId && otherPlaceId !== placeId) {
@@ -685,7 +685,7 @@ export async function getHiddenGems(limit = 10): Promise<SpotIntelligence[]> {
       .limit(limit)
       .get();
 
-    return gemsSnap.docs.map(d => d.data() as SpotIntelligence);
+    return gemsSnap.docs.map((d: any) => d.data() as SpotIntelligence);
   } catch (error) {
     console.error('[UserIntel] Error getting hidden gems:', error);
     return [];

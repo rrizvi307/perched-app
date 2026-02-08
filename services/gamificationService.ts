@@ -597,7 +597,7 @@ export async function getWeeklyLeaderboard(limit = 20): Promise<LeaderboardEntry
     // Aggregate by user
     const userScores: Record<string, { score: number; name: string; photo?: string }> = {};
 
-    checkinsSnap.docs.forEach(doc => {
+    checkinsSnap.docs.forEach((doc: any) => {
       const c = doc.data();
       const userId = c.userId;
       if (!userId) return;
@@ -644,7 +644,7 @@ export async function getAllTimeLeaderboard(limit = 20): Promise<LeaderboardEntr
       .limit(limit)
       .get();
 
-    return profilesSnap.docs.map((doc, index) => {
+    return profilesSnap.docs.map((doc: any, index: number) => {
       const profile = doc.data() as UserGamificationProfile;
       return {
         userId: profile.userId,

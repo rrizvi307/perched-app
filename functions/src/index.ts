@@ -319,7 +319,35 @@ function parsePriceLevel(value?: string) {
 function withCors(res: any) {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Place-Intel-Secret');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Firebase-AppCheck, X-Place-Intel-Secret');
+}
+
+async function verifyFirebaseUserFromRequest(req: any): Promise<string | null> {
+  const header = req.get('Authorization') || '';
+  if (typeof header !== 'string' || !header.toLowerCase().startsWith('bearer ')) {
+    return null;
+  }
+  const token = header.slice(7).trim();
+  if (!token) return null;
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    return decoded?.uid || null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyAppCheckFromRequest(req: any): Promise<boolean> {
+  const token = req.get('X-Firebase-AppCheck') || '';
+  if (typeof token !== 'string' || !token.trim()) {
+    return false;
+  }
+  try {
+    await admin.appCheck().verifyToken(token.trim());
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs = 2800) {
@@ -344,7 +372,6 @@ function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
 async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
   const key = readFirstNonEmpty(
     process.env.FOURSQUARE_API_KEY,
-    process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY,
     runtimeConfig?.places?.foursquare_api_key,
     runtimeConfig?.places?.foursquare,
   );
@@ -376,7 +403,6 @@ async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: 
 async function fetchYelpSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
   const key = readFirstNonEmpty(
     process.env.YELP_API_KEY,
-    process.env.EXPO_PUBLIC_YELP_API_KEY,
     runtimeConfig?.places?.yelp_api_key,
     runtimeConfig?.places?.yelp,
   );
@@ -425,11 +451,37 @@ export const placeSignalsProxy = functions.https.onRequest(async (req, res) => {
     process.env.PLACE_INTEL_PROXY_SECRET,
     runtimeConfig?.places?.proxy_secret,
   );
-  if (requiredSecret) {
-    const provided = req.get('X-Place-Intel-Secret') || '';
-    if (!provided || provided !== requiredSecret) {
+
+  const providedSecret = req.get('X-Place-Intel-Secret') || '';
+  const hasSecretBypass = Boolean(requiredSecret && providedSecret === requiredSecret);
+
+  const requireAuthRaw = readFirstNonEmpty(
+    process.env.PLACE_INTEL_REQUIRE_AUTH,
+    runtimeConfig?.places?.require_auth,
+  );
+  const requireAuth =
+    !requireAuthRaw || !['0', 'false', 'no', 'off'].includes(requireAuthRaw.toLowerCase());
+
+  const requireAppCheckRaw = readFirstNonEmpty(
+    process.env.PLACE_INTEL_REQUIRE_APP_CHECK,
+    runtimeConfig?.places?.require_app_check,
+  );
+  const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
+
+  if (!hasSecretBypass) {
+    const uid = await verifyFirebaseUserFromRequest(req);
+    if (requireAuth && !uid) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
+    }
+
+    const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
+    if (requireAppCheck || providedAppCheck) {
+      const appCheckOk = await verifyAppCheckFromRequest(req);
+      if (!appCheckOk) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
     }
   }
 
@@ -513,7 +565,7 @@ async function sendPushNotification(
 export const sendWeeklyRecap = functions.pubsub
   .schedule('0 18 * * 0') // Every Sunday at 6pm
   .timeZone('America/Chicago')
-  .onRun(async (context) => {
+  .onRun(async (_context) => {
     try {
       // Get all users with push tokens
       const usersSnapshot = await db.collection('users')
@@ -523,8 +575,8 @@ export const sendWeeklyRecap = functions.pubsub
       const tokens: string[] = [];
       usersSnapshot.forEach((doc) => {
         const data = doc.data();
-        if (data.pushToken) {
-          tokens.push(data.pushToken);
+        if (typeof data.pushToken === 'string' && data.pushToken.trim().length > 0) {
+          tokens.push(data.pushToken.trim());
         }
       });
 
@@ -533,22 +585,66 @@ export const sendWeeklyRecap = functions.pubsub
         return null;
       }
 
-      // Send multicast notification
-      const message = {
-        notification: {
-          title: 'Your Weekly Recap',
-          body: "Check out your weekly recap and see where your friends have been!",
-        },
-        data: {
-          type: 'weekly_recap',
-        },
-        tokens,
-      };
+      const dedupedTokens = Array.from(new Set(tokens));
+      const invalidTokens = new Set<string>();
+      const chunkSize = 500;
+      let successCount = 0;
+      let failureCount = 0;
 
-      const response = await admin.messaging().sendEachForMulticast(message);
-      console.log(`Sent ${response.successCount} weekly recap notifications`);
+      for (let i = 0; i < dedupedTokens.length; i += chunkSize) {
+        const chunk = dedupedTokens.slice(i, i + chunkSize);
+        const response = await admin.messaging().sendEachForMulticast({
+          notification: {
+            title: 'Your Weekly Recap',
+            body: "Check out your weekly recap and see where your friends have been!",
+          },
+          data: {
+            type: 'weekly_recap',
+          },
+          tokens: chunk,
+        });
 
-      return { success: true, sent: response.successCount };
+        successCount += response.successCount;
+        failureCount += response.failureCount;
+
+        response.responses.forEach((item, index) => {
+          if (item.success) return;
+          const code = item.error?.code || '';
+          if (
+            code === 'messaging/invalid-registration-token' ||
+            code === 'messaging/registration-token-not-registered'
+          ) {
+            invalidTokens.add(chunk[index]);
+          }
+        });
+      }
+
+      if (invalidTokens.size > 0) {
+        let batch = db.batch();
+        let pendingOps = 0;
+        for (const userDoc of usersSnapshot.docs) {
+          const token = userDoc.data()?.pushToken;
+          if (typeof token !== 'string' || !invalidTokens.has(token.trim())) continue;
+          batch.update(userDoc.ref, {
+            pushToken: admin.firestore.FieldValue.delete(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          pendingOps += 1;
+          if (pendingOps >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            pendingOps = 0;
+          }
+        }
+        if (pendingOps > 0) {
+          await batch.commit();
+        }
+      }
+
+      console.log(
+        `Weekly recap notifications: sent=${successCount}, failed=${failureCount}, invalidTokensCleared=${invalidTokens.size}`,
+      );
+      return { success: true, sent: successCount, failed: failureCount, invalidTokensCleared: invalidTokens.size };
     } catch (error) {
       console.error('Error sending weekly recap:', error);
       return null;

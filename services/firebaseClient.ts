@@ -451,27 +451,13 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
   if (startAfter) q = q.startAfter(startAfter);
   q = q.limit(limit);
 
-  try {
-    const snapshot = await q.get();
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-    const payload = { items, lastCursor };
-    checkinsCache.set(cacheKey, { ts: Date.now(), payload });
-    return payload;
-  } catch (err: any) {
-    const msg = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
-    const needsIndex = msg.includes('index') || msg.includes('indexes') || msg.includes('failed_precondition');
-    if (!needsIndex) throw err;
-
-    // Fallback for dev/demo environments where the userId+createdAt index isn't configured yet.
-    const fallback = await getCheckinsRemote(Math.max(200, limit * 4));
-    const items = (fallback?.items || []).filter((c: any) => c?.userId === userId).slice(0, limit);
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-    const payload = { items, lastCursor };
-    checkinsCache.set(cacheKey, { ts: Date.now(), payload });
-    return payload;
-  }
+  const snapshot = await q.get();
+  const items: any[] = [];
+  snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+  const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+  const payload = { items, lastCursor };
+  checkinsCache.set(cacheKey, { ts: Date.now(), payload });
+  return payload;
 }
 
 export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
@@ -963,10 +949,11 @@ export async function reportUserRemote(reporterId: string | undefined, targetUse
     return;
   }
   const db = fb.firestore();
-  await db.collection('userReports').add({
+  await db.collection('reports').add({
     reporterId: reporterId || null,
-    targetUserId,
+    reportedUserId: targetUserId,
     reason: reason || null,
+    status: 'open',
     createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
 }
@@ -1283,11 +1270,17 @@ export async function removeReactionFromFirestore(checkinId: string, userId: str
   await batch.commit();
 }
 
-export async function getReactionsFromFirestore(checkinId: string) {
+export async function getReactionsFromFirestore(checkinId: string, limit = 250) {
   const fb = ensureFirebase();
   if (!fb || !checkinId) return [];
   const db = fb.firestore();
-  const snap = await db.collection('reactions').where('checkinId', '==', checkinId).get();
+  const safeLimit = Math.min(Math.max(limit, 1), 500);
+  const snap = await db
+    .collection('reactions')
+    .where('checkinId', '==', checkinId)
+    .orderBy('createdAt', 'desc')
+    .limit(safeLimit)
+    .get();
   const items: any[] = [];
   snap.forEach((doc: any) => {
     items.push({ id: doc.id, ...(doc.data() || {}) });
@@ -1316,11 +1309,17 @@ export async function addCommentToFirestore(comment: {
   }, { merge: true });
 }
 
-export async function getCommentsFromFirestore(checkinId: string) {
+export async function getCommentsFromFirestore(checkinId: string, limit = 200) {
   const fb = ensureFirebase();
   if (!fb || !checkinId) return [];
   const db = fb.firestore();
-  const snap = await db.collection('comments').where('checkinId', '==', checkinId).get();
+  const safeLimit = Math.min(Math.max(limit, 1), 300);
+  const snap = await db
+    .collection('comments')
+    .where('checkinId', '==', checkinId)
+    .orderBy('createdAt', 'asc')
+    .limit(safeLimit)
+    .get();
   const items: any[] = [];
   snap.forEach((doc: any) => {
     items.push({ id: doc.id, ...(doc.data() || {}) });

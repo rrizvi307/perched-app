@@ -218,13 +218,13 @@ function FeaturesSection({ smartData }: { smartData: SmartSpotData }) {
 
 function BusynessPrediction({ smartData }: { smartData: SmartSpotData }) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
 
   if (!smartData.predictedBusyness && !smartData.busyPrediction) return null;
 
-  const busynessColor = smartData.predictedBusyness! < 40
+  const predictedBusyness = Math.max(0, Math.min(100, smartData.predictedBusyness ?? 0));
+  const busynessColor = predictedBusyness < 40
     ? '#10B981'
-    : smartData.predictedBusyness! < 70
+    : predictedBusyness < 70
       ? '#F59E0B'
       : '#EF4444';
 
@@ -236,7 +236,7 @@ function BusynessPrediction({ smartData }: { smartData: SmartSpotData }) {
         <View
           style={[
             styles.busynessFill,
-            { width: `${smartData.predictedBusyness}%`, backgroundColor: busynessColor },
+            { width: `${predictedBusyness}%`, backgroundColor: busynessColor },
           ]}
         />
       </View>

@@ -646,6 +646,3 @@ export function calculateSmartScore(
 
   return Math.min(100, Math.max(0, Math.round(score)));
 }
-
-// Export types for use in other files
-export type { SmartSpotData, BestForCategory, VibeTag, PriceLevel, HoursStatus, WeatherContext };

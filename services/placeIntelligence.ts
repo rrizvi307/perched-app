@@ -117,20 +117,24 @@ function getPlaceSignalEndpoint() {
   return `https://${region}-${projectId}.cloudfunctions.net/placeSignalsProxy`;
 }
 
-function getPlaceSignalProxySecret() {
-  const extra = getExpoExtra();
-  return (
-    (process.env.EXPO_PUBLIC_PLACE_INTEL_PROXY_SECRET as string) ||
-    (extra?.PLACE_INTEL_PROXY_SECRET as string) ||
-    ''
-  );
-}
+async function getProxyAuthHeaders() {
+  const headers: Record<string, string> = {};
+  try {
+    const { ensureFirebase } = await import('./firebaseClient');
+    const fb = ensureFirebase();
+    const user = fb?.auth?.()?.currentUser;
+    if (user && typeof user.getIdToken === 'function') {
+      const idToken = await user.getIdToken();
+      if (idToken) headers.Authorization = `Bearer ${idToken}`;
+    }
+  } catch {}
 
-function shouldUseClientExternalFallback() {
-  const envRaw = (process.env.EXPO_PUBLIC_ENV as string) || (process.env.ENV as string) || 'development';
-  const env = envRaw.toLowerCase();
-  if (env === 'production' && getPlaceSignalEndpoint()) return false;
-  return true;
+  const appCheckToken = (global as any)?.FIREBASE_APP_CHECK_TOKEN;
+  if (typeof appCheckToken === 'string' && appCheckToken.trim().length > 0) {
+    headers['X-Firebase-AppCheck'] = appCheckToken.trim();
+  }
+
+  return headers;
 }
 
 function withInflight<T>(map: Map<string, Promise<T>>, key: string, fn: () => Promise<T>) {
@@ -183,12 +187,11 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ExternalP
     return cached.payload;
   }
   return withInflight(proxyInflight, cacheKey, async () => {
-    const proxySecret = getPlaceSignalProxySecret();
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...(await getProxyAuthHeaders()),
     };
-    if (proxySecret) headers['X-Place-Intel-Secret'] = proxySecret;
     const payload = await fetchWithTimeout(
       endpoint,
       {
@@ -206,77 +209,6 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ExternalP
     proxySignalCache.set(cacheKey, { ts: Date.now(), payload: next });
     return next;
   });
-}
-
-function getFoursquareKey() {
-  return (
-    (process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY as string) ||
-    (process.env.FOURSQUARE_API_KEY as string) ||
-    ((global as any)?.FOURSQUARE_API_KEY as string) ||
-    ''
-  );
-}
-
-function getYelpKey() {
-  return (
-    (process.env.EXPO_PUBLIC_YELP_API_KEY as string) ||
-    (process.env.YELP_API_KEY as string) ||
-    ((global as any)?.YELP_API_KEY as string) ||
-    ''
-  );
-}
-
-async function getFoursquareSignal(input: BuildIntelligenceInput): Promise<ExternalPlaceSignal | null> {
-  const key = getFoursquareKey();
-  if (!key || !input.location || !input.placeName) return null;
-  const ll = `${input.location.lat},${input.location.lng}`;
-  const params = new URLSearchParams({ query: input.placeName, ll, limit: '1' });
-  const url = `https://api.foursquare.com/v3/places/search?${params.toString()}`;
-  const json = await fetchWithTimeout(url, {
-    headers: {
-      Accept: 'application/json',
-      Authorization: key,
-    },
-  });
-  const place = Array.isArray(json?.results) ? json.results[0] : null;
-  if (!place) return null;
-  return {
-    source: 'foursquare',
-    rating: typeof place.rating === 'number' ? place.rating : undefined,
-    priceLevel: parsePriceLevel(place.price?.toString()),
-    categories: Array.isArray(place.categories)
-      ? place.categories.map((c: any) => c?.name).filter((v: any) => typeof v === 'string')
-      : undefined,
-  };
-}
-
-async function getYelpSignal(input: BuildIntelligenceInput): Promise<ExternalPlaceSignal | null> {
-  const key = getYelpKey();
-  if (!key || !input.location || !input.placeName) return null;
-  const params = new URLSearchParams({
-    name: input.placeName,
-    latitude: String(input.location.lat),
-    longitude: String(input.location.lng),
-    limit: '1',
-  });
-  const url = `https://api.yelp.com/v3/businesses/matches?${params.toString()}`;
-  const json = await fetchWithTimeout(url, {
-    headers: {
-      Authorization: `Bearer ${key}`,
-      Accept: 'application/json',
-    },
-  });
-  const business = Array.isArray(json?.businesses) ? json.businesses[0] : null;
-  if (!business) return null;
-  return {
-    source: 'yelp',
-    rating: typeof business.rating === 'number' ? business.rating : undefined,
-    reviewCount: typeof business.review_count === 'number' ? business.review_count : undefined,
-    priceLevel: parsePriceLevel(business.price),
-    categories: Array.isArray(business.categories)
-      ? business.categories.map((c: any) => c?.title).filter((v: any) => typeof v === 'string')
-      : undefined,
-  };
 }
 
 function deriveCrowdLevel(avgBusyness: number | null): PlaceIntelligence['crowdLevel'] {
@@ -422,15 +354,7 @@ export async function buildPlaceIntelligence(input: BuildIntelligenceInput): Pro
   const rankedTimes = Object.entries(hourBuckets).sort((a, b) => b[1] - a[1]);
   const bestTime = rankedTimes[0]?.[1] ? (rankedTimes[0][0] as PlaceIntelligence['bestTime']) : 'anytime';
 
-  const proxySignals = await getProxySignals(input);
-  let externalSignals = proxySignals;
-  if (!externalSignals.length && shouldUseClientExternalFallback()) {
-    const [foursquare, yelp] = await Promise.all([
-      getFoursquareSignal(input),
-      getYelpSignal(input),
-    ]);
-    externalSignals = [foursquare, yelp].filter(Boolean) as ExternalPlaceSignal[];
-  }
+  const externalSignals = await getProxySignals(input);
   const externalRatingAvg = avg(externalSignals.map((s) => s.rating).filter((v): v is number => typeof v === 'number'));
 
   const tagBoost =

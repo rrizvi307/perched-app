@@ -19,10 +19,6 @@ module.exports = ({ config }) => {
   const placeIntelEndpoint = pickEnv("EXPO_PUBLIC_PLACE_INTEL_ENDPOINT", "PLACE_INTEL_ENDPOINT");
   const firebaseFunctionsRegion = pickEnv("EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION", "FIREBASE_FUNCTIONS_REGION") || "us-central1";
 
-  // External data APIs
-  const yelpApiKey = pickEnv("EXPO_PUBLIC_YELP_API_KEY", "YELP_API_KEY");
-  const foursquareApiKey = pickEnv("EXPO_PUBLIC_FOURSQUARE_API_KEY", "FOURSQUARE_API_KEY");
-
   const firebaseFromEnv = {
     apiKey: pickEnv("EXPO_PUBLIC_FIREBASE_API_KEY", "FIREBASE_API_KEY"),
     authDomain: pickEnv("EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN", "FIREBASE_AUTH_DOMAIN"),
@@ -66,8 +62,6 @@ module.exports = ({ config }) => {
       ENV: env || extra.ENV,
       SEGMENT_WRITE_KEY: segmentWriteKey || extra.SEGMENT_WRITE_KEY,
       MIXPANEL_TOKEN: mixpanelToken || extra.MIXPANEL_TOKEN,
-      YELP_API_KEY: yelpApiKey || extra.YELP_API_KEY,
-      FOURSQUARE_API_KEY: foursquareApiKey || extra.FOURSQUARE_API_KEY,
       PLACE_INTEL_ENDPOINT: placeIntelEndpoint || extra.PLACE_INTEL_ENDPOINT,
       FIREBASE_FUNCTIONS_REGION: firebaseFunctionsRegion || extra.FIREBASE_FUNCTIONS_REGION,
     },
