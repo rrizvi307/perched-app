@@ -287,7 +287,6 @@ function CampusCard({
  */
 export function CampusBadge({ campus }: { campus: Campus }) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const success = useThemeColor({}, 'success');
 

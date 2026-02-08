@@ -3,7 +3,7 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
-import Svg, { Path, Defs, LinearGradient, Stop, Circle, Rect } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Circle } from 'react-native-svg';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
 
@@ -22,9 +22,9 @@ export default function Logo({
 }) {
   const text = useThemeColor({}, 'text');
   const surface = useThemeColor({}, 'card');
-  const theme = useThemePreference().preference === 'system'
-    ? (useColorScheme() ?? 'light')
-    : useThemePreference().preference;
+  const { preference } = useThemePreference();
+  const colorScheme = useColorScheme();
+  const theme = preference === 'system' ? (colorScheme ?? 'light') : preference;
 
   // Modern gradient colors - purple to pink
   const gradientStart = '#8B5CF6'; // Vibrant purple

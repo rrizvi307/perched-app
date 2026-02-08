@@ -9,7 +9,6 @@ import { View, Text, StyleSheet } from 'react-native';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useAuth } from '@/contexts/AuthContext';
 import { getMetricsImpact, MetricsImpact } from '@/services/metricsImpact';
-import { withAlpha } from '@/utils/colors';
 
 export default function MetricsImpactCard() {
 	const { user } = useAuth();

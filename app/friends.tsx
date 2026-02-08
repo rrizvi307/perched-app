@@ -25,7 +25,7 @@ import {
   getUserFriends,
 } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
-import { trackRatingTrigger, RatingTriggers } from '@/services/appRating';
+import { promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
 import { updateFriendsCount } from '@/services/gamification';
 
 interface FriendRequest {
@@ -100,15 +100,15 @@ export default function FriendsScreen() {
 
         // Transform to FriendRequest format
         const transformedRequests: FriendRequest[] = incomingRequests.map((r: any) => {
-          const fromUser = userMap.get(r.fromId) || {};
+          const fromUser: any = userMap.get(r.fromId) || null;
           return {
             id: r.id,
             fromUser: {
               id: r.fromId,
-              name: fromUser.name || 'Unknown',
-              handle: fromUser.handle,
-              photoUrl: fromUser.photoUrl,
-              campus: fromUser.campus || fromUser.campusOrCity,
+              name: fromUser?.name || 'Unknown',
+              handle: fromUser?.handle,
+              photoUrl: fromUser?.photoUrl,
+              campus: fromUser?.campus || fromUser?.campusOrCity,
               mutualFriends: 0, // Could be computed if needed
             },
             timestamp: r.createdAt?.toDate?.() || new Date(),
@@ -171,7 +171,7 @@ export default function FriendsScreen() {
 
       // Track analytics
       void logEvent('friend_request_accepted', user.id, { fromUserId: request.fromUser.id });
-      void trackRatingTrigger(RatingTriggers.FRIEND_ADDED);
+      void promptRatingAtMoment(RatingTriggers.FRIEND_ADDED);
 
       // Update gamification stats
       const friends = await getUserFriends(user.id);

@@ -11,6 +11,15 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { tokens } from '@/constants/tokens';
 
+function getAchievementCategory(id: string) {
+  if (id.startsWith('explorer_')) return 'exploration';
+  if (id.startsWith('social_')) return 'social';
+  if (id.startsWith('streak_')) return 'streak';
+  if (id === 'night_owl' || id === 'early_bird' || id === 'weekend_warrior') return 'time';
+  if (id.startsWith('loyal_')) return 'regular';
+  return 'discovery';
+}
+
 export default function AchievementsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -47,17 +56,17 @@ export default function AchievementsScreen() {
   const totalCount = ACHIEVEMENTS.length;
 
   const categories = {
-    'Explorer': ACHIEVEMENTS.filter(a => a.category === 'exploration'),
-    'Social': ACHIEVEMENTS.filter(a => a.category === 'social'),
-    'Streaks': ACHIEVEMENTS.filter(a => a.category === 'streak'),
-    'Time-Based': ACHIEVEMENTS.filter(a => a.category === 'time'),
-    'Regular': ACHIEVEMENTS.filter(a => a.category === 'regular'),
-    'Discovery': ACHIEVEMENTS.filter(a => a.category === 'discovery'),
+    'Explorer': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'exploration'),
+    'Social': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'social'),
+    'Streaks': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'streak'),
+    'Time-Based': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'time'),
+    'Regular': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'regular'),
+    'Discovery': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'discovery'),
   };
 
   return (
     <ThemedView style={{ flex: 1 }}>
-      <Atmosphere variant="primary" />
+      <Atmosphere variant="warm" />
 
       {/* Header */}
       <View style={[styles.header, { paddingTop: Math.max(tokens.space.s12, insets.top + 10) }]}>

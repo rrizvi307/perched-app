@@ -41,13 +41,7 @@ export function initSentry() {
 			},
 
 			integrations: [
-				new Sentry.ReactNativeTracing({
-					routingInstrumentation: new Sentry.ReactNavigationInstrumentation(),
-					traceFetch: true,
-					traceXHR: true,
-					enableNativeFramesTracking: true,
-					enableStallTracking: true,
-				}),
+				Sentry.reactNativeTracingIntegration(),
 			],
 		});
 

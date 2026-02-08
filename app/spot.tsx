@@ -19,6 +19,8 @@ import { Linking, Platform, Pressable, Share, StyleSheet, Text, View } from 'rea
 import * as ExpoLinking from 'expo-linking';
 import { logEvent } from '@/services/logEvent';
 import { useToast } from '@/contexts/ToastContext';
+import { buildPlaceIntelligence, PlaceIntelligence } from '@/services/placeIntelligence';
+import { runAfterInteractions } from '@/services/performance';
 
 const TAG_VOTES_KEY = 'spot_tag_votes_v1';
 const TAG_VARIANT_KEY = 'spot_tag_variant_v1';
@@ -51,11 +53,13 @@ export default function SpotDetail() {
   const [saving, setSaving] = useState(false);
   const [tagVotes, setTagVotes] = useState<Record<string, boolean>>({});
   const [tagVariant, setTagVariant] = useState<keyof typeof TAG_VARIANTS>('core5');
+  const [intelligence, setIntelligence] = useState<PlaceIntelligence | null>(null);
   const displayName = place?.name || nameParam || 'Spot';
   const coords = place?.location || checkins.find((c) => c.spotLatLng)?.spotLatLng || checkins.find((c) => c.location)?.location;
   const category = classifySpotCategory(displayName, place?.types);
   const normalizedName = normalizeSpotName(displayName);
   const placeKey = spotKey(placeId || undefined, displayName || 'unknown');
+  const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
   const canTag = useMemo(() => {
     if (!user) return false;
     return checkins.some((c) => {
@@ -71,11 +75,23 @@ export default function SpotDetail() {
       if (!user) return false;
       if (c.userId === user.id) return true;
       if (c.visibility === 'friends' || c.visibility === 'close') {
-        return friendIds.includes(c.userId);
+        return friendIdSet.has(c.userId);
       }
       return true;
     });
-  }, [checkins, friendIds, user]);
+  }, [checkins, friendIdSet, user]);
+  const aggregatedTagScores = useMemo(() => {
+    const scores: Record<string, number> = {};
+    visibleCheckins.forEach((c: any) => {
+      if (!Array.isArray(c?.tags)) return;
+      c.tags.forEach((tag: any) => {
+        const normalized = String(tag || '').trim();
+        if (!normalized) return;
+        scores[normalized] = (scores[normalized] || 0) + 1;
+      });
+    });
+    return scores;
+  }, [visibleCheckins]);
   const mapsUrl = useMemo(() => {
     if (placeId) {
       // Prefer a place_id-based URL so the Maps app opens the business listing (reviews, hours, etc).
@@ -183,7 +199,7 @@ export default function SpotDetail() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await getCheckinsRemote(120);
+        const res = await getCheckinsRemote(80);
         const items = (res.items || []).filter((it: any) => !isCheckinExpired(it));
         const targetKey = spotKey(placeId || undefined, nameParam || '');
         const filtered = items.filter((it: any) => {
@@ -238,7 +254,7 @@ export default function SpotDetail() {
         .map((c) => c.userId)
         .filter(Boolean)
     ));
-    const nonFriendIds = userIds.filter((id: string) => id !== user?.id && !friendIds.includes(id));
+    const nonFriendIds = userIds.filter((id: string) => id !== user?.id && !friendIdSet.has(id));
     if (!nonFriendIds.length) {
       setPeopleHere([]);
       return;
@@ -247,7 +263,30 @@ export default function SpotDetail() {
       const profiles = await getUsersByIdsCached(nonFriendIds.slice(0, 6));
       setPeopleHere(profiles || []);
     })();
-  }, [visibleCheckins, friendIds, user]);
+  }, [visibleCheckins, friendIdSet, user]);
+
+  useEffect(() => {
+    let active = true;
+    void runAfterInteractions(async () => {
+      try {
+        const payload = await buildPlaceIntelligence({
+          placeName: displayName,
+          placeId: placeId || undefined,
+          location: coords || undefined,
+          openNow: place?.openNow,
+          types: place?.types,
+          checkins: visibleCheckins,
+          tagScores: aggregatedTagScores,
+        });
+        if (active) setIntelligence(payload);
+      } catch {
+        if (active) setIntelligence(null);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [displayName, placeId, coords, place?.openNow, place?.types, visibleCheckins, aggregatedTagScores]);
 
   const mapUrl = useMemo(() => {
     if (!coords) return null;
@@ -296,6 +335,70 @@ export default function SpotDetail() {
       <H1 style={{ color: text }}>{displayName}</H1>
       {normalizedName ? null : null}
       <View style={{ height: 12 }} />
+      {intelligence ? (
+        <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
+          <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
+          <View style={styles.intelRow}>
+            <View style={styles.intelItem}>
+              <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{intelligence.workScore}</Text>
+              <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
+            </View>
+            <View style={styles.intelItem}>
+              <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
+              <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
+            </View>
+            <View style={styles.intelItem}>
+              <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.bestTime}</Text>
+              <Text style={{ color: muted, fontSize: 12 }}>Best time</Text>
+            </View>
+          </View>
+          {intelligence.highlights.length ? (
+            <View style={styles.intelChipRow}>
+              {intelligence.highlights.map((item) => (
+                <View key={`hl-${item}`} style={[styles.intelChip, { borderColor: border }]}>
+                  <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {intelligence.useCases.length ? (
+            <View style={styles.useCaseRow}>
+              {intelligence.useCases.map((item) => (
+                <View key={`uc-${item}`} style={[styles.useCaseChip, { borderColor: border }]}>
+                  <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {intelligence.crowdForecast.length ? (
+            <View style={styles.forecastRow}>
+              {intelligence.crowdForecast.slice(0, 4).map((point) => {
+                const tone = point.level === 'low'
+                  ? '#22C55E'
+                  : point.level === 'high'
+                  ? '#F97316'
+                  : point.level === 'moderate'
+                  ? '#F59E0B'
+                  : muted;
+                return (
+                  <View key={`fc-${point.offsetHours}`} style={[styles.forecastChip, { borderColor: border }]}>
+                    <Text style={{ color: muted, fontSize: 11, fontWeight: '700' }}>{point.label}</Text>
+                    <Text style={{ color: tone, fontSize: 12, fontWeight: '700', textTransform: 'capitalize' }}>{point.level}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
+          <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
+            Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
+          </Text>
+          {intelligence.externalSignals.length ? (
+            <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
+              External signals: {intelligence.externalSignals.map((s) => s.source).join(' + ')}
+            </Text>
+          ) : null}
+        </PolishedCard>
+      ) : null}
       <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginTop: 12, marginBottom: 8 }}>
         Tags from the community
       </Text>
@@ -367,8 +470,8 @@ export default function SpotDetail() {
       <PremiumButton
         onPress={() => {
           const name = encodeURIComponent(displayName);
-          const lat = coords?.lat ? `&lat=${coords.lat}` : '';
-          const lng = coords?.lng ? `&lng=${coords.lng}` : '';
+          const lat = typeof coords?.lat === 'number' ? `&lat=${coords.lat}` : '';
+          const lng = typeof coords?.lng === 'number' ? `&lng=${coords.lng}` : '';
           router.push(`/checkin?spot=${name}${lat}${lng}&placeId=${encodeURIComponent(placeId || '')}`);
         }}
         variant="primary"
@@ -504,6 +607,36 @@ export default function SpotDetail() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20 },
+  intelCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 12,
+    marginBottom: 4,
+  },
+  intelRow: { flexDirection: 'row', marginTop: 10, ...gapStyle(10) },
+  intelItem: { flex: 1, alignItems: 'flex-start' },
+  intelChipRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, ...gapStyle(8) },
+  intelChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  useCaseRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, ...gapStyle(8) },
+  useCaseChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  forecastRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, ...gapStyle(8) },
+  forecastChip: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    minWidth: 62,
+  },
   map: {
     width: '100%',
     height: 220,

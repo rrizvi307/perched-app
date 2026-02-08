@@ -3,7 +3,6 @@ import { ReactNode } from 'react';
 import { IconSymbol } from './icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
-import { tokens } from '@/constants/tokens';
 import * as Haptics from 'expo-haptics';
 
 interface PremiumButtonProps {
@@ -39,9 +38,7 @@ export function PremiumButton({
 }: PremiumButtonProps) {
   const primary = useThemeColor({}, 'primary');
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const border = useThemeColor({}, 'border');
-  const surface = useThemeColor({}, 'surface');
   const danger = '#EF4444';
 
   const handlePress = async () => {

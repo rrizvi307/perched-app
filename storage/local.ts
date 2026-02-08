@@ -800,7 +800,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
         checkins = checkinsRaw ? JSON.parse(checkinsRaw) : [];
       }
     }
-    const demoCheckins = BETTER_DEMO_CHECKINS(now, demoAvatars);
+    let demoCheckins = BETTER_DEMO_CHECKINS(now, demoAvatars);
     const isDemoSeedId = (id: any) => {
       const s = String(id || '');
       return s.startsWith('demo-c') || s.startsWith('demo-self-');

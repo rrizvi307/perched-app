@@ -44,7 +44,7 @@ export function SkeletonLoader({
       -1,
       false
     );
-  }, []);
+  }, [opacity]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,

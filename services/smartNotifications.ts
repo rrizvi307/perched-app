@@ -20,10 +20,19 @@ export interface NotificationPreferences {
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
 });
+
+function buildDateTrigger(date: Date): Notifications.NotificationTriggerInput {
+  return {
+    type: Notifications.SchedulableTriggerInputTypes.DATE,
+    date,
+  };
+}
 
 /**
  * Initialize push notifications
@@ -127,7 +136,7 @@ export async function scheduleStreakReminder(): Promise<void> {
       body: "Don't break your streak! Check in before midnight.",
       data: { type: 'streak_reminder' },
     },
-    trigger: reminderTime,
+    trigger: buildDateTrigger(reminderTime),
   });
 
   track('notification_scheduled', {
@@ -221,7 +230,7 @@ export async function scheduleWeeklyRecap(): Promise<void> {
       body: 'Check out your weekly recap and see where your friends have been!',
       data: { type: 'weekly_recap' },
     },
-    trigger: sunday,
+    trigger: buildDateTrigger(sunday),
   });
 
   track('notification_scheduled', {
@@ -265,8 +274,14 @@ export function addNotificationResponseListener(
   handler: (response: Notifications.NotificationResponse) => void
 ) {
   return Notifications.addNotificationResponseReceivedListener((response) => {
+    const data = response.notification.request.content.data as Record<string, unknown> | null | undefined;
+    const rawType = data?.type;
+    const type =
+      typeof rawType === 'string' || typeof rawType === 'number' || typeof rawType === 'boolean'
+        ? rawType
+        : null;
     track('notification_opened', {
-      type: response.notification.request.content.data?.type,
+      type,
     });
     handler(response);
   });

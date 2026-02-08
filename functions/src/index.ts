@@ -23,7 +23,7 @@ export const processReferral = functions.firestore
   .document('referrals/{referralId}')
   .onCreate(async (snap, context) => {
     const data = snap.data();
-    const { referralCode, newUserId, status } = data;
+    const { referralCode, status } = data;
 
     if (status !== 'pending') {
       return null;
@@ -283,6 +283,197 @@ export const onCheckinCreated = functions.firestore
       return null;
     }
   });
+
+type ExternalSource = 'foursquare' | 'yelp';
+type ExternalPlaceSignal = {
+  source: ExternalSource;
+  rating?: number;
+  reviewCount?: number;
+  priceLevel?: string;
+  categories?: string[];
+};
+
+const PLACE_SIGNAL_TTL_MS = 30 * 60 * 1000;
+const placeSignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
+const runtimeConfig = (() => {
+  try {
+    return functions.config();
+  } catch {
+    return {};
+  }
+})();
+
+function readFirstNonEmpty(...values: Array<string | undefined>) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return '';
+}
+
+function parsePriceLevel(value?: string) {
+  if (!value) return undefined;
+  const next = value.trim();
+  return next ? next : undefined;
+}
+
+function withCors(res: any) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, X-Place-Intel-Secret');
+}
+
+async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs = 2800) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller?.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
+  if (!Array.isArray(payload)) return [];
+  return payload.filter(Boolean);
+}
+
+async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
+  const key = readFirstNonEmpty(
+    process.env.FOURSQUARE_API_KEY,
+    process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY,
+    runtimeConfig?.places?.foursquare_api_key,
+    runtimeConfig?.places?.foursquare,
+  );
+  if (!key) return null;
+  const ll = `${lat},${lng}`;
+  const params = new URLSearchParams({ query: placeName, ll, limit: '1' });
+  const url = `https://api.foursquare.com/v3/places/search?${params.toString()}`;
+  const json = await fetchJsonWithTimeout(url, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: key,
+    },
+  });
+  const place = Array.isArray((json as any)?.results) ? (json as any).results[0] : null;
+  if (!place) return null;
+  const categories = Array.isArray(place.categories)
+    ? place.categories
+      .map((c: any) => (typeof c?.name === 'string' ? c.name : null))
+      .filter((v: any) => typeof v === 'string')
+    : undefined;
+  return {
+    source: 'foursquare',
+    rating: typeof place.rating === 'number' ? place.rating : undefined,
+    priceLevel: parsePriceLevel(place.price?.toString()),
+    categories,
+  };
+}
+
+async function fetchYelpSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
+  const key = readFirstNonEmpty(
+    process.env.YELP_API_KEY,
+    process.env.EXPO_PUBLIC_YELP_API_KEY,
+    runtimeConfig?.places?.yelp_api_key,
+    runtimeConfig?.places?.yelp,
+  );
+  if (!key) return null;
+  const params = new URLSearchParams({
+    name: placeName,
+    latitude: String(lat),
+    longitude: String(lng),
+    limit: '1',
+  });
+  const url = `https://api.yelp.com/v3/businesses/matches?${params.toString()}`;
+  const json = await fetchJsonWithTimeout(url, {
+    headers: {
+      Authorization: `Bearer ${key}`,
+      Accept: 'application/json',
+    },
+  });
+  const business = Array.isArray((json as any)?.businesses) ? (json as any).businesses[0] : null;
+  if (!business) return null;
+  const categories = Array.isArray(business.categories)
+    ? business.categories
+      .map((c: any) => (typeof c?.title === 'string' ? c.title : null))
+      .filter((v: any) => typeof v === 'string')
+    : undefined;
+  return {
+    source: 'yelp',
+    rating: typeof business.rating === 'number' ? business.rating : undefined,
+    reviewCount: typeof business.review_count === 'number' ? business.review_count : undefined,
+    priceLevel: parsePriceLevel(business.price),
+    categories,
+  };
+}
+
+export const placeSignalsProxy = functions.https.onRequest(async (req, res) => {
+  withCors(res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  const requiredSecret = readFirstNonEmpty(
+    process.env.PLACE_INTEL_PROXY_SECRET,
+    runtimeConfig?.places?.proxy_secret,
+  );
+  if (requiredSecret) {
+    const provided = req.get('X-Place-Intel-Secret') || '';
+    if (!provided || provided !== requiredSecret) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  }
+
+  const body = typeof req.body === 'string'
+    ? (() => {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return null;
+      }
+    })()
+    : req.body;
+
+  const placeName = typeof body?.placeName === 'string' ? body.placeName.trim() : '';
+  const lat = typeof body?.location?.lat === 'number' ? body.location.lat : null;
+  const lng = typeof body?.location?.lng === 'number' ? body.location.lng : null;
+
+  if (!placeName || typeof lat !== 'number' || typeof lng !== 'number') {
+    res.status(400).json({ error: 'Missing placeName/location' });
+    return;
+  }
+
+  const cacheKey = `${placeName.toLowerCase()}:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  const cached = placeSignalCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < PLACE_SIGNAL_TTL_MS) {
+    res.status(200).json({ externalSignals: cached.payload, cacheHit: true });
+    return;
+  }
+
+  try {
+    const [foursquare, yelp] = await Promise.all([
+      fetchFoursquareSignalServer(placeName, lat, lng),
+      fetchYelpSignalServer(placeName, lat, lng),
+    ]);
+    const externalSignals = parseExternalSignals([foursquare, yelp]);
+    placeSignalCache.set(cacheKey, { ts: Date.now(), payload: externalSignals });
+    res.status(200).json({ externalSignals, cacheHit: false });
+    return;
+  } catch (error) {
+    console.error('placeSignalsProxy error', error);
+    res.status(500).json({ error: 'place signal lookup failed' });
+    return;
+  }
+});
 
 // =============================================================================
 // HELPER FUNCTIONS

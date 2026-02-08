@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+/functions/lib/
 
 # Local nested copy / symlink loop (accidental)
 spot-checkin-app

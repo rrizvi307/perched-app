@@ -1,7 +1,6 @@
-import { View, Text, Pressable, StyleSheet, ScrollView } from 'react-native';
+import { Text, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { withAlpha } from '@/utils/colors';
 
 export interface FilterChip {
   id: string;
@@ -22,14 +21,11 @@ export function MapFilterChips({
   variant = 'default'
 }: MapFilterChipsProps) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
   const surface = useThemeColor({}, 'surface');
   const activeBg = primary;
   const inactiveBg = surface;
-  const activeHover = withAlpha(primary, 0.9);
-  const inactiveHover = withAlpha(primary, 0.08);
 
   const isCompact = variant === 'compact';
 

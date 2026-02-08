@@ -6,7 +6,6 @@ import StatusBanner from '@/components/ui/status-banner';
 import { PolishedCard } from '@/components/ui/polished-card';
 import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
 import { EmptyState } from '@/components/ui/empty-state';
-import { PremiumButton } from '@/components/ui/premium-button';
 import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins, seedDemoNetwork } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
@@ -836,7 +835,7 @@ function FeedPhoto({
 						</View>
 					</View>
 				}
-					renderItem={({ item }) => {
+					renderItem={({ item, index }) => {
 						const now = Date.now();
 						const time = formatCheckinTime(item.createdAt);
 						const isLive = !isCheckinExpired(item, now);
@@ -857,12 +856,11 @@ function FeedPhoto({
 						const effectiveHandle = item.userHandle || (user && item.userId === user.id ? user.handle : null);
 						const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
 						const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
-						const itemIndex = items.indexOf(item);
 						return (
 							<PolishedCard
 								variant="elevated"
 								animated
-								delay={Math.min(itemIndex * 50, 500)}
+								delay={Math.min(index * 50, 500)}
 								pressable={false}
 								style={styles.card}
 							>

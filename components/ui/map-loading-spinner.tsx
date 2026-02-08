@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet } from 'react-native';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -30,7 +30,7 @@ export function MapLoadingSpinner({ message = 'Loading spots…', size = 48 }: M
       -1,
       false
     );
-  }, []);
+  }, [rotation]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotation.value}deg` }],

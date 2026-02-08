@@ -47,6 +47,8 @@ export type AnalyticsEvent =
   | 'profile_share_failed'
   | 'referral_link_copied'
   | 'referral_signup'
+  | 'referral_code_stored'
+  | 'referral_recorded'
 
   // Explore & Discovery
   | 'explore_viewed'
@@ -75,6 +77,8 @@ export type AnalyticsEvent =
   | 'share_opened'
   | 'deeplink_opened'
   | 'checkin_reacted'
+  | 'comment_posted'
+  | 'comment_deleted'
 
   // Settings
   | 'settings_opened'

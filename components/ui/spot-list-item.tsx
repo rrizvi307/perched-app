@@ -1,4 +1,3 @@
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';

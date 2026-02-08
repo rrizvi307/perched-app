@@ -4,7 +4,6 @@ import { IconSymbol } from './ui/icon-symbol';
 import { PolishedCard } from './ui/polished-card';
 import { PremiumButton } from './ui/premium-button';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { tokens } from '@/constants/tokens';
 import { seedDemoFeed, clearDemoData, getDemoStats } from '@/services/demoDataManager';
 import { isDemoMode, setDemoMode } from '@/services/demoMode';
 
@@ -21,7 +20,6 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const success = useThemeColor({}, 'success');
-  const danger = useThemeColor({}, 'danger');
   const border = useThemeColor({}, 'border');
 
   const [demoEnabled, setDemoEnabled] = useState(isDemoMode());
@@ -243,7 +241,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
           <Text style={[styles.tipsTitle, { color: text }]}>💡 Tips for Demo Filming</Text>
           <Text style={[styles.tipText, { color: muted }]}>
             • Enable demo mode before recording{'\n'}
-            • Use "Refresh Demo Data" for variety{'\n'}
+            • Use Refresh Demo Data for variety{'\n'}
             • Toggle campus filter to show features{'\n'}
             • Demo friends appear automatically{'\n'}
             • Disable after filming for real testing

@@ -157,7 +157,7 @@ export async function addComment(
 export async function getComments(checkinId: string): Promise<Comment[]> {
   try {
     const { getCommentsFromFirestore } = await import('./firebaseClient');
-    const comments = await getCommentsFromFirestore(checkinId);
+    const comments = (await getCommentsFromFirestore(checkinId)) as Comment[];
     return comments.sort((a, b) => a.createdAt - b.createdAt); // Oldest first
   } catch (error) {
     console.error('Failed to get comments:', error);

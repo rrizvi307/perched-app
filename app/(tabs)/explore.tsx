@@ -27,7 +27,7 @@ import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils
 import { calculateCompositeScore } from '@/services/metricsUtils';
 import { useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { withAlpha } from '@/utils/colors';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
@@ -52,6 +52,10 @@ function aggregateSpotMetrics(checkins: any[]) {
   const busynessValues: number[] = [];
   const noiseLevels: number[] = [];
   const outletCounts: Record<string, number> = { plenty: 0, some: 0, few: 0, none: 0 };
+  const noiseBuckets = { quiet: 0, moderate: 0, lively: 0 } as const;
+  const nextNoiseBuckets: Record<'quiet' | 'moderate' | 'lively', number> = { ...noiseBuckets };
+  let laptopYes = 0;
+  let laptopNo = 0;
 
   // Track "here now" - check-ins within last 2 hours
   const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
@@ -70,12 +74,20 @@ function aggregateSpotMetrics(checkins: any[]) {
       const convertedNoise = typeof c.noiseLevel === 'string'
         ? (c.noiseLevel === 'quiet' ? 2 : c.noiseLevel === 'moderate' ? 3 : 4)
         : c.noiseLevel;
-      if (typeof convertedNoise === 'number') noiseLevels.push(convertedNoise);
+      if (typeof convertedNoise === 'number') {
+        noiseLevels.push(convertedNoise);
+        if (convertedNoise <= 2) nextNoiseBuckets.quiet += 1;
+        else if (convertedNoise >= 4) nextNoiseBuckets.lively += 1;
+        else nextNoiseBuckets.moderate += 1;
+      }
     }
 
     if (c.outletAvailability && outletCounts[c.outletAvailability] !== undefined) {
       outletCounts[c.outletAvailability]++;
     }
+
+    if (c.laptopFriendly === true) laptopYes++;
+    else if (c.laptopFriendly === false) laptopNo++;
 
     // Get check-in timestamp
     const checkinTime = c.createdAt?.seconds
@@ -113,16 +125,80 @@ function aggregateSpotMetrics(checkins: any[]) {
     ? outletEntries.sort((a, b) => b[1] - a[1])[0][0] as 'plenty' | 'some' | 'few' | 'none'
     : null;
 
+  // Calculate laptop-friendly percentage
+  const totalLaptop = laptopYes + laptopNo;
+  const laptopFriendlyPct = totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
+  const rankedNoise = Object.entries(nextNoiseBuckets).sort((a, b) => b[1] - a[1]);
+  const topNoiseLevel = rankedNoise[0]?.[1] ? (rankedNoise[0][0] as 'quiet' | 'moderate' | 'lively') : null;
+
   return {
     avgWifiSpeed,
     avgBusyness,
     avgNoiseLevel,
+    laptopFriendlyPct,
+    topNoiseLevel,
     topOutletAvailability,
     hereNowCount: hereNowUsers.length,
     hereNowUsers: hereNowUsers.slice(0, 3), // Only show up to 3 avatars
     popularHours,
     checkinCount: checkins.length,
   };
+}
+
+function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number } | null, rankByQuality = false) {
+  const grouped: Record<string, any> = {};
+  items.forEach((it: any) => {
+    const name = it.spotName || it.spot || 'Unknown';
+    const key = spotKey(it.spotPlaceId, name);
+    if (!grouped[key]) {
+      grouped[key] = {
+        name,
+        count: 0,
+        example: it,
+        openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
+        tagScores: {},
+        _checkins: [],
+      };
+    }
+    grouped[key].count += 1;
+    grouped[key]._checkins.push(it);
+    if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
+    if (Array.isArray(it.tags)) {
+      it.tags.forEach((tag: any) => {
+        const t = String(tag || '').trim();
+        if (!t) return;
+        grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
+      });
+    }
+  });
+
+  Object.values(grouped).forEach((spot: any) => {
+    const metrics = aggregateSpotMetrics(spot._checkins);
+    Object.assign(spot, metrics);
+    delete spot._checkins;
+  });
+
+  const arr = Object.values(grouped) as any[];
+  if (focus) {
+    arr.forEach((a) => {
+      const coords = a.example?.spotLatLng || a.example?.location;
+      if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+        a.distance = haversine(focus, { lat: coords.lat, lng: coords.lng });
+      } else {
+        a.distance = Infinity;
+      }
+    });
+    arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
+  } else if (rankByQuality) {
+    arr.sort((a, b) => {
+      const scoreA = calculateCompositeScore(a, null);
+      const scoreB = calculateCompositeScore(b, null);
+      return scoreB - scoreA;
+    });
+  } else {
+    arr.sort((a, b) => b.count - a.count);
+  }
+  return arr;
 }
 
 function formatTime(input: string | { seconds?: number } | undefined) {
@@ -365,14 +441,15 @@ export default function Explore() {
   const [seedLoading, setSeedLoading] = useState(false);
   const [checkins, setCheckins] = useState<any[]>([]);
   const [query, setQuery] = useState('');
+  const deferredQuery = React.useDeferredValue(query);
   const [loc, setLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
   const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [mapFetchFocus, setMapFetchFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [mapUrl, setMapUrl] = useState<string | null>(null);
   const [scope, setScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
-  const [vibe, setVibe] = useState<ExploreVibe>('all');
-  const [openFilter, setOpenFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [vibe] = useState<ExploreVibe>('all');
+  const [openFilter] = useState<'all' | 'open' | 'closed'>('all');
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -406,14 +483,14 @@ export default function Explore() {
   const mapKey = getMapsKey();
   const hasMapKey = !!mapKey;
 
-  const parsedIntent = React.useMemo(() => parsePerchedQuery(query), [query]);
+  const parsedIntent = React.useMemo(() => parsePerchedQuery(deferredQuery), [deferredQuery]);
   const activeIntent = React.useMemo(() => {
     if (!parsedIntent) return null;
     const hasSignals = parsedIntent.vibe !== 'all' || parsedIntent.openFilter !== 'all' || parsedIntent.tags.length > 0;
     return hasSignals ? parsedIntent : null;
   }, [parsedIntent]);
   const intentChips = React.useMemo(() => formatIntentChips(activeIntent), [activeIntent]);
-  const aiMode = !!activeIntent && !!query.trim();
+  const aiMode = !!activeIntent && !!deferredQuery.trim();
   // While an "Ask Perched" query is active, avoid accidental empty states by ignoring manual filters
   // unless the query explicitly asks for them (e.g. "open now").
   const appliedVibe = aiMode
@@ -432,7 +509,7 @@ export default function Explore() {
     if (loc) return loc;
     const first = (spots.length ? spots : seedSpots).find((s) => s.example?.spotLatLng || s.example?.location);
     const coords = first?.example?.spotLatLng || first?.example?.location;
-    if (coords?.lat && coords?.lng) return { lat: coords.lat, lng: coords.lng };
+    if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') return { lat: coords.lat, lng: coords.lng };
     return { lat: 29.7604, lng: -95.3698 };
   }, [mapFocus, loc, spots, seedSpots]);
   const fallbackMapUrl = React.useMemo(() => {
@@ -587,58 +664,13 @@ export default function Explore() {
           });
           if (!active) return;
           setCheckins(items);
-          const grouped: Record<string, any> = {};
-          items.forEach((it: any) => {
-            const name = it.spotName || it.spot || 'Unknown';
-            const key = spotKey(it.spotPlaceId, name);
-            if (!grouped[key]) {
-              grouped[key] = {
-                name,
-                count: 0,
-                example: it,
-                openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-                tagScores: {},
-                _checkins: [], // Track checkins for metric aggregation
-              };
-            }
-            grouped[key].count += 1;
-            grouped[key]._checkins.push(it);
-            if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-            if (Array.isArray(it.tags)) {
-              it.tags.forEach((tag: any) => {
-                const t = String(tag || '').trim();
-                if (!t) return;
-                grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-              });
-            }
-          });
-          // Aggregate utility metrics for each spot
-          Object.values(grouped).forEach((spot: any) => {
-            const metrics = aggregateSpotMetrics(spot._checkins);
-            Object.assign(spot, metrics);
-            delete spot._checkins; // Clean up
-          });
-          const arr = Object.values(grouped) as any[];
-          const focus = loc;
-          if (focus) {
-            arr.forEach((a) => {
-              const coords = a.example?.spotLatLng || a.example?.location;
-              if (coords && coords.lat && coords.lng) {
-                a.distance = haversine(focus, { lat: coords.lat, lng: coords.lng });
-              } else {
-                a.distance = Infinity;
-              }
-            });
-            arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
-          } else {
-            arr.sort((a, b) => b.count - a.count);
-          }
+          const arr = buildSpotsFromCheckins(items, loc, false);
           setSpots(arr.slice(0, 30));
           setStatus(null);
           setLoading(false);
           return;
         }
-        const res = await getCheckinsRemote(500);
+        const res = await getCheckinsRemote(240);
         let items = (res.items || []).filter((it: any) => {
           if (user && blockedIds.includes(it.userId)) return false;
           if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
@@ -670,58 +702,7 @@ export default function Explore() {
         }
         setCheckins(items);
         void syncPendingCheckins(1);
-        // compute top spots and attach distance if possible
-        const grouped: Record<string, any> = {};
-        items.forEach((it: any) => {
-          const name = it.spotName || it.spot || 'Unknown';
-          const key = spotKey(it.spotPlaceId, name);
-          if (!grouped[key]) {
-            grouped[key] = {
-              name,
-              count: 0,
-              example: it,
-              openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-              tagScores: {},
-              _checkins: [],
-            };
-          }
-          grouped[key].count += 1;
-          grouped[key]._checkins.push(it);
-          if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-          if (Array.isArray(it.tags)) {
-            it.tags.forEach((tag: any) => {
-              const t = String(tag || '').trim();
-              if (!t) return;
-              grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-            });
-          }
-        });
-        // Aggregate utility metrics for each spot
-        Object.values(grouped).forEach((spot: any) => {
-          const metrics = aggregateSpotMetrics(spot._checkins);
-          Object.assign(spot, metrics);
-          delete spot._checkins;
-        });
-        const arr = Object.values(grouped) as any[];
-        const focus = loc;
-        if (focus) {
-          arr.forEach((a) => {
-            const coords = a.example?.spotLatLng || a.example?.location;
-            if (coords && coords.lat && coords.lng) {
-              a.distance = loc ? haversine(loc, { lat: coords.lat, lng: coords.lng }) : haversine(focus, { lat: coords.lat, lng: coords.lng });
-            } else {
-              a.distance = Infinity;
-            }
-          });
-          arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
-        } else {
-          // Use quality-based ranking when no location
-          arr.sort((a, b) => {
-            const scoreA = calculateCompositeScore(a, loc);
-            const scoreB = calculateCompositeScore(b, loc);
-            return scoreB - scoreA;
-          });
-        }
+        const arr = buildSpotsFromCheckins(items, loc, !loc);
         if (!active) return;
         const baseSpots = arr.slice(0, 30);
         setSpots(baseSpots);
@@ -771,42 +752,7 @@ export default function Explore() {
           return true;
         });
         setCheckins(filtered);
-        const grouped: Record<string, any> = {};
-        filtered.forEach((it: any) => {
-          const name = it.spotName || it.spot || 'Unknown';
-          const key = spotKey(it.spotPlaceId, name);
-          if (!grouped[key]) {
-            grouped[key] = {
-              name,
-              count: 0,
-              example: it,
-              openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-              tagScores: {},
-              _checkins: [],
-            };
-          }
-          grouped[key].count += 1;
-          grouped[key]._checkins.push(it);
-          if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-          if (Array.isArray(it.tags)) {
-            it.tags.forEach((tag: any) => {
-              const t = String(tag || '').trim();
-              if (!t) return;
-              grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-            });
-          }
-        });
-        // Aggregate utility metrics
-        Object.values(grouped).forEach((spot: any) => {
-          const metrics = aggregateSpotMetrics(spot._checkins);
-          Object.assign(spot, metrics);
-          delete spot._checkins;
-        });
-        const offlineArr = Object.values(grouped).sort((a: any, b: any) => {
-          const scoreA = calculateCompositeScore(a, loc);
-          const scoreB = calculateCompositeScore(b, loc);
-          return scoreB - scoreA;
-        });
+        const offlineArr = buildSpotsFromCheckins(filtered, loc, true);
         if (!active) return;
         setSpots(offlineArr);
         setStatus({ message: 'Offline right now. Showing saved spots.', tone: 'warning' });
@@ -827,7 +773,7 @@ export default function Explore() {
     setSpots((prev) => {
       const next = prev.map((a) => {
         const coords = a.example?.spotLatLng || a.example?.location;
-        if (coords && coords.lat && coords.lng) {
+        if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') {
           return { ...a, distance: haversine(focus, { lat: coords.lat, lng: coords.lng }) };
         }
         return { ...a, distance: Infinity };
@@ -962,8 +908,8 @@ export default function Explore() {
         const results: any[] = [];
         if (focus) {
           const [nearbyStudy, nearbyGeneral] = await Promise.all([
-            searchPlacesNearby(focus.lat, focus.lng, 4500, 'study'),
-            searchPlacesNearby(focus.lat, focus.lng, 4500, 'general'),
+            searchPlacesNearby(focus.lat, focus.lng, 3500, 'study'),
+            searchPlacesNearby(focus.lat, focus.lng, 3500, 'general'),
           ]);
           const biasQueries = seedVibe === 'cowork'
             ? [
@@ -971,10 +917,6 @@ export default function Explore() {
                 'shared office',
                 'flex office',
                 'workspace',
-                'wework',
-                'regus',
-                'industrious',
-                'common desk',
                 'student center workspace',
               ]
             : [
@@ -983,18 +925,18 @@ export default function Explore() {
                 'library',
                 'coworking space',
                 'study spot',
-                'bookstore',
-                'student center',
-                'campus library',
+                'bookstore nearby',
               ];
           const biasResults = await Promise.all(
-            biasQueries.map((q) => searchPlacesWithBias(q, focus.lat, focus.lng, 12000, 8))
+            biasQueries.map((q) => searchPlacesWithBias(q, focus.lat, focus.lng, 9000, 6))
           );
           const merged = [...nearbyStudy];
+          const seenKeys = new Set(merged.map((m) => `${m.placeId || ''}-${m.name || ''}`));
           [nearbyGeneral, ...biasResults].forEach((list) => {
             list.forEach((p) => {
               const key = `${p.placeId || ''}-${p.name}`;
-              if (merged.some((m) => `${m.placeId || ''}-${m.name}` === key)) return;
+              if (!key || seenKeys.has(key)) return;
+              seenKeys.add(key);
               merged.push(p);
             });
           });
@@ -1382,7 +1324,7 @@ export default function Explore() {
     });
   }, [liveCheckins, spots]);
   const filteredSpots = React.useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const isNameSearch = !!q && !activeIntent;
     const byQuery = isNameSearch ? displaySpots.filter((s) => (s.name || '').toLowerCase().includes(q)) : displaySpots;
     if (aiMode) return byQuery;
@@ -1467,7 +1409,7 @@ export default function Explore() {
 
       return true;
     });
-  }, [query, displaySpots, activeIntent, aiMode, selectedFilters, vibe, matchesVibe]);
+  }, [deferredQuery, displaySpots, activeIntent, aiMode, selectedFilters, vibe, matchesVibe]);
 
   const filteredByOpen = React.useMemo(() => {
     // Hours filter is now handled in filteredSpots, but keep for backward compatibility
@@ -1506,7 +1448,7 @@ export default function Explore() {
 
     return next;
   }, [filteredByOpen, aiMode, scoreNearby, sortOption]);
-  const showRanks = !query.trim() || aiMode;
+  const showRanks = !deferredQuery.trim() || aiMode;
 
   // Memoize spot tags to avoid recomputing on every render
   const spotTagsMap = React.useMemo(() => {
@@ -1517,6 +1459,28 @@ export default function Explore() {
     });
     return map;
   }, [rankedSpots]);
+
+  const refreshSelectedSaved = React.useCallback(async (spot: any) => {
+    if (!spot) return;
+    try {
+      const list = await getSavedSpots(200);
+      const placeId = getSpotPlaceId(spot);
+      const key = placeId ? `place:${placeId}` : `name:${spot.name || ''}`;
+      setSelectedSaved(list.some((s: any) => s.key === key));
+    } catch {
+      setSelectedSaved(false);
+    }
+  }, []);
+
+  const openSpotSheet = React.useCallback((spot: any) => {
+    setSelectedSpot(spot);
+    void refreshSelectedSaved(spot);
+  }, [refreshSelectedSaved]);
+
+  const closeSpotSheet = React.useCallback(() => {
+    setSelectedSpot(null);
+    setSelectedSaved(false);
+  }, []);
 
   // Memoize spot press handler
   const handleSpotPress = useCallback((item: any) => {
@@ -1534,12 +1498,12 @@ export default function Explore() {
       recordPlaceEventRemote(eventPayload);
       openSpotSheet(item);
     } catch {}
-  }, [userId]);
+  }, [userId, openSpotSheet]);
   const listData = React.useMemo(() => {
     if (!rankedSpots.length) return [];
-    if (query.trim()) return rankedSpots;
+    if (deferredQuery.trim()) return rankedSpots;
     return rankedSpots.slice(0, 10);
-  }, [rankedSpots, query]);
+  }, [rankedSpots, deferredQuery]);
 
   const friendSuggested = React.useMemo(() => {
     if (!user) return [];
@@ -1573,7 +1537,7 @@ export default function Explore() {
   }, []);
 
   const handleRegionChange = React.useCallback((region: any) => {
-    if (!region?.latitude || !region?.longitude) return;
+    if (typeof region?.latitude !== 'number' || typeof region?.longitude !== 'number') return;
     const next = { lat: region.latitude, lng: region.longitude };
     setMapFocus((prev) => {
       if (!prev) return next;
@@ -1640,7 +1604,7 @@ export default function Explore() {
 
   function getSpotCoords(spot: any) {
     const coords = spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
-    if (!coords?.lat || !coords?.lng) return null;
+    if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
     return coords;
   }
 
@@ -1720,7 +1684,6 @@ export default function Explore() {
     };
     setQuery(moodQueries[mood] || '');
   }
-
   const selectedTags = React.useMemo(() => (
     selectedSpot ? buildSpotTags(selectedSpot) : []
   ), [selectedSpot]);
@@ -1734,9 +1697,6 @@ export default function Explore() {
         contentContainerStyle={styles.listContent}
         initialNumToRender={5}
         maxToRenderPerBatch={5}
-        windowSize={5}
-        removeClippedSubviews={true}
-        updateCellsBatchingPeriod={100}
         windowSize={7}
         updateCellsBatchingPeriod={40}
         removeClippedSubviews={Platform.OS !== 'web'}
@@ -1907,7 +1867,7 @@ export default function Explore() {
                   ) : null}
                     {markerSpots.map((s) => {
                       const coords = s.example?.spotLatLng || s.example?.location;
-                      if (!coords || !coords.lat || !coords.lng) return null;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
                       const markerKey = spotKey(s.example?.spotPlaceId || s.placeId, s.name || 'spot');
                       const isFriend = !!(user && friendIdSet.has(s.example?.userId));
                       const displayCoords = !isFriend && s.example?.visibility !== 'friends' && s.example?.visibility !== 'close'
@@ -1934,7 +1894,7 @@ export default function Explore() {
                   })}
                     {liveUnique.map((it: any) => {
                       const coords = it.spotLatLng || it.location;
-                      if (!coords?.lat || !coords?.lng) return null;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
                       const isFriend = !!(user && friendIdSet.has(it.userId));
                       const displayCoords = !isFriend && it.visibility !== 'friends' && it.visibility !== 'close'
                         ? fuzzLocation(coords, `live-${it.id}`)

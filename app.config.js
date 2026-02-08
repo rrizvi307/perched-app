@@ -16,6 +16,8 @@ module.exports = ({ config }) => {
   const env = pickEnv("EXPO_PUBLIC_ENV", "ENV") || "development";
   const segmentWriteKey = pickEnv("EXPO_PUBLIC_SEGMENT_WRITE_KEY", "SEGMENT_WRITE_KEY");
   const mixpanelToken = pickEnv("EXPO_PUBLIC_MIXPANEL_TOKEN", "MIXPANEL_TOKEN");
+  const placeIntelEndpoint = pickEnv("EXPO_PUBLIC_PLACE_INTEL_ENDPOINT", "PLACE_INTEL_ENDPOINT");
+  const firebaseFunctionsRegion = pickEnv("EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION", "FIREBASE_FUNCTIONS_REGION") || "us-central1";
 
   // External data APIs
   const yelpApiKey = pickEnv("EXPO_PUBLIC_YELP_API_KEY", "YELP_API_KEY");
@@ -66,7 +68,8 @@ module.exports = ({ config }) => {
       MIXPANEL_TOKEN: mixpanelToken || extra.MIXPANEL_TOKEN,
       YELP_API_KEY: yelpApiKey || extra.YELP_API_KEY,
       FOURSQUARE_API_KEY: foursquareApiKey || extra.FOURSQUARE_API_KEY,
+      PLACE_INTEL_ENDPOINT: placeIntelEndpoint || extra.PLACE_INTEL_ENDPOINT,
+      FIREBASE_FUNCTIONS_REGION: firebaseFunctionsRegion || extra.FIREBASE_FUNCTIONS_REGION,
     },
   };
 };
-

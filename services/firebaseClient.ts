@@ -1245,3 +1245,115 @@ export async function reauthenticateCurrentUser({ email, password }: { email: st
     throw new Error('Reauthentication not supported in this Firebase SDK');
   }
 }
+
+export async function addReactionToFirestore(reaction: {
+  id: string;
+  checkinId: string;
+  userId: string;
+  userName: string;
+  userHandle?: string;
+  type: string;
+  createdAt: number;
+}) {
+  const fb = ensureFirebase();
+  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return;
+  const db = fb.firestore();
+  const id = reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
+  await db.collection('reactions').doc(id).set({
+    ...reaction,
+    createdAt: reaction.createdAt || Date.now(),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function removeReactionFromFirestore(checkinId: string, userId: string, type: string) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId || !userId || !type) return;
+  const db = fb.firestore();
+  const snap = await db
+    .collection('reactions')
+    .where('checkinId', '==', checkinId)
+    .where('userId', '==', userId)
+    .where('type', '==', type)
+    .limit(10)
+    .get();
+  if (snap.empty) return;
+  const batch = db.batch();
+  snap.docs.forEach((doc: any) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+export async function getReactionsFromFirestore(checkinId: string) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return [];
+  const db = fb.firestore();
+  const snap = await db.collection('reactions').where('checkinId', '==', checkinId).get();
+  const items: any[] = [];
+  snap.forEach((doc: any) => {
+    items.push({ id: doc.id, ...(doc.data() || {}) });
+  });
+  return items;
+}
+
+export async function addCommentToFirestore(comment: {
+  id: string;
+  checkinId: string;
+  userId: string;
+  userName: string;
+  userHandle?: string;
+  userPhotoUrl?: string;
+  text: string;
+  createdAt: number;
+}) {
+  const fb = ensureFirebase();
+  if (!fb || !comment?.checkinId || !comment?.userId || !comment?.text) return;
+  const db = fb.firestore();
+  const id = comment.id || `comment_${Date.now()}`;
+  await db.collection('comments').doc(id).set({
+    ...comment,
+    createdAt: comment.createdAt || Date.now(),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function getCommentsFromFirestore(checkinId: string) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return [];
+  const db = fb.firestore();
+  const snap = await db.collection('comments').where('checkinId', '==', checkinId).get();
+  const items: any[] = [];
+  snap.forEach((doc: any) => {
+    items.push({ id: doc.id, ...(doc.data() || {}) });
+  });
+  return items;
+}
+
+export async function deleteCommentFromFirestore(commentId: string, userId: string) {
+  const fb = ensureFirebase();
+  if (!fb || !commentId || !userId) return;
+  const db = fb.firestore();
+  const ref = db.collection('comments').doc(commentId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const data = snap.data() || {};
+  if (data.userId !== userId) return;
+  await ref.delete();
+}
+
+export async function updateCommentInFirestore(commentId: string, userId: string, text: string) {
+  const fb = ensureFirebase();
+  if (!fb || !commentId || !userId || !text.trim()) return;
+  const db = fb.firestore();
+  const ref = db.collection('comments').doc(commentId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const data = snap.data() || {};
+  if (data.userId !== userId) return;
+  await ref.set(
+    {
+      text: text.trim(),
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}

@@ -308,7 +308,7 @@ export async function getInviteStats(userId: string): Promise<InviteStats> {
     let acceptedInvites = 0;
 
     // Count accepted invites (users who completed onboarding)
-    referralsSnap.forEach((doc) => {
+    referralsSnap.forEach((doc: any) => {
       const data = doc.data();
       if (data.onboardingComplete) {
         acceptedInvites++;

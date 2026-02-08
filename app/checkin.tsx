@@ -46,14 +46,14 @@ function dmsToDeg(value: any, ref?: string) {
 		deg = Number(value) || 0;
 	}
 	if (ref === 'S' || ref === 'W') deg *= -1;
-	return deg || null;
+	return Number.isFinite(deg) ? deg : null;
 }
 
 function exifToLocation(exif: any) {
 	if (!exif) return null;
 	const lat = dmsToDeg(exif.GPSLatitude, exif.GPSLatitudeRef);
 	const lng = dmsToDeg(exif.GPSLongitude, exif.GPSLongitudeRef);
-	if (lat && lng) return { lat, lng };
+	if (typeof lat === 'number' && typeof lng === 'number') return { lat, lng };
 	return null;
 }
 
@@ -181,11 +181,11 @@ export default function CheckinScreen() {
 		if (prefillSpot && !spot) {
 			setSpot(prefillSpot);
 		}
-		if (prefillPlaceId || (prefillLat && prefillLng)) {
+		if (prefillPlaceId || (typeof prefillLat === 'number' && typeof prefillLng === 'number')) {
 			setPlaceInfo({
 				placeId: prefillPlaceId || undefined,
 				name: prefillSpot || undefined,
-				location: prefillLat && prefillLng ? { lat: prefillLat, lng: prefillLng } : undefined,
+				location: typeof prefillLat === 'number' && typeof prefillLng === 'number' ? { lat: prefillLat, lng: prefillLng } : undefined,
 			});
 		}
 		if (editParam) {

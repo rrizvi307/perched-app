@@ -1,8 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { IconSymbol } from './icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { withAlpha } from '@/utils/colors';
-import { tokens } from '@/constants/tokens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 
