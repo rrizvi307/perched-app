@@ -47,6 +47,32 @@ type Checkin = {
 	expiresAt?: string;
 };
 
+function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems = 600): Checkin[] {
+	const keyFor = (item: any) => {
+		if (item?.id) return `id:${item.id}`;
+		if (item?.clientId) return `client:${item.clientId}`;
+		const ts = toMillis(item?.createdAt) || 0;
+		return `sig:${item?.userId || 'anon'}:${item?.spotPlaceId || item?.spotName || item?.spot || 'spot'}:${ts}`;
+	};
+	const map = new Map<string, Checkin>();
+	const upsert = (item: Checkin) => {
+		const key = keyFor(item);
+		const existingItem = map.get(key);
+		if (!existingItem) {
+			map.set(key, item);
+			return;
+		}
+		const nextTs = toMillis((item as any)?.createdAt) || 0;
+		const prevTs = toMillis((existingItem as any)?.createdAt) || 0;
+		if (nextTs >= prevTs) map.set(key, item);
+	};
+	existing.forEach(upsert);
+	incoming.forEach(upsert);
+	return Array.from(map.values())
+		.sort((a, b) => (toMillis((b as any)?.createdAt) || 0) - (toMillis((a as any)?.createdAt) || 0))
+		.slice(0, maxItems);
+}
+
 function FeedPhoto({
 	uri,
 	background,
@@ -351,7 +377,7 @@ function FeedPhoto({
 					merged = await mergeRemoteWithLocal(cleaned);
 				} catch {}
 			}
-			setItems(merged);
+			setItems(mergeUniqueCheckins([], merged as any));
 			if (user) {
 				const selfRemote = merged.filter((c: any) => c.userId === user.id);
 				if (selfRemote.length) {
@@ -376,7 +402,7 @@ function FeedPhoto({
 					setPendingError(pendingSummary.error);
 				} catch {}
 				const data = await getCheckins();
-				setItems(filterExpired(data as any));
+				setItems(mergeUniqueCheckins([], filterExpired(data as any) as any));
 				setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
 				wasOfflineRef.current = true;
 				try {
@@ -398,7 +424,7 @@ function FeedPhoto({
 				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
 				if (res.items && res.items.length) {
 					const cleaned = filterExpired(res.items as any);
-					setItems((prev) => [...prev, ...cleaned]);
+					setItems((prev) => mergeUniqueCheckins(prev, cleaned as any));
 					setRemoteCursor(res.lastCursor || null);
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
@@ -414,7 +440,7 @@ function FeedPhoto({
 			// show local items first for instant UX
 			const local = await getCheckins();
 			localCacheRef.current = local as Checkin[];
-			setItems(filterExpired(local as any));
+			setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
 			if (user) {
 				const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
 				if (selfLocal.length) {
@@ -537,7 +563,7 @@ function FeedPhoto({
 						const cleaned = filterExpired(remoteItems as any);
 						void (async () => {
 							const merged = await mergeRemoteWithLocal(cleaned);
-							setItems(merged);
+							setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 						if (cleaned.length) {
 							setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
 							setHasMoreRemote(cleaned.length >= PAGE);
@@ -584,7 +610,7 @@ function FeedPhoto({
 					const cleaned = filterExpired(remoteItems as any);
 					void (async () => {
 						const merged = await mergeRemoteWithLocal(cleaned);
-						setItems(merged);
+						setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 					if (cleaned.length) {
 						setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
 						setHasMoreRemote(cleaned.length >= PAGE);
@@ -691,7 +717,7 @@ function FeedPhoto({
 			<Atmosphere />
 			<FlatList
 				data={collapsedItems}
-				keyExtractor={(i) => i.id}
+				keyExtractor={(i, index) => i.id || (i as any).clientId || `${(i as any).userId || 'anon'}-${toMillis((i as any).createdAt) || index}-${(i as any).spotPlaceId || (i as any).spotName || 'spot'}`}
 				contentContainerStyle={styles.listContent}
 				initialNumToRender={6}
 				maxToRenderPerBatch={8}
@@ -829,6 +855,29 @@ function FeedPhoto({
 									) : null}
 									{feedScope === 'campus' && !user?.campus ? (
 										<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>Add a campus in Profile to enable this feed.</Text>
+									) : null}
+									{feedScope === 'campus' && user?.campus ? (
+										<Pressable
+											onPress={() => router.push('/campus-leaderboard' as any)}
+											style={{
+												marginTop: 8,
+												padding: 8,
+												backgroundColor: withAlpha(primary, 0.1),
+												borderRadius: 8,
+												borderWidth: 1,
+												borderColor: withAlpha(primary, 0.2)
+											}}
+										>
+											<View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+												<View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+													<IconSymbol name="trophy.fill" size={14} color={primary} />
+													<Text style={{ color: primary, fontSize: 12, fontWeight: '600' }}>
+														View Campus Leaderboard
+													</Text>
+												</View>
+												<IconSymbol name="chevron.right" size={12} color={primary} />
+											</View>
+										</Pressable>
 									) : null}
 								</View>
 							) : null}

@@ -16,6 +16,8 @@ import { getSmartSpotData, getTimeAwareRecommendations, type SmartSpotData } fro
 import { getLifestyleSpotData, type LifestyleSpotData, type CuratedList } from '@/services/lifestyleDataService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { usePremium } from '@/hooks/use-premium';
+import { PaywallModal } from '@/components/ui/paywall-modal';
 import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
@@ -387,6 +389,7 @@ const FILTER_GROUPS: FilterGroup[] = [
     title: 'Spot Intel',
     icon: 'chart.bar.fill',
     multiSelect: true,
+    premium: true, // Premium feature
     options: [
       { id: 'fast-wifi', label: '🚀 Fast WiFi', value: 'fast-wifi' },
       { id: 'has-outlets', label: '🔌 Has Outlets', value: 'has-outlets' },
@@ -428,6 +431,7 @@ export default function Explore() {
 
   const router = useRouter();
   const { user } = useAuth();
+  const { isPremium } = usePremium();
   const userId = user?.id || null;
   const border = useThemeColor({}, 'border');
   const card = useThemeColor({}, 'card');
@@ -457,8 +461,19 @@ export default function Explore() {
   const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
   const [status, setStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'error' | 'success' } | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallFeature, setPaywallFeature] = useState<string>('');
   const { showToast } = useToast();
-  const friendIdSet = React.useMemo(() => new Set(friendIds), [friendIds]);
+  const friendIdsKey = React.useMemo(() => friendIds.slice().sort().join(','), [friendIds]);
+  const blockedIdsKey = React.useMemo(() => blockedIds.slice().sort().join(','), [blockedIds]);
+  const friendIdSet = React.useMemo(
+    () => new Set(friendIdsKey ? friendIdsKey.split(',').filter(Boolean) : []),
+    [friendIdsKey]
+  );
+  const blockedIdSet = React.useMemo(
+    () => new Set(blockedIdsKey ? blockedIdsKey.split(',').filter(Boolean) : []),
+    [blockedIdsKey]
+  );
   const campusKey = user?.campus || null;
   const wasOfflineRef = React.useRef(false);
   const detailFetchRef = React.useRef(new Set<string>());
@@ -505,11 +520,21 @@ export default function Explore() {
     setSeedSpots([]);
   }, [demoMode]);
   const mapCenter = React.useMemo(() => {
+    // User-set focus always wins
     if (mapFocus) return mapFocus;
+
+    // Demo mode: prefer demo data over device location
+    const demoModeEnabled = isDemoMode();
+    if (demoModeEnabled) {
+      const first = (spots.length ? spots : seedSpots).find((s) => s.example?.spotLatLng || s.example?.location);
+      const coords = first?.example?.spotLatLng || first?.example?.location;
+      if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') return { lat: coords.lat, lng: coords.lng };
+    }
+
+    // Non-demo: use device location if available
     if (loc) return loc;
-    const first = (spots.length ? spots : seedSpots).find((s) => s.example?.spotLatLng || s.example?.location);
-    const coords = first?.example?.spotLatLng || first?.example?.location;
-    if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') return { lat: coords.lat, lng: coords.lng };
+
+    // Final fallback: Houston default
     return { lat: 29.7604, lng: -95.3698 };
   }, [mapFocus, loc, spots, seedSpots]);
   const fallbackMapUrl = React.useMemo(() => {
@@ -640,7 +665,7 @@ export default function Explore() {
   useEffect(() => {
     let active = true;
     const locKey = loc ? `${loc.lat.toFixed(2)}:${loc.lng.toFixed(2)}` : 'none';
-    const fetchKey = `${scope}|${userId || 'anon'}|${campusKey || 'none'}|${friendIds.join(',')}|${blockedIds.join(',')}|${locKey}|${refreshToken}`;
+    const fetchKey = `${scope}|${userId || 'anon'}|${campusKey || 'none'}|${friendIdsKey}|${blockedIdsKey}|${locKey}|${refreshToken}`;
     if (fetchKeyRef.current === fetchKey) return;
     fetchKeyRef.current = fetchKey;
     (async () => {
@@ -655,10 +680,10 @@ export default function Explore() {
           try {
             items = await getCheckins();
           } catch {}
-          items = (items || []).filter((it: any) => {
-            if (user && blockedIds.includes(it.userId)) return false;
-            if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-            if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+            items = (items || []).filter((it: any) => {
+            if (user && blockedIdSet.has(it.userId)) return false;
+            if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+            if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
             if (!passesScope(it)) return false;
             return true;
           });
@@ -672,9 +697,9 @@ export default function Explore() {
         }
         const res = await getCheckinsRemote(240);
         let items = (res.items || []).filter((it: any) => {
-          if (user && blockedIds.includes(it.userId)) return false;
-          if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-          if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+          if (user && blockedIdSet.has(it.userId)) return false;
+          if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+          if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
           if (!passesScope(it)) return false;
           return true;
         });
@@ -691,9 +716,9 @@ export default function Explore() {
 	            await seedDemoNetwork(user?.id);
 	            const local = await getCheckins();
 	            const fallback = local.filter((it: any) => {
-	              if (user && blockedIds.includes(it.userId)) return false;
-	              if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-	              if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+	              if (user && blockedIdSet.has(it.userId)) return false;
+	              if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+	              if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
 	              if (!passesScope(it)) return false;
 	              return true;
 	            });
@@ -745,9 +770,9 @@ export default function Explore() {
       } catch {
         const local = await getCheckins();
         const filtered = local.filter((it: any) => {
-          if (user && blockedIds.includes(it.userId)) return false;
-          if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-          if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+          if (user && blockedIdSet.has(it.userId)) return false;
+          if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+          if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
           if (!passesScope(it)) return false;
           return true;
         });
@@ -765,7 +790,7 @@ export default function Explore() {
     return () => {
       active = false;
     };
-  }, [scope, friendIds, user, userId, loc, blockedIds, refreshToken, showToast, campusKey, passesScope]);
+  }, [scope, user, userId, loc, refreshToken, showToast, campusKey, passesScope, friendIdsKey, blockedIdsKey, friendIdSet, blockedIdSet]);
 
   useEffect(() => {
     const focus = loc || mapFocus;
@@ -1541,22 +1566,17 @@ export default function Explore() {
         return;
       }
 
-      // If we already have a location, just re-center without extra prompts.
-      if (loc) {
-        setMapFocus(loc);
-        return;
-      }
-
       try {
         await setPermissionPrimerSeen('location', true);
         await setLocationEnabled(true);
       } catch {}
 
-      const current = await requestForegroundLocation();
+      // Always request fresh location, ignore cache
+      const current = await requestForegroundLocation({ ignoreCache: true });
       if (current) {
         setLoc(current);
-        setMapFocus(current);
-        showToast('Centered on you.', 'success');
+        setMapFocus(current); // Force map to center on new location
+        showToast('Location updated', 'success');
         return;
       }
 
@@ -1784,6 +1804,29 @@ export default function Explore() {
                   {scope === 'campus' && !campusKey ? (
                     <Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>Add a campus in Profile to enable this feed.</Text>
                   ) : null}
+                  {scope === 'campus' && campusKey ? (
+                    <Pressable
+                      onPress={() => router.push('/campus-leaderboard' as any)}
+                      style={{
+                        marginTop: 8,
+                        padding: 8,
+                        backgroundColor: withAlpha(primary, 0.1),
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: withAlpha(primary, 0.2)
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <IconSymbol name="trophy.fill" size={14} color={primary} />
+                          <Text style={{ color: primary, fontSize: 12, fontWeight: '600' }}>
+                            View Campus Leaderboard
+                          </Text>
+                        </View>
+                        <IconSymbol name="chevron.right" size={12} color={primary} />
+                      </View>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             ) : null}
@@ -1795,6 +1838,12 @@ export default function Explore() {
                   ...prev,
                   [groupId]: values,
                 }));
+              }}
+              isPremium={isPremium}
+              onPremiumRequired={(groupId) => {
+                const group = FILTER_GROUPS.find(g => g.id === groupId);
+                setPaywallFeature(group?.title || 'Advanced Filters');
+                setShowPaywall(true);
               }}
             />
             <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
@@ -2230,6 +2279,18 @@ export default function Explore() {
           </Pressable>
         </Pressable>
       ) : null}
+
+      {/* Premium Paywall */}
+      <PaywallModal
+        visible={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        onSelectPlan={(period) => {
+          setShowPaywall(false);
+          // TODO: Integrate payment processing
+          showToast('Payment integration coming soon!', 'info');
+        }}
+        feature={paywallFeature}
+      />
     </ThemedView>
   );
 }

@@ -287,6 +287,232 @@ export function addNotificationResponseListener(
   });
 }
 
+/**
+ * ADVANCED: Optimal notification timing based on user behavior
+ */
+export async function getOptimalNotificationHour(userId: string): Promise<number> {
+  try {
+    // Import here to avoid circular dependency
+    const { getUserPreferences } = await import('./recommendations');
+    const userPrefs = await getUserPreferences(userId);
+
+    if (userPrefs.checkinTimes.length > 0) {
+      const avgHour =
+        userPrefs.checkinTimes.reduce((a: number, b: number) => a + b, 0) /
+        userPrefs.checkinTimes.length;
+      return Math.round(avgHour);
+    }
+
+    return 14; // Default 2 PM
+  } catch (error) {
+    console.error('Failed to get optimal notification hour:', error);
+    return 14;
+  }
+}
+
+/**
+ * ADVANCED: Check for friends nearby with smart detection
+ */
+export async function checkAndNotifyFriendsNearby(
+  userId: string,
+  userLocation: { lat: number; lng: number }
+): Promise<void> {
+  try {
+    const prefs = await getNotificationPreferences();
+    if (!prefs.enabled || !prefs.friendActivity) return;
+
+    // Rate limit: only check once per hour
+    const lastCheckKey = `@last_friend_check_${userId}`;
+    const lastCheck = await AsyncStorage.getItem(lastCheckKey);
+    if (lastCheck) {
+      const lastTime = parseInt(lastCheck, 10);
+      if (Date.now() - lastTime < 60 * 60 * 1000) return;
+    }
+
+    await AsyncStorage.setItem(lastCheckKey, Date.now().toString());
+
+    // Import firebaseClient to check for nearby friends
+    const { ensureFirebase, getUserFriendsCached } = await import('./firebaseClient');
+    const fb = ensureFirebase();
+    if (!fb) return;
+
+    const db = fb.firestore();
+
+    // Get user's friends from canonical user profile relation.
+    const friendIds = await getUserFriendsCached(userId, 60_000);
+    if (friendIds.length === 0) return;
+
+    // Get recent check-ins from friends (last 2 hours)
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const since = fb.firestore.Timestamp.fromDate(twoHoursAgo);
+    const snapshots = await Promise.all(
+      friendIds.slice(0, 50).reduce<string[][]>((batches, friendId, index) => {
+        const batchIndex = Math.floor(index / 10);
+        if (!batches[batchIndex]) batches[batchIndex] = [];
+        batches[batchIndex].push(friendId);
+        return batches;
+      }, []).map((batch) =>
+        db
+          .collection('checkins')
+          .where('userId', 'in', batch)
+          .where('createdAt', '>=', since)
+          .get()
+      )
+    );
+
+    // Calculate distances
+    const nearbyFriends: Array<{ name: string; spotName: string; distance: number }> = [];
+    snapshots.forEach((checkinsSnapshot) => {
+      checkinsSnapshot.forEach((doc: any) => {
+        const data = doc.data();
+        const spotLatLng = data.spotLatLng || data.location;
+
+        if (spotLatLng) {
+          const distance = haversineDistance(
+            userLocation.lat,
+            userLocation.lng,
+            spotLatLng.lat,
+            spotLatLng.lng
+          );
+
+          if (distance <= 2) {
+            // Within 2km
+            nearbyFriends.push({
+              name: data.userName || 'A friend',
+              spotName: data.spotName || 'a nearby spot',
+              distance,
+            });
+          }
+        }
+      });
+    });
+
+    if (nearbyFriends.length > 0) {
+      const friend = nearbyFriends.sort((a, b) => a.distance - b.distance)[0];
+      await notifyFriendActivity(friend.name, friend.spotName, 'nearby');
+    }
+  } catch (error) {
+    console.error('Failed to check friends nearby:', error);
+  }
+}
+
+/**
+ * ADVANCED: Send trending spot alert
+ */
+export async function notifyTrendingSpot(
+  spotName: string,
+  checkinCount: number
+): Promise<void> {
+  const prefs = await getNotificationPreferences();
+  if (!prefs.enabled || !prefs.nearbySpots) return;
+
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: '🔥 Spot Trending',
+      body: `${spotName} is buzzing! ${checkinCount} check-ins today.`,
+      data: { type: 'trending', spot: spotName },
+    },
+    trigger: null,
+  });
+
+  track('notification_sent', {
+    type: 'trending_spot',
+    spot_name: spotName,
+    checkin_count: checkinCount,
+  });
+}
+
+/**
+ * ADVANCED: Notification analytics tracking
+ */
+export async function trackNotificationEngagement(
+  notificationType: string,
+  action: 'sent' | 'opened' | 'dismissed'
+): Promise<void> {
+  try {
+    const key = `@notif_analytics_${notificationType}_${action}`;
+    const countStr = await AsyncStorage.getItem(key);
+    const count = countStr ? parseInt(countStr, 10) : 0;
+    await AsyncStorage.setItem(key, (count + 1).toString());
+
+    track(`notification_${action}`, {
+      type: notificationType,
+      count: count + 1,
+    });
+  } catch (error) {
+    console.error('Failed to track notification engagement:', error);
+  }
+}
+
+/**
+ * ADVANCED: Get notification engagement stats
+ */
+export async function getNotificationStats(): Promise<{
+  [type: string]: { sent: number; opened: number; openRate: number };
+}> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const analyticsKeys = keys.filter(k => k.includes('@notif_analytics_'));
+
+    const stats: { [type: string]: { sent: number; opened: number; openRate: number } } = {};
+
+    for (const key of analyticsKeys) {
+      const parts = key.split('_');
+      if (parts.length >= 4) {
+        const type = parts[2];
+        const action = parts[3];
+        const countStr = await AsyncStorage.getItem(key);
+        const count = countStr ? parseInt(countStr, 10) : 0;
+
+        if (!stats[type]) {
+          stats[type] = { sent: 0, opened: 0, openRate: 0 };
+        }
+
+        if (action === 'sent') stats[type].sent = count;
+        if (action === 'opened') stats[type].opened = count;
+      }
+    }
+
+    // Calculate open rates
+    Object.keys(stats).forEach(type => {
+      if (stats[type].sent > 0) {
+        stats[type].openRate = (stats[type].opened / stats[type].sent) * 100;
+      }
+    });
+
+    return stats;
+  } catch (error) {
+    console.error('Failed to get notification stats:', error);
+    return {};
+  }
+}
+
+// Helper function
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRad(degrees: number): number {
+  return degrees * (Math.PI / 180);
+}
+
 export default {
   initPushNotifications,
   getNotificationPreferences,
@@ -298,4 +524,10 @@ export default {
   sendSmartCheckInSuggestion,
   addNotificationReceivedListener,
   addNotificationResponseListener,
+  // Advanced features
+  getOptimalNotificationHour,
+  checkAndNotifyFriendsNearby,
+  notifyTrendingSpot,
+  trackNotificationEngagement,
+  getNotificationStats,
 };
