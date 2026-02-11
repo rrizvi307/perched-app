@@ -37,7 +37,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run TypeScript type check
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test -- --runInBand
 
   security-audit:
     name: Security Audit

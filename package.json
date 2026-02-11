@@ -10,6 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
+    "preflight": "node ./scripts/release-preflight.js",
+    "preflight:release": "node ./scripts/release-preflight.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
