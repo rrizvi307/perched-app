@@ -621,7 +621,7 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
 }
 
 export const placeSignalsProxy = functions
-  .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY'] })
+  .runWith({ secrets: ['YELP_API_KEY'] })
   .https.onRequest(async (req, res) => {
   withCors(res);
   if (req.method === 'OPTIONS') {
@@ -655,6 +655,13 @@ export const placeSignalsProxy = functions
     runtimeConfig?.places?.require_app_check,
   );
   const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
+
+  // Temporary fail-safe: disable Foursquare provider unless explicitly enabled.
+  const enableFoursquareRaw = readFirstNonEmpty(
+    process.env.PLACE_INTEL_ENABLE_FOURSQUARE,
+    runtimeConfig?.places?.enable_foursquare,
+  );
+  const enableFoursquare = ['1', 'true', 'yes', 'on'].includes((enableFoursquareRaw || '').toLowerCase());
 
   if (!hasSecretBypass) {
     const uid = await verifyFirebaseUserFromRequest(req);
@@ -692,7 +699,7 @@ export const placeSignalsProxy = functions
     return;
   }
 
-  const cacheKey = `${placeName.toLowerCase()}:${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  const cacheKey = `${placeName.toLowerCase()}:${lat.toFixed(3)}:${lng.toFixed(3)}:fsq${enableFoursquare ? '1' : '0'}`;
   const cached = placeSignalCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < PLACE_SIGNAL_TTL_MS) {
     res.status(200).json({ externalSignals: cached.payload, cacheHit: true });
@@ -701,7 +708,7 @@ export const placeSignalsProxy = functions
 
   try {
     const [foursquare, yelp] = await Promise.all([
-      fetchFoursquareSignalServer(placeName, lat, lng),
+      enableFoursquare ? fetchFoursquareSignalServer(placeName, lat, lng) : Promise.resolve(null),
       fetchYelpSignalServer(placeName, lat, lng),
     ]);
     const externalSignals = parseExternalSignals([foursquare, yelp]);
