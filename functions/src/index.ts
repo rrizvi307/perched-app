@@ -570,13 +570,15 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
     );
   }
   if (!key) return null;
+  // `businesses/matches` now requires address fields; use search with location bias instead.
   const params = new URLSearchParams({
-    name: placeName,
+    term: placeName,
     latitude: String(lat),
     longitude: String(lng),
     limit: '1',
+    sort_by: 'best_match',
   });
-  const url = `https://api.yelp.com/v3/businesses/matches?${params.toString()}`;
+  const url = `https://api.yelp.com/v3/businesses/search?${params.toString()}`;
   const json = await fetchJsonWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${key}`,
