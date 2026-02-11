@@ -17,6 +17,7 @@ import { getForegroundLocationIfPermitted } from '@/services/location';
 import StatusBanner from '@/components/ui/status-banner';
 import { useToast } from '@/contexts/ToastContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { isPremiumPurchasesEnabled } from '@/services/premium';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
@@ -57,6 +58,7 @@ export default function ProfileScreen() {
   const { user, updateProfile } = useAuth();
   const { preference } = useThemePreference();
   const { isPremium } = usePremium();
+  const premiumPurchasesEnabled = isPremiumPurchasesEnabled();
   const systemScheme = useColorScheme();
   const textColor = useThemeColor({}, 'text');
   const borderColor = useThemeColor({}, 'border');
@@ -846,16 +848,18 @@ export default function ProfileScreen() {
                 >
                   View Achievements
                 </PremiumButton>
-                <PremiumButton
-                  onPress={() => router.push('/subscription' as any)}
-                  variant={isPremium ? 'ghost' : 'primary'}
-                  size="medium"
-                  icon={isPremium ? 'sparkles' : 'star.fill'}
-                  fullWidth
-                  style={{ marginTop: 8 }}
-                >
-                  {isPremium ? 'Manage Premium' : 'Upgrade to Premium'}
-                </PremiumButton>
+                {premiumPurchasesEnabled || isPremium ? (
+                  <PremiumButton
+                    onPress={() => router.push('/subscription' as any)}
+                    variant={isPremium ? 'ghost' : 'primary'}
+                    size="medium"
+                    icon={isPremium ? 'sparkles' : 'star.fill'}
+                    fullWidth
+                    style={{ marginTop: 8 }}
+                  >
+                    {isPremium ? 'Manage Premium' : 'Upgrade to Premium'}
+                  </PremiumButton>
+                ) : null}
               </>
             )}
             <MetricsImpactCard />

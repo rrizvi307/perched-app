@@ -1,5 +1,6 @@
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import type { PlaceIntelligence } from '@/services/placeIntelligence';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
 import React from 'react';
@@ -14,6 +15,7 @@ type SpotListItemProps = {
   mapKey: string | null;
   maxSpotCount: number;
   showRanks: boolean;
+  intelligence?: PlaceIntelligence | null;
   onPress: () => void;
   describeSpot: (name?: string, address?: string) => string;
   formatDistance: (distanceKm?: number) => string;
@@ -29,6 +31,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   mapKey,
   maxSpotCount,
   showRanks,
+  intelligence,
   onPress,
   describeSpot,
   formatDistance,
@@ -49,6 +52,15 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const intelNoiseSource = item?.display?.noiseSource || (item?.live?.noise ? 'live' : item?.intel?.inferredNoise ? 'inferred' : null);
   const intelRating = item?.intel?.avgRating || item?.rating;
   const intelPrice = item?.intel?.priceLevel;
+  const workScore = intelligence?.workScore;
+  const workScoreTone = typeof workScore === 'number'
+    ? workScore >= 78
+      ? '#22C55E'
+      : workScore >= 62
+        ? '#F59E0B'
+        : '#F97316'
+    : muted;
+  const smartHighlight = intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null;
 
   return (
     <Pressable
@@ -72,6 +84,38 @@ const SpotListItem = React.memo<SpotListItemProps>(({
       )}
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
+        {intelligence ? (
+          <View style={styles.smartRow}>
+            <View
+              style={[
+                styles.workScoreBadge,
+                {
+                  borderColor: withAlpha(workScoreTone, 0.4),
+                  backgroundColor: withAlpha(workScoreTone, 0.15),
+                },
+              ]}
+            >
+              <View style={[styles.workScoreDot, { backgroundColor: workScoreTone }]} />
+              <Text style={{ color: workScoreTone, fontSize: 11, fontWeight: '800' }}>
+                {Math.round(intelligence.workScore)} Work Score
+              </Text>
+            </View>
+            {intelligence.bestTime !== 'anytime' ? (
+              <View style={[styles.bestTimeChip, { borderColor: border }]}>
+                <Text style={{ color: muted, fontSize: 10, fontWeight: '700', textTransform: 'capitalize' }}>
+                  Best {intelligence.bestTime}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {smartHighlight ? (
+          <View style={[styles.highlightChip, { borderColor: border, backgroundColor: withAlpha(primary, 0.08) }]}>
+            <Text style={{ color: text, fontSize: 11, fontWeight: '600' }} numberOfLines={1}>
+              {smartHighlight}
+            </Text>
+          </View>
+        ) : null}
         {/* Distance and walk time - prominent display */}
         {item.distance !== undefined && item.distance !== Infinity && item.distance > 0 ? (
           <Text style={{ color: primary, fontSize: 12, fontWeight: '600', marginTop: 4 }}>
@@ -257,6 +301,10 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     prevProps.friendCount === nextProps.friendCount &&
     prevProps.index === nextProps.index &&
     prevProps.showRanks === nextProps.showRanks &&
+    prevProps.intelligence?.workScore === nextProps.intelligence?.workScore &&
+    prevProps.intelligence?.bestTime === nextProps.intelligence?.bestTime &&
+    (prevProps.intelligence?.highlights?.[0] || '') === (nextProps.intelligence?.highlights?.[0] || '') &&
+    (prevProps.intelligence?.useCases?.[0] || '') === (nextProps.intelligence?.useCases?.[0] || '') &&
     prevProps.tags.length === nextProps.tags.length &&
     prevProps.item.openNow === nextProps.item.openNow
   );
@@ -278,6 +326,42 @@ const styles = StyleSheet.create({
     width: 100,
     height: 80,
     borderRadius: 10,
+  },
+  smartRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  workScoreBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  workScoreDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  bestTimeChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  highlightChip: {
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    maxWidth: '100%',
   },
   metricsRow: {
     flexDirection: 'row',

@@ -13,7 +13,7 @@ import { usePremium } from '@/hooks/use-premium';
 import { withAlpha } from '@/utils/colors';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { PremiumButton } from '@/components/ui/premium-button';
-import { cancelPremiumSubscription, PRICING } from '@/services/premium';
+import { cancelPremiumSubscription, isPremiumPurchasesEnabled, PRICING } from '@/services/premium';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import * as Haptics from 'expo-haptics';
@@ -41,6 +41,7 @@ export default function SubscriptionScreen() {
     isPurchasedPremium,
     willAutoRenew,
   } = usePremium();
+  const premiumPurchasesEnabled = isPremiumPurchasesEnabled();
 
   const [cancelling, setCancelling] = useState(false);
 
@@ -55,6 +56,10 @@ export default function SubscriptionScreen() {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
+    if (!premiumPurchasesEnabled) {
+      showToast('Premium purchases are temporarily unavailable in this beta build.', 'info');
+      return;
+    }
     router.push('/premium-upgrade');
   };
 
@@ -161,7 +166,7 @@ export default function SubscriptionScreen() {
         </View>
 
         {/* Pricing */}
-        {!isPremium && (
+        {!isPremium && premiumPurchasesEnabled && (
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: text }]}>Pricing</Text>
 
@@ -197,11 +202,16 @@ export default function SubscriptionScreen() {
 
         {/* Actions */}
         <View style={styles.actions}>
-          {!isPremium && (
+          {!isPremium && premiumPurchasesEnabled && (
             <PremiumButton onPress={handleUpgrade} variant="primary" size="large" fullWidth>
               Upgrade to Premium
             </PremiumButton>
           )}
+          {!isPremium && !premiumPurchasesEnabled ? (
+            <Text style={[styles.footerText, { color: muted, marginBottom: 10 }]}>
+              Premium purchases are disabled for this beta build.
+            </Text>
+          ) : null}
 
           {isPremium && isPurchasedPremium && willAutoRenew && (
             <PremiumButton

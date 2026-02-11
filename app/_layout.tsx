@@ -17,6 +17,7 @@ import { ensureDemoModeReady, isDemoMode } from '@/services/demoMode';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
+import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken } from '@/services/firebaseClient';
 
@@ -89,6 +90,14 @@ function InnerApp() {
 
   useEffect(() => {
     void ensureDemoModeReady(user?.id);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || isDemoMode()) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void learnUserPreferences(user.id);
+    });
+    return () => task.cancel();
   }, [user?.id]);
 
   useEffect(() => {

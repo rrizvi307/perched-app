@@ -12,6 +12,9 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "INTEL_V1_ENABLED": "true"
+      },
       "ios": {
         "simulator": false
       }
@@ -29,11 +32,8 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "rehan.rizvi307@gmail.com",
-        "ascAppId": "",
-        "appleTeamId": ""
+        "appleId": "rehan.rizvi307@gmail.com"
       }
     }
   }
 }
-

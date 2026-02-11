@@ -76,8 +76,6 @@ export function ReactionBar({
         const isActive = userReaction === type;
         const isAnimating = animating === type;
 
-        if (count === 0 && !isActive) return null; // Hide unused reactions
-
         return (
           <Pressable
             key={type}
@@ -109,19 +107,6 @@ export function ReactionBar({
           </Pressable>
         );
       })}
-
-      {/* Quick add button for unused reactions */}
-      <Pressable
-        style={[
-          styles.addButton,
-          {
-            backgroundColor: surface,
-            borderColor: border,
-          },
-        ]}
-      >
-        <Text style={{ fontSize: 16 }}>➕</Text>
-      </Pressable>
     </View>
   );
 }
@@ -147,13 +132,5 @@ const styles = StyleSheet.create({
   },
   count: {
     fontSize: tokens.type.small.fontSize,
-  },
-  addButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

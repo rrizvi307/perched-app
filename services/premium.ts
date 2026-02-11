@@ -80,8 +80,14 @@ let purchasesInitialized = false;
 
 function getRevenueCatModule(): RevenueCatModule | null {
   if (revenueCat !== undefined) return revenueCat;
+  if (!isPremiumPurchasesEnabled()) {
+    revenueCat = null;
+    return revenueCat;
+  }
   try {
-    const loaded = require('react-native-purchases');
+    // Use runtime require so beta builds can run without the package installed.
+    const runtimeRequire = (globalThis as any)?.require || eval('require');
+    const loaded = runtimeRequire('react-native-purchases');
     revenueCat = (loaded?.default ?? loaded) as RevenueCatModule;
   } catch {
     revenueCat = null;
@@ -94,6 +100,17 @@ function getRevenueCatPublicKey(providedKey?: string): string {
   const globalKey = (global as any)?.REVENUECAT_PUBLIC_KEY;
   const resolved = providedKey || expoExtraKey || globalKey || '';
   return typeof resolved === 'string' ? resolved.trim() : '';
+}
+
+/**
+ * True only when a usable RevenueCat public key is configured.
+ * Use this to gate premium purchase UI during beta.
+ */
+export function isPremiumPurchasesEnabled(providedKey?: string): boolean {
+  const key = getRevenueCatPublicKey(providedKey);
+  if (!key) return false;
+  if (key === 'YOUR_REVENUECAT_PUBLIC_KEY') return false;
+  return true;
 }
 
 /**
@@ -178,11 +195,12 @@ export async function hasFeatureAccess(userId: string, feature: PremiumFeature):
  * Initialize RevenueCat purchases client (no-op if package/key are unavailable).
  */
 export function initializePurchases(apiKey?: string): void {
+  if (!isPremiumPurchasesEnabled(apiKey)) return;
   const purchases = getRevenueCatModule();
   if (!purchases || purchasesInitialized) return;
 
   const key = getRevenueCatPublicKey(apiKey);
-  if (!key || key === 'YOUR_REVENUECAT_PUBLIC_KEY') return;
+  if (!key) return;
 
   try {
     purchases.configure({ apiKey: key });
@@ -197,6 +215,7 @@ export function initializePurchases(apiKey?: string): void {
  */
 export async function checkPremiumStatus(): Promise<boolean> {
   try {
+    if (!isPremiumPurchasesEnabled()) return false;
     initializePurchases();
     const purchases = getRevenueCatModule();
     if (!purchases || typeof purchases.getCustomerInfo !== 'function') {
@@ -233,6 +252,7 @@ export async function checkPremiumAccess(userId?: string): Promise<boolean> {
  */
 export async function purchasePremium(productId: 'monthly' | 'yearly'): Promise<boolean> {
   try {
+    if (!isPremiumPurchasesEnabled()) return false;
     initializePurchases();
     const purchases = getRevenueCatModule() as any;
     if (!purchases) return false;

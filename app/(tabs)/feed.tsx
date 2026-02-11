@@ -6,6 +6,7 @@ import StatusBanner from '@/components/ui/status-banner';
 import { PolishedCard } from '@/components/ui/polished-card';
 import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ReactionBar } from '@/components/ui/reaction-bar';
 import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins, seedDemoNetwork } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
@@ -19,6 +20,7 @@ import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
+import { getReactions, type ReactionType } from '@/services/social';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
@@ -46,6 +48,25 @@ type Checkin = {
 	campusOrCity?: string;
 	expiresAt?: string;
 };
+
+type ReactionSummary = {
+	counts: Record<ReactionType, number>;
+	userReaction: ReactionType | null;
+};
+
+function toReactionSummary(reactions: any[], userId?: string | null): ReactionSummary {
+	const counts = {} as Record<ReactionType, number>;
+	let userReaction: ReactionType | null = null;
+	reactions.forEach((reaction: any) => {
+		const type = reaction?.type as ReactionType | undefined;
+		if (!type) return;
+		counts[type] = (counts[type] || 0) + 1;
+		if (userId && reaction?.userId === userId) {
+			userReaction = type;
+		}
+	});
+	return { counts, userReaction };
+}
 
 function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems = 600): Checkin[] {
 	const keyFor = (item: any) => {
@@ -179,6 +200,7 @@ function FeedPhoto({
 	const [incomingRequests, setIncomingRequests] = useState<any[]>([]);
 	const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
 	const [lastSelfCheckinAt, setLastSelfCheckinAt] = useState<string | null>(null);
+	const [reactionByCheckin, setReactionByCheckin] = useState<Record<string, ReactionSummary>>({});
 	const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
 	const blockedIdSet = useMemo(() => new Set(blockedIds), [blockedIds]);
 	const incomingById = useMemo(() => new Set(incomingRequests.map((r) => r.fromId)), [incomingRequests]);
@@ -227,6 +249,17 @@ function FeedPhoto({
 			setOutgoingRequests(outgoing || []);
 		} catch {}
 	}, [user]);
+
+	const loadReactionsForCheckin = useCallback(async (checkinId: string) => {
+		if (!checkinId) return;
+		try {
+			const reactions = await getReactions(checkinId);
+			setReactionByCheckin((prev) => ({
+				...prev,
+				[checkinId]: toReactionSummary(reactions, user?.id),
+			}));
+		} catch {}
+	}, [user?.id]);
 
 	// Feed shows full history; "live" is a 24h status indicated with a dot.
 	const filterExpired = useCallback((list: Checkin[]) => list, []);
@@ -709,8 +742,37 @@ function FeedPhoto({
 			return Object.values(map).map((v) => ({ ...v.item, groupCount: v.live, totalCount: v.total })) as any[];
 			}, [visibleItems]);
 
+		const trendingSpots = useMemo(() => {
+			return [...collapsedItems]
+				.filter((item: any) => ((item as any).groupCount || 0) > 0)
+				.sort((a: any, b: any) => ((b as any).groupCount || 0) - ((a as any).groupCount || 0))
+				.slice(0, 3);
+		}, [collapsedItems]);
+
 		const liveCount = collapsedItems.reduce((sum, it) => sum + ((it as any).groupCount || 0), 0);
 		const demoMode = isDemoMode();
+
+		useEffect(() => {
+			const ids = collapsedItems
+				.map((item: any) => String((item as any).id || (item as any).clientId || ''))
+				.filter(Boolean)
+				.slice(0, 12)
+				.filter((id) => !reactionByCheckin[id]);
+			if (!ids.length) return;
+			let active = true;
+			const task = InteractionManager.runAfterInteractions(() => {
+				ids.forEach((id) => {
+					void (async () => {
+						if (!active) return;
+						await loadReactionsForCheckin(id);
+					})();
+				});
+			});
+			return () => {
+				active = false;
+				task.cancel();
+			};
+		}, [collapsedItems, reactionByCheckin, loadReactionsForCheckin]);
 
 	return (
 		<ThemedView style={styles.container}>
@@ -811,24 +873,58 @@ function FeedPhoto({
 							>
 								<Text style={{ color: text, fontWeight: '600' }}>Explore</Text>
 							</Pressable>
-                            
-								<Pressable
-									onPress={async () => {
-											await Share.share({ message: 'Join me on Perched. Download: https://perched.app' });
-									}}
-									style={({ pressed }) => [
-										styles.quickButton,
-										{ borderColor: border, backgroundColor: pressed ? highlight : card },
+							<Pressable
+								onPress={async () => {
+									await Share.share({ message: 'Join me on Perched. Download: https://perched.app' });
+								}}
+								style={({ pressed }) => [
+									styles.quickButton,
+									{ borderColor: border, backgroundColor: pressed ? highlight : card },
 								]}
 							>
 								<Text style={{ color: text, fontWeight: '600' }}>Invite</Text>
 							</Pressable>
 						</View>
-							{user && needsDailyCheckin ? (
-								<Text style={{ color: muted, marginTop: 10 }}>
-									{selfCheckinCount === 0 ? 'Get your streak going — tap in today.' : 'Keep your streak going — tap in today.'}
-								</Text>
-							) : null}
+						{trendingSpots.length ? (
+							<View style={[styles.trendingCard, { borderColor: border, backgroundColor: card }]}>
+								<View style={styles.trendingHeader}>
+									<Text style={{ color: muted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.7 }}>
+										Trending now
+									</Text>
+									<Text style={{ color: muted, fontSize: 11 }}>Live hotspots in your network</Text>
+								</View>
+								<View style={styles.trendingList}>
+									{trendingSpots.map((spot: any, index) => {
+										const placeId = (spot as any).spotPlaceId || '';
+										const name = spot.spotName || spot.spot || 'Unknown spot';
+										const count = Math.max(1, (spot as any).groupCount || 0);
+										return (
+											<Pressable
+												key={`${placeId || name}-${index}`}
+												onPress={() => {
+													router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(name)}`);
+												}}
+												style={({ pressed }) => [
+													styles.trendingRow,
+													{
+														borderColor: border,
+														backgroundColor: pressed ? highlight : 'transparent',
+													},
+												]}
+											>
+												<Text style={{ color: text, fontWeight: '700' }}>{index + 1}. {name}</Text>
+												<Text style={{ color: muted, fontSize: 12 }}>{count} check-ins today</Text>
+											</Pressable>
+										);
+									})}
+								</View>
+							</View>
+						) : null}
+						{user && needsDailyCheckin ? (
+							<Text style={{ color: muted, marginTop: 10 }}>
+								{selfCheckinCount === 0 ? 'Get your streak going — tap in today.' : 'Keep your streak going — tap in today.'}
+							</Text>
+						) : null}
 						<View style={styles.filterRow}>
 							{user ? (
 								<View style={{ alignItems: 'center' }}>
@@ -893,7 +989,9 @@ function FeedPhoto({
 						const isFriend = !!(item.userId && friendIdSet.has(item.userId));
 						const isIncoming = !!(item.userId && incomingById.has(item.userId));
 						const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
-					const photo = resolvePhotoSrc(item);
+						const photo = resolvePhotoSrc(item);
+						const reactionCheckinId = String(item.id || (item as any).clientId || '');
+						const reactionSummary = reactionByCheckin[reactionCheckinId];
 						const selfFallback = user && item.userId === user.id
 							? (user.name || (user.handle ? `@${user.handle}` : user.email ? user.email.split('@')[0] : null))
 							: null;
@@ -1018,9 +1116,22 @@ function FeedPhoto({
 								{groupCount > 1 ? (
 									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here in the last 24h</Text>
 								) : null}
-							{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
-								<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
-							)}
+								{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
+									<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
+								)}
+								{user?.id && reactionCheckinId ? (
+									<ReactionBar
+										checkinId={reactionCheckinId}
+										userId={user.id}
+										userName={user.name || user.handle || user.email || 'Someone'}
+										userHandle={user.handle}
+										initialCounts={reactionSummary?.counts}
+										userReaction={reactionSummary?.userReaction}
+										onReactionChange={() => {
+											void loadReactionsForCheckin(reactionCheckinId);
+										}}
+									/>
+								) : null}
 								<Text style={[styles.date, { color: muted }]}>{time}</Text>
 								{remaining ? <Text style={{ color: muted, marginTop: 4 }}>{remaining}</Text> : null}
 								<View style={[styles.cardDivider, { backgroundColor: border }]} />
@@ -1163,6 +1274,27 @@ const styles = StyleSheet.create({
 		paddingVertical: tokens.space.s10,
 		borderRadius: 999,
 		borderWidth: 1,
+	},
+	trendingCard: {
+		marginTop: tokens.space.s12,
+		borderWidth: 1,
+		borderRadius: tokens.radius.r16,
+		padding: tokens.space.s12,
+	},
+	trendingHeader: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		justifyContent: 'space-between',
+	},
+	trendingList: {
+		marginTop: tokens.space.s8,
+		gap: 8,
+	},
+	trendingRow: {
+		borderWidth: 1,
+		borderRadius: tokens.radius.r12,
+		paddingHorizontal: tokens.space.s10,
+		paddingVertical: tokens.space.s8,
 	},
 	filterRow: { marginTop: tokens.space.s16, alignItems: 'center', justifyContent: 'center' },
 	card: {

@@ -66,8 +66,11 @@
       "FOURSQUARE_API_KEY": "",
       "INTEL_V1_ENABLED": false,
       "eas": {
-        "projectId": ""
-      }
+        "projectId": "8413644e-43e4-4409-8302-9454707c4f42"
+      },
+      "ENV": "development",
+      "FIREBASE_FUNCTIONS_REGION": "us-central1",
+      "router": {}
     },
     "web": {
       "output": "static",
@@ -91,6 +94,7 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "owner": "rrizvi307"
   }
 }

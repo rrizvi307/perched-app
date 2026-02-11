@@ -8,6 +8,7 @@ import {
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotListItem from '@/components/ui/spot-list-item';
 import { SpotIntelligence } from '@/components/ui/SpotIntelligence';
+import { RecommendationsCard } from '@/components/ui/recommendations-card';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import SegmentedControl from '@/components/ui/segmented-control';
@@ -33,6 +34,7 @@ import {
 } from '@/services/filterPolicy';
 import { requestForegroundLocation } from '@/services/location';
 import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
+import { buildPlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
 import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
@@ -51,6 +53,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  InteractionManager,
   Platform,
   Pressable,
   RefreshControl,
@@ -88,6 +91,19 @@ function describeSpot(name?: string, address?: string) {
   if (hay.includes('cafe') || hay.includes('coffee')) return 'Cafe';
   if (hay.includes('campus') || hay.includes('university') || hay.includes('college')) return 'Campus spot';
   return 'Spot';
+}
+
+function getWorkScoreColor(score: number) {
+  if (score >= 78) return '#22C55E';
+  if (score >= 62) return '#F59E0B';
+  return '#F97316';
+}
+
+function getCrowdLevelColor(level: PlaceIntelligence['crowdLevel'], muted: string) {
+  if (level === 'low') return '#22C55E';
+  if (level === 'moderate') return '#F59E0B';
+  if (level === 'high') return '#F97316';
+  return muted;
 }
 
 function buildSpotTags(spot: any) {
@@ -601,6 +617,13 @@ export default function Explore() {
     return `https://maps.googleapis.com/maps/api/staticmap?center=${center}&zoom=13&size=900x360&scale=2&key=${mapKey}`;
   }, [mapKey, mapCenter]);
 
+  const timeOfDay = useMemo((): 'morning' | 'afternoon' | 'evening' => {
+    const hour = new Date().getHours();
+    if (hour >= 6 && hour < 12) return 'morning';
+    if (hour >= 12 && hour < 18) return 'afternoon';
+    return 'evening';
+  }, []);
+
   const listKeyExtractor = useCallback((item: any) => {
     if (item?.key) return item.key;
     const placeId = item?.example?.spotPlaceId || item?.placeId || item?.example?.placeId;
@@ -671,6 +694,93 @@ export default function Explore() {
     });
     return map;
   }, [filteredSpots]);
+
+  const [intelligenceMap, setIntelligenceMap] = useState<Map<string, PlaceIntelligence>>(new Map());
+
+  useEffect(() => {
+    let active = true;
+    const spotsToProcess = listData.slice(0, 12);
+    if (!spotsToProcess.length) return;
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      spotsToProcess.forEach(async (spot) => {
+        const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
+        const name = spot?.name || '';
+        const intelKey = spotKey(placeId, name);
+        try {
+          const intel = await buildPlaceIntelligence({
+            placeName: name,
+            placeId,
+            location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
+            openNow: spot?.openNow,
+            types: spot?.types,
+            checkins: spot?._checkins || [],
+          });
+          if (active) {
+            setIntelligenceMap((prev) => {
+              if (prev.has(intelKey)) return prev;
+              const next = new Map(prev);
+              next.set(intelKey, intel);
+              return next;
+            });
+          }
+        } catch {}
+      });
+    });
+
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, [listData]);
+
+  const selectedSpotKey = useMemo(() => {
+    if (!selectedSpot) return null;
+    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
+    const name = selectedSpot?.name || '';
+    if (!name) return null;
+    return spotKey(placeId, name);
+  }, [selectedSpot]);
+
+  const selectedSpotIntelligence = useMemo(() => {
+    if (!selectedSpotKey) return null;
+    return intelligenceMap.get(selectedSpotKey) || null;
+  }, [selectedSpotKey, intelligenceMap]);
+
+  useEffect(() => {
+    if (!selectedSpot || !selectedSpotKey || selectedSpotIntelligence) return;
+    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
+    const name = selectedSpot?.name || '';
+    if (!name) return;
+
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void (async () => {
+        try {
+          const intel = await buildPlaceIntelligence({
+            placeName: name,
+            placeId,
+            location: selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location || null,
+            openNow: selectedSpot?.openNow,
+            types: selectedSpot?.types,
+            checkins: selectedSpot?._checkins || [],
+          });
+          if (!active) return;
+          setIntelligenceMap((prev) => {
+            if (prev.has(selectedSpotKey)) return prev;
+            const next = new Map(prev);
+            next.set(selectedSpotKey, intel);
+            return next;
+          });
+        } catch {}
+      })();
+    });
+
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, [selectedSpot, selectedSpotKey, selectedSpotIntelligence]);
 
   return (
     <ThemedView style={styles.container}>
@@ -825,11 +935,20 @@ export default function Explore() {
                 <IconSymbol name="location.fill" size={16} color={loc ? primary : muted} />
               </Pressable>
             </View>
+
+            <RecommendationsCard
+              userLocation={loc}
+              context={{ timeOfDay }}
+              onSpotPress={(placeId, name) => {
+                router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(name)}`);
+              }}
+            />
           </View>
         }
         renderItem={({ item, index }) => {
           const key = spotKey(item?.example?.spotPlaceId || item?.placeId, item?.name || 'spot');
           const tags = spotTagsMap.get(key) || [];
+          const intelligence = intelligenceMap.get(key) || null;
           return (
             <SpotListItem
               item={item}
@@ -840,6 +959,7 @@ export default function Explore() {
               mapKey={mapKey}
               maxSpotCount={maxSpotCount}
               showRanks={!deferredQuery.trim()}
+              intelligence={intelligence}
               onPress={() => openSpotSheet(item)}
               describeSpot={describeSpot}
               formatDistance={formatDistance}
@@ -890,6 +1010,56 @@ export default function Explore() {
               liveCheckinCount={selectedSpot?.live?.checkinCount || selectedSpot?.checkinCount || selectedSpot?.count || 0}
               containerStyle={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}
             />
+
+            {selectedSpotIntelligence ? (
+              <View style={[styles.snapshotCard, { borderColor: border, backgroundColor: withAlpha(primary, 0.06) }]}>
+                <Text style={[styles.snapshotLabel, { color: muted }]}>Smart snapshot</Text>
+                <View style={styles.snapshotRow}>
+                  <View style={styles.snapshotItem}>
+                    <Text style={{ color: getWorkScoreColor(selectedSpotIntelligence.workScore), fontWeight: '800', fontSize: 20 }}>
+                      {selectedSpotIntelligence.workScore}
+                    </Text>
+                    <Text style={{ color: muted, fontSize: 11 }}>Work score</Text>
+                  </View>
+                  <View style={styles.snapshotItem}>
+                    <Text
+                      style={{
+                        color: getCrowdLevelColor(selectedSpotIntelligence.crowdLevel, muted),
+                        fontWeight: '700',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {selectedSpotIntelligence.crowdLevel}
+                    </Text>
+                    <Text style={{ color: muted, fontSize: 11 }}>Crowd</Text>
+                  </View>
+                  <View style={styles.snapshotItem}>
+                    <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>
+                      {selectedSpotIntelligence.bestTime}
+                    </Text>
+                    <Text style={{ color: muted, fontSize: 11 }}>Best time</Text>
+                  </View>
+                </View>
+                {selectedSpotIntelligence.useCases.length ? (
+                  <View style={styles.snapshotChipRow}>
+                    {selectedSpotIntelligence.useCases.slice(0, 3).map((item) => (
+                      <View key={`sheet-uc-${item}`} style={[styles.snapshotChip, { borderColor: border }]}>
+                        <Text style={{ color: text, fontSize: 11, fontWeight: '600' }}>{item}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {selectedSpotIntelligence.highlights.length ? (
+                  <View style={styles.snapshotChipRow}>
+                    {selectedSpotIntelligence.highlights.slice(0, 2).map((item) => (
+                      <View key={`sheet-hl-${item}`} style={[styles.snapshotChip, { borderColor: border }]}>
+                        <Text style={{ color: text, fontSize: 11, fontWeight: '600' }}>{item}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
 
             {selectedSpot?.intel?.avgRating ? (
               <Text style={{ color: muted, marginTop: 8 }}>
@@ -1116,6 +1286,39 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderWidth: 1,
     borderRadius: 12,
+  },
+  snapshotCard: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+  },
+  snapshotLabel: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  snapshotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  snapshotItem: {
+    flex: 1,
+  },
+  snapshotChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+    gap: 6,
+  },
+  snapshotChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   sheetActions: {
     flexDirection: 'row',

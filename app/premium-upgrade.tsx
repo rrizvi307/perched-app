@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { router } from 'expo-router';
-import { purchasePremium } from '@/services/premium';
+import { isPremiumPurchasesEnabled, purchasePremium } from '@/services/premium';
 
 export default function PremiumUpgradeScreen() {
   const [loading, setLoading] = useState(false);
+  const purchasesEnabled = isPremiumPurchasesEnabled();
 
   const handlePurchase = async (productId: 'monthly' | 'yearly') => {
+    if (!purchasesEnabled) {
+      Alert.alert('Unavailable', 'Premium purchases are temporarily disabled for this beta build.');
+      return;
+    }
     setLoading(true);
     try {
       const success = await purchasePremium(productId);
@@ -27,6 +32,11 @@ export default function PremiumUpgradeScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Unlock Premium</Text>
       <Text style={styles.subtitle}>Get the most out of Perched</Text>
+      {!purchasesEnabled ? (
+        <Text style={styles.betaNotice}>
+          Premium purchases are disabled in this beta build.
+        </Text>
+      ) : null}
 
       <View style={styles.features}>
         <FeatureItem icon="✓" text="Advanced filters (WiFi ≥4, Quiet, etc.)" />
@@ -39,7 +49,7 @@ export default function PremiumUpgradeScreen() {
       <TouchableOpacity
         style={styles.pricingCard}
         onPress={() => handlePurchase('yearly')}
-        disabled={loading}
+        disabled={loading || !purchasesEnabled}
         activeOpacity={0.9}
       >
         <Text style={styles.pricingBadge}>BEST VALUE</Text>
@@ -51,7 +61,7 @@ export default function PremiumUpgradeScreen() {
       <TouchableOpacity
         style={[styles.pricingCard, styles.pricingCardSecondary]}
         onPress={() => handlePurchase('monthly')}
-        disabled={loading}
+        disabled={loading || !purchasesEnabled}
         activeOpacity={0.9}
       >
         <Text style={styles.pricingTitle}>Monthly</Text>
@@ -81,6 +91,7 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 32 },
   title: { fontSize: 32, fontWeight: '800', textAlign: 'center', marginTop: 40, color: '#111827' },
   subtitle: { fontSize: 18, textAlign: 'center', color: '#6B7280', marginTop: 8 },
+  betaNotice: { fontSize: 14, textAlign: 'center', color: '#B45309', marginTop: 10, fontWeight: '600' },
   features: { marginTop: 36 },
   featureItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   featureIcon: { fontSize: 20, marginRight: 12, color: '#10B981', fontWeight: '700' },
