@@ -452,12 +452,25 @@ type ExternalPlaceSignal = {
 
 const PLACE_SIGNAL_TTL_MS = 30 * 60 * 1000;
 const placeSignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
+function parseCloudRuntimeConfig() {
+  const raw = process.env.CLOUD_RUNTIME_CONFIG;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch {}
+  return {};
+}
 const runtimeConfig = (() => {
   try {
-    return functions.config();
+    const direct = functions.config();
+    if (direct && typeof direct === 'object' && Object.keys(direct).length > 0) {
+      return direct;
+    }
   } catch {
-    return {};
+    // Ignore and fallback below.
   }
+  return parseCloudRuntimeConfig();
 })();
 
 function readFirstNonEmpty(...values: Array<string | undefined>) {
@@ -533,6 +546,8 @@ async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: 
     key = readFirstNonEmpty(
       runtimeConfig?.places?.foursquare_api_key,
       runtimeConfig?.places?.foursquare,
+      runtimeConfig?.foursquare_api_key,
+      runtimeConfig?.foursquare,
     );
   }
   if (!key) return null;
@@ -567,6 +582,8 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
     key = readFirstNonEmpty(
       runtimeConfig?.places?.yelp_api_key,
       runtimeConfig?.places?.yelp,
+      runtimeConfig?.yelp_api_key,
+      runtimeConfig?.yelp,
     );
   }
   if (!key) return null;
@@ -617,6 +634,8 @@ export const placeSignalsProxy = functions.https.onRequest(async (req, res) => {
   if (!requiredSecret) {
     requiredSecret = readFirstNonEmpty(
       runtimeConfig?.places?.proxy_secret,
+      runtimeConfig?.place_intel_proxy_secret,
+      runtimeConfig?.proxy_secret,
     );
   }
 
