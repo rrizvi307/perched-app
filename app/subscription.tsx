@@ -13,7 +13,6 @@ import { usePremium } from '@/hooks/use-premium';
 import { withAlpha } from '@/utils/colors';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { PremiumButton } from '@/components/ui/premium-button';
-import { PaywallModal } from '@/components/ui/paywall-modal';
 import { cancelPremiumSubscription, PRICING } from '@/services/premium';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -43,7 +42,6 @@ export default function SubscriptionScreen() {
     willAutoRenew,
   } = usePremium();
 
-  const [showPaywall, setShowPaywall] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
   const handleBack = async () => {
@@ -57,13 +55,7 @@ export default function SubscriptionScreen() {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    setShowPaywall(true);
-  };
-
-  const handleSelectPlan = (period: 'monthly' | 'annual') => {
-    setShowPaywall(false);
-    // TODO: Integrate Stripe payment flow
-    showToast('Payment integration coming soon!', 'info');
+    router.push('/premium-upgrade');
   };
 
   const handleCancelSubscription = async () => {
@@ -232,12 +224,6 @@ export default function SubscriptionScreen() {
         </View>
       </ScrollView>
 
-      {/* Paywall Modal */}
-      <PaywallModal
-        visible={showPaywall}
-        onClose={() => setShowPaywall(false)}
-        onSelectPlan={handleSelectPlan}
-      />
     </View>
   );
 }
