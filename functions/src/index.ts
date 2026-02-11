@@ -540,15 +540,16 @@ function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
 }
 
 async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
-  // Try Secret Manager first, then fallback to runtime config
-  let key = await getCachedSecret('FOURSQUARE_API_KEY');
+  // Prefer env/runtime config (works with functions.runWith secrets), then fallback to Secret Manager.
+  let key = readFirstNonEmpty(
+    process.env.FOURSQUARE_API_KEY,
+    runtimeConfig?.places?.foursquare_api_key,
+    runtimeConfig?.places?.foursquare,
+    runtimeConfig?.foursquare_api_key,
+    runtimeConfig?.foursquare,
+  );
   if (!key) {
-    key = readFirstNonEmpty(
-      runtimeConfig?.places?.foursquare_api_key,
-      runtimeConfig?.places?.foursquare,
-      runtimeConfig?.foursquare_api_key,
-      runtimeConfig?.foursquare,
-    );
+    key = await getCachedSecret('FOURSQUARE_API_KEY');
   }
   if (!key) return null;
   const ll = `${lat},${lng}`;
@@ -576,15 +577,16 @@ async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: 
 }
 
 async function fetchYelpSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
-  // Try Secret Manager first, then fallback to runtime config
-  let key = await getCachedSecret('YELP_API_KEY');
+  // Prefer env/runtime config (works with functions.runWith secrets), then fallback to Secret Manager.
+  let key = readFirstNonEmpty(
+    process.env.YELP_API_KEY,
+    runtimeConfig?.places?.yelp_api_key,
+    runtimeConfig?.places?.yelp,
+    runtimeConfig?.yelp_api_key,
+    runtimeConfig?.yelp,
+  );
   if (!key) {
-    key = readFirstNonEmpty(
-      runtimeConfig?.places?.yelp_api_key,
-      runtimeConfig?.places?.yelp,
-      runtimeConfig?.yelp_api_key,
-      runtimeConfig?.yelp,
-    );
+    key = await getCachedSecret('YELP_API_KEY');
   }
   if (!key) return null;
   // `businesses/matches` now requires address fields; use search with location bias instead.
@@ -618,7 +620,9 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
   };
 }
 
-export const placeSignalsProxy = functions.https.onRequest(async (req, res) => {
+export const placeSignalsProxy = functions
+  .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY'] })
+  .https.onRequest(async (req, res) => {
   withCors(res);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
@@ -629,15 +633,12 @@ export const placeSignalsProxy = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  // Try Secret Manager first, then fallback to runtime config
-  let requiredSecret = await getCachedSecret('PLACE_INTEL_PROXY_SECRET');
-  if (!requiredSecret) {
-    requiredSecret = readFirstNonEmpty(
-      runtimeConfig?.places?.proxy_secret,
-      runtimeConfig?.place_intel_proxy_secret,
-      runtimeConfig?.proxy_secret,
-    );
-  }
+  const requiredSecret = readFirstNonEmpty(
+    process.env.PLACE_INTEL_PROXY_SECRET,
+    runtimeConfig?.places?.proxy_secret,
+    runtimeConfig?.place_intel_proxy_secret,
+    runtimeConfig?.proxy_secret,
+  );
 
   const providedSecret = req.get('X-Place-Intel-Secret') || '';
   const hasSecretBypass = Boolean(requiredSecret && providedSecret === requiredSecret);
