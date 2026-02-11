@@ -1508,7 +1508,9 @@ export async function addReactionToFirestore(reaction: {
   const fb = ensureFirebase();
   if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return;
   const db = fb.firestore();
-  const id = reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
+  const deterministicId = `rx_${sanitizeId(reaction.checkinId)}_${sanitizeId(reaction.userId)}`;
+  const id = deterministicId || reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
   await db.collection('reactions').doc(id).set({
     ...reaction,
     createdAt: reaction.createdAt || Date.now(),
@@ -1520,12 +1522,27 @@ export async function removeReactionFromFirestore(checkinId: string, userId: str
   const fb = ensureFirebase();
   if (!fb || !checkinId || !userId || !type) return;
   const db = fb.firestore();
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
+  const deterministicId = `rx_${sanitizeId(checkinId)}_${sanitizeId(userId)}`;
+  const deterministicRef = db.collection('reactions').doc(deterministicId);
+
+  try {
+    const deterministicSnap = await deterministicRef.get();
+    if (deterministicSnap.exists) {
+      const data = deterministicSnap.data() || {};
+      if (!data.type || data.type === type) {
+        await deterministicRef.delete();
+      }
+    }
+  } catch {}
+
+  // Legacy cleanup for older reaction IDs.
   const snap = await db
     .collection('reactions')
     .where('checkinId', '==', checkinId)
     .where('userId', '==', userId)
     .where('type', '==', type)
-    .limit(10)
+    .limit(50)
     .get();
   if (snap.empty) return;
   const batch = db.batch();
@@ -1548,7 +1565,14 @@ export async function getReactionsFromFirestore(checkinId: string, limit = 250) 
   snap.forEach((doc: any) => {
     items.push({ id: doc.id, ...(doc.data() || {}) });
   });
-  return items;
+  const dedupedByUser = new Map<string, any>();
+  items.forEach((item) => {
+    const key = item?.userId ? String(item.userId) : `anon:${item?.id || ''}`;
+    if (!dedupedByUser.has(key)) {
+      dedupedByUser.set(key, item);
+    }
+  });
+  return Array.from(dedupedByUser.values());
 }
 
 export async function addCommentToFirestore(comment: {

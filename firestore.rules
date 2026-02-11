@@ -212,8 +212,22 @@ service cloud.firestore {
       allow delete: if isAuthenticated() &&
                       resource.data.userId == request.auth.uid;
 
-      // No updates allowed - users should delete and recreate
-      allow update: if false;
+      // Allow safe owner updates (used for idempotent reaction writes).
+      // checkinId and userId must remain immutable.
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.checkinId == resource.data.checkinId &&
+                      request.resource.data.keys().hasOnly([
+                        'id',
+                        'checkinId',
+                        'userId',
+                        'userName',
+                        'userHandle',
+                        'type',
+                        'createdAt',
+                        'updatedAt'
+                      ]);
     }
 
     // Comments collection (for check-in comments)

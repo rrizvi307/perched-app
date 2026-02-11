@@ -43,8 +43,9 @@ export async function addReaction(
   userName: string,
   userHandle?: string
 ): Promise<Reaction> {
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
   const reaction: Reaction = {
-    id: `${userId}_${type}_${Date.now()}`,
+    id: `rx_${sanitizeId(checkinId)}_${sanitizeId(userId)}`,
     checkinId,
     userId,
     userName,
