@@ -1,7 +1,7 @@
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
+import Constants from 'expo-constants';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -41,8 +41,14 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const accent = useThemeColor({}, 'accent');
   const highlight = withAlpha(primary, 0.12);
   const badgeFill = withAlpha(accent, 0.16);
+  const rawIntelFlag = (Constants.expoConfig as any)?.extra?.INTEL_V1_ENABLED;
+  const intelV1Enabled = rawIntelFlag === true || rawIntelFlag === 'true' || rawIntelFlag === 1 || rawIntelFlag === '1';
 
   const coords = item.example?.spotLatLng || item.example?.location;
+  const intelNoise = item?.display?.noise || item?.live?.noise || item?.intel?.inferredNoise;
+  const intelNoiseSource = item?.display?.noiseSource || (item?.live?.noise ? 'live' : item?.intel?.inferredNoise ? 'inferred' : null);
+  const intelRating = item?.intel?.avgRating || item?.rating;
+  const intelPrice = item?.intel?.priceLevel;
 
   return (
     <Pressable
@@ -66,11 +72,151 @@ const SpotListItem = React.memo<SpotListItemProps>(({
       )}
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
-        <Text style={{ color: muted, marginTop: 6 }} numberOfLines={1}>{subtitle}</Text>
-        <Text style={{ color: muted, marginTop: 6 }} numberOfLines={2}>
-          {item.description || describeSpot(item.name, item.example?.address)}
-          {item.distance !== undefined && item.distance !== Infinity ? ` · ${formatDistance(item.distance)}` : ''}
-        </Text>
+        {/* Distance and walk time - prominent display */}
+        {item.distance !== undefined && item.distance !== Infinity && item.distance > 0 ? (
+          <Text style={{ color: primary, fontSize: 12, fontWeight: '600', marginTop: 4 }}>
+            📍 {formatDistance(item.distance)}
+          </Text>
+        ) : null}
+        {/* Here Now indicator */}
+        {item.hereNowCount > 0 ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+            <View style={[styles.hereNowBadge, { backgroundColor: withAlpha('#10B981', 0.15) }]}>
+              <View style={styles.hereNowDot} />
+              <Text style={{ color: '#10B981', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
+                {item.hereNowCount} here now
+              </Text>
+            </View>
+            {item.hereNowUsers && item.hereNowUsers.length > 0 ? (
+              <View style={styles.avatarStack}>
+                {item.hereNowUsers.slice(0, 3).map((user: any, idx: number) => (
+                  <View
+                    key={user.userId}
+                    style={[
+                      styles.miniAvatar,
+                      { marginLeft: idx > 0 ? -8 : 4, zIndex: 3 - idx, borderColor: card }
+                    ]}
+                  >
+                    {user.userPhotoUrl ? (
+                      <SpotImage
+                        source={{ uri: user.userPhotoUrl }}
+                        style={{ width: 20, height: 20, borderRadius: 10 }}
+                      />
+                    ) : (
+                      <Text style={{ fontSize: 10 }}>👤</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        <Text style={{ color: muted, marginTop: 4, fontSize: 12 }} numberOfLines={1}>{subtitle}</Text>
+        {/* Utility Metrics Row */}
+        {(item.avgWifiSpeed || item.avgBusyness || item.avgNoiseLevel || item.topOutletAvailability) && (
+          <View style={styles.metricsRow}>
+            {item.avgWifiSpeed ? (
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgWifiSpeed >= 4
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgWifiSpeed >= 3
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#EF4444', 0.15)
+              }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.avgWifiSpeed >= 4 ? '🚀' : item.avgWifiSpeed >= 3 ? '📶' : '📶'}
+                </Text>
+                <Text style={{
+                  color: item.avgWifiSpeed >= 4 ? '#22C55E' : item.avgWifiSpeed >= 3 ? '#F59E0B' : '#EF4444',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
+                  {item.avgWifiSpeed >= 4 ? 'Fast' : item.avgWifiSpeed >= 3 ? 'OK' : 'Slow'}
+                </Text>
+              </View>
+            ) : null}
+            {item.avgNoiseLevel ? (
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgNoiseLevel <= 2
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgNoiseLevel <= 3.5
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#F97316', 0.15)
+              }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.avgNoiseLevel <= 2 ? '🤫' : item.avgNoiseLevel <= 3.5 ? '💬' : '🎉'}
+                </Text>
+                <Text style={{
+                  color: item.avgNoiseLevel <= 2 ? '#22C55E' : item.avgNoiseLevel <= 3.5 ? '#F59E0B' : '#F97316',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
+                  {item.avgNoiseLevel <= 2 ? 'Quiet' : item.avgNoiseLevel <= 3.5 ? 'Moderate' : 'Lively'}
+                </Text>
+              </View>
+            ) : null}
+            {item.avgBusyness ? (
+              <View style={[styles.metricBadge, {
+                backgroundColor: item.avgBusyness <= 2
+                  ? withAlpha('#22C55E', 0.15)
+                  : item.avgBusyness <= 3
+                  ? withAlpha('#F59E0B', 0.15)
+                  : withAlpha('#F97316', 0.15)
+              }]}>
+                <Text style={{ fontSize: 10 }}>
+                  {item.avgBusyness <= 2 ? '🧘' : item.avgBusyness <= 3 ? '👥' : '🔥'}
+                </Text>
+                <Text style={{
+                  color: item.avgBusyness <= 2 ? '#22C55E' : item.avgBusyness <= 3 ? '#F59E0B' : '#F97316',
+                  fontSize: 10,
+                  fontWeight: '600',
+                  marginLeft: 2
+                }}>
+                  {item.avgBusyness <= 2 ? 'Calm' : item.avgBusyness <= 3 ? 'Moderate' : 'Busy'}
+                </Text>
+              </View>
+            ) : null}
+            {item.topOutletAvailability && (item.topOutletAvailability === 'plenty' || item.topOutletAvailability === 'some') ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#22C55E', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>🔌</Text>
+                <Text style={{ color: '#22C55E', fontSize: 10, fontWeight: '600', marginLeft: 2 }}>
+                  {item.topOutletAvailability === 'plenty' ? 'Outlets' : 'Some Outlets'}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+        {intelV1Enabled && (intelNoise || intelRating || intelPrice) ? (
+          <View style={styles.metricsRow}>
+            {intelNoise ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha(intelNoiseSource === 'live' ? '#22C55E' : '#64748B', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>{intelNoiseSource === 'live' ? '🔴' : '📊'}</Text>
+                <Text style={{ color: intelNoiseSource === 'live' ? '#22C55E' : '#64748B', fontSize: 10, fontWeight: '700', marginLeft: 2 }}>
+                  {String(intelNoise)}
+                  {intelNoiseSource === 'inferred' ? ' (inferred)' : ''}
+                </Text>
+              </View>
+            ) : null}
+            {typeof intelRating === 'number' ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#F59E0B', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>⭐</Text>
+                <Text style={{ color: '#F59E0B', fontSize: 10, fontWeight: '700', marginLeft: 2 }}>
+                  {intelRating.toFixed(1)}
+                </Text>
+              </View>
+            ) : null}
+            {intelPrice ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#06B6D4', 0.15) }]}>
+                <Text style={{ color: '#0891B2', fontSize: 10, fontWeight: '700' }}>{intelPrice}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {intelV1Enabled && !intelNoise && !intelRating && !intelPrice ? (
+          <Text style={{ color: muted, marginTop: 6, fontSize: 11 }}>No ratings yet</Text>
+        ) : null}
         {tags.length > 0 && (
           <View style={styles.tagRow}>
             {tags.map((tag) => (
@@ -103,6 +249,11 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   return (
     prevProps.item.name === nextProps.item.name &&
     prevProps.item.count === nextProps.item.count &&
+    prevProps.item.hereNowCount === nextProps.item.hereNowCount &&
+    prevProps.item.intel?.avgRating === nextProps.item.intel?.avgRating &&
+    prevProps.item.intel?.priceLevel === nextProps.item.intel?.priceLevel &&
+    prevProps.item.display?.noise === nextProps.item.display?.noise &&
+    prevProps.item.display?.noiseSource === nextProps.item.display?.noiseSource &&
     prevProps.friendCount === nextProps.friendCount &&
     prevProps.index === nextProps.index &&
     prevProps.showRanks === nextProps.showRanks &&
@@ -128,6 +279,19 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 10,
   },
+  metricsRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metricBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
   tagRow: {
     flexDirection: 'row',
     marginTop: 8,
@@ -149,6 +313,34 @@ const styles = StyleSheet.create({
   countFill: {
     height: '100%',
     borderRadius: 2,
+  },
+  hereNowBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  hereNowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  miniAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#f0f0f0',
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
   rankBadge: {
     paddingHorizontal: 8,

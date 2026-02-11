@@ -17,6 +17,17 @@ type User = {
   phone?: string;
   emailVerified?: boolean;
   photoUrl?: string | null;
+  // Premium subscription fields
+  premiumStatus?: {
+    tier: 'free' | 'premium';
+    isActive: boolean;
+    expiresAt: number | null;
+    source: 'purchase' | 'referral' | 'promo' | 'free';
+    subscriptionId?: string;
+    period?: 'monthly' | 'annual';
+    autoRenew?: boolean;
+    referralWeeksRemaining?: number;
+  };
 } | null;
 
 type AuthContextType = {

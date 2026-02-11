@@ -63,7 +63,7 @@ export function EmptyState({
       150,
       withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) })
     );
-  }, []);
+  }, [contentOpacity, contentY, iconOpacity, iconScale]);
 
   const iconAnimatedStyle = useAnimatedStyle(() => ({
     opacity: iconOpacity.value,

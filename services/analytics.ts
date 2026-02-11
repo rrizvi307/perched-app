@@ -47,6 +47,8 @@ export type AnalyticsEvent =
   | 'profile_share_failed'
   | 'referral_link_copied'
   | 'referral_signup'
+  | 'referral_code_stored'
+  | 'referral_recorded'
 
   // Explore & Discovery
   | 'explore_viewed'
@@ -75,6 +77,8 @@ export type AnalyticsEvent =
   | 'share_opened'
   | 'deeplink_opened'
   | 'checkin_reacted'
+  | 'comment_posted'
+  | 'comment_deleted'
 
   // Settings
   | 'settings_opened'
@@ -121,6 +125,12 @@ const ENV = Constants.expoConfig?.extra?.ENV || 'development';
 let initialized = false;
 let currentUserId: string | null = null;
 let sessionStartTime = Date.now();
+let nativeFirebaseAnalytics:
+  | {
+      logEvent: (eventName: string, params?: Record<string, unknown>) => Promise<void>;
+    }
+  | null
+  | undefined;
 
 // Device context to enrich all events
 const deviceContext = {
@@ -132,6 +142,28 @@ const deviceContext = {
   osVersion: Device.osVersion || undefined,
   deviceYear: Device.deviceYearClass || undefined,
 };
+
+function getNativeFirebaseAnalytics() {
+  if (nativeFirebaseAnalytics !== undefined) return nativeFirebaseAnalytics;
+  try {
+    const loaded = require('@react-native-firebase/analytics');
+    const analyticsFactory = loaded?.default ?? loaded;
+    nativeFirebaseAnalytics = typeof analyticsFactory === 'function' ? analyticsFactory() : null;
+  } catch {
+    nativeFirebaseAnalytics = null;
+  }
+  return nativeFirebaseAnalytics;
+}
+
+async function logNativeFirebaseEvent(event: string, properties?: Record<string, unknown>) {
+  const nativeAnalytics = getNativeFirebaseAnalytics();
+  if (!nativeAnalytics) return;
+  try {
+    await nativeAnalytics.logEvent(event.substring(0, 40), properties);
+  } catch {
+    // Do not throw from analytics paths.
+  }
+}
 
 /**
  * Initialize analytics services
@@ -159,7 +191,7 @@ export function initAnalytics() {
  * Track an event with properties
  */
 export function track(
-  event: AnalyticsEvent,
+  event: AnalyticsEvent | string,
   properties?: AnalyticsProperties
 ) {
   if (!initialized && event !== 'app_opened') {
@@ -312,6 +344,7 @@ function logFirebaseEvent(event: string, properties: AnalyticsProperties) {
     // Log to Firebase via logEvent service
     const logEvent = require('./logEvent').logEvent;
     void logEvent(sanitizedEvent, currentUserId, sanitizedProperties);
+    void logNativeFirebaseEvent(sanitizedEvent, sanitizedProperties);
   } catch (error) {
     console.error('Firebase Analytics error:', error);
   }
@@ -368,6 +401,24 @@ export function trackEngagement(type: 'daily' | 'weekly' | 'monthly') {
   });
 }
 
+export async function trackCheckinCreated(spotId: string) {
+  const payload = { spot_id: spotId };
+  track('checkin_posted', payload);
+  await logNativeFirebaseEvent('checkin_created', payload);
+}
+
+export async function trackSpotViewed(spotId: string) {
+  const payload = { spot_id: spotId };
+  track('spot_viewed', payload);
+  await logNativeFirebaseEvent('spot_viewed', payload);
+}
+
+export async function trackPremiumConversion(tier: string) {
+  const payload = { tier };
+  track('app_opened', { ...payload, event_type: 'premium_conversion' });
+  await logNativeFirebaseEvent('premium_conversion', payload);
+}
+
 // Legacy compatibility
 export function trackEvent(name: string, props?: Record<string, unknown>) {
   track(name as AnalyticsEvent, props as AnalyticsProperties);
@@ -385,6 +436,9 @@ export default {
   trackRevenue,
   trackOnboardingStep,
   trackEngagement,
+  trackCheckinCreated,
+  trackSpotViewed,
+  trackPremiumConversion,
   getSessionDuration,
   trackEvent,
 };

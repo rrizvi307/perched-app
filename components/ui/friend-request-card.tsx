@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { useState } from 'react';
 import SpotImage from './spot-image';
 import { IconSymbol } from './icon-symbol';
@@ -181,8 +181,6 @@ export function MutualFriendsIndicator({
   count: number;
   preview?: string[];
 }) {
-  const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
 
   if (count === 0) return null;

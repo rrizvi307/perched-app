@@ -155,7 +155,7 @@ export default function Onboarding() {
         return;
       }
       const pos = await requestForegroundLocation();
-      if (pos?.lat && pos?.lng) {
+      if (typeof pos?.lat === 'number' && typeof pos?.lng === 'number') {
         setLocStatus('granted');
         setGeoBias({ lat: pos.lat, lng: pos.lng });
         if (!city && !cityTouched) {

@@ -2,7 +2,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 export type FilterGroupOption = {
   id: string;
@@ -16,15 +16,18 @@ export type FilterGroup = {
   icon: string;
   options: FilterGroupOption[];
   multiSelect?: boolean;
+  premium?: boolean; // Premium feature flag
 };
 
 type FilterGroupsProps = {
   groups: FilterGroup[];
   selectedFilters: Record<string, string[]>;
   onFilterChange: (groupId: string, values: string[]) => void;
+  onPremiumRequired?: (groupId: string) => void; // Callback when premium filter is clicked without premium
+  isPremium?: boolean; // Whether user has premium access
 };
 
-export default function FilterGroups({ groups, selectedFilters, onFilterChange }: FilterGroupsProps) {
+export default function FilterGroups({ groups, selectedFilters, onFilterChange, onPremiumRequired, isPremium = false }: FilterGroupsProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['atmosphere', 'hours']));
   const border = useThemeColor({}, 'border');
   const card = useThemeColor({}, 'card');
@@ -44,7 +47,13 @@ export default function FilterGroups({ groups, selectedFilters, onFilterChange }
     setExpandedGroups(newExpanded);
   };
 
-  const toggleFilter = (groupId: string, value: string, multiSelect: boolean) => {
+  const toggleFilter = (groupId: string, value: string, multiSelect: boolean, isPremiumGroup: boolean) => {
+    // Check if premium access is required
+    if (isPremiumGroup && !isPremium) {
+      onPremiumRequired?.(groupId);
+      return;
+    }
+
     const currentValues = selectedFilters[groupId] || [];
 
     if (multiSelect) {
@@ -108,7 +117,7 @@ export default function FilterGroups({ groups, selectedFilters, onFilterChange }
                     return (
                       <Pressable
                         key={option.id}
-                        onPress={() => toggleFilter(group.id, option.value, group.multiSelect || false)}
+                        onPress={() => toggleFilter(group.id, option.value, group.multiSelect || false, group.premium || false)}
                         style={({ pressed }) => [
                           styles.optionChip,
                           {

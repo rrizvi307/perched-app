@@ -1,27 +1,56 @@
 import MapView, { Marker, PROVIDER_GOOGLE } from '@/components/map/index';
 import { ThemedView } from '@/components/themed-view';
 import SpotImage from '@/components/ui/spot-image';
+import {
+  FilterBottomSheet,
+  isIntelV1Enabled,
+} from '@/components/ui/FilterBottomSheet';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import SegmentedControl from '@/components/ui/segmented-control';
 import StatusBanner from '@/components/ui/status-banner';
-import FilterGroups, { FilterGroup } from '@/components/ui/filter-groups';
+import type { FilterGroup } from '@/components/ui/filter-groups';
 import SpotListItem from '@/components/ui/spot-list-item';
+import { SpotIntelligence } from '@/components/ui/SpotIntelligence';
+import PopularTimes from '@/components/ui/popular-times';
+import SmartSpotInfo from '@/components/ui/smart-spot-info';
+import LifestyleSpotInfo from '@/components/ui/lifestyle-spot-info';
+import CuratedLists, { MoodSelector, LifestyleQuickFilters } from '@/components/ui/curated-lists';
+import { getSmartSpotData, getTimeAwareRecommendations, type SmartSpotData } from '@/services/smartDataService';
+import { getLifestyleSpotData, type LifestyleSpotData, type CuratedList } from '@/services/lifestyleDataService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
+import { usePremium } from '@/hooks/use-premium';
+import { PaywallModal } from '@/components/ui/paywall-modal';
+import { checkPremiumAccess } from '@/services/premium';
+import { ensureFirebase, getBlockedUsers, getCheckinsRemote, getUserFriendsCached, getUserPreferenceRemote, recordPlaceEventRemote } from '@/services/firebaseClient';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
 import { getMapsKey, getPlaceDetails, searchPlaces, searchPlacesNearby, searchPlacesWithBias } from '@/services/googleMaps';
 import { requestForegroundLocation } from '@/services/location';
 import { classifySpotCategory, spotKey } from '@/services/spotUtils';
-import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot } from '@/storage/local';
+import { getCheckins, getLocationEnabled, getPermissionPrimerSeen, getPlaceTagScores, getSavedSpots, getUserPlaceSignals, getUserPreferenceScores, recordPlaceEvent, seedDemoNetwork, setLocationEnabled, setPermissionPrimerSeen, toggleSavedSpot, updateSavedSpotNote } from '@/storage/local';
 import { formatCheckinClock, formatTimeRemaining } from '@/services/checkinUtils';
+import { calculateCompositeScore } from '@/services/metricsUtils';
+import { trackSpotViewed } from '@/services/analytics';
+import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
+import {
+  CLIENT_FILTERS,
+  DEFAULT_FILTERS,
+  FIRESTORE_FILTERS,
+  FilterState,
+  MAX_FIRESTORE_FILTERS,
+  getActiveFilterCount,
+  hasActiveFilters as hasActiveFiltersUtil,
+  normalizeQueryFilters,
+} from '@/services/filterPolicy';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
+import { distanceBetween, geohashQueryBounds } from 'geofire-common';
 import * as Linking from 'expo-linking';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { withAlpha } from '@/utils/colors';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { formatIntentChips, parsePerchedQuery } from '@/services/perchedAssistant';
@@ -37,6 +66,161 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   const sinDlon = Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon), Math.sqrt(1 - (sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon)));
   return R * c;
+}
+
+// Aggregate utility metrics from check-ins for a spot
+function aggregateSpotMetrics(checkins: any[]) {
+  const wifiSpeeds: number[] = [];
+  const busynessValues: number[] = [];
+  const noiseLevels: number[] = [];
+  const outletCounts: Record<string, number> = { plenty: 0, some: 0, few: 0, none: 0 };
+  const noiseBuckets = { quiet: 0, moderate: 0, lively: 0 } as const;
+  const nextNoiseBuckets: Record<'quiet' | 'moderate' | 'lively', number> = { ...noiseBuckets };
+  let laptopYes = 0;
+  let laptopNo = 0;
+
+  // Track "here now" - check-ins within last 2 hours
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  const now = Date.now();
+  const hereNowUsers: { userId: string; userName: string; userPhotoUrl?: string }[] = [];
+
+  // Track popular times by hour (0-23)
+  const popularHours = new Array(24).fill(0);
+
+  checkins.forEach((c) => {
+    if (c.wifiSpeed && typeof c.wifiSpeed === 'number') wifiSpeeds.push(c.wifiSpeed);
+    if (c.busyness && typeof c.busyness === 'number') busynessValues.push(c.busyness);
+
+    // Handle both old string format and new numeric format
+    if (c.noiseLevel) {
+      const convertedNoise = typeof c.noiseLevel === 'string'
+        ? (c.noiseLevel === 'quiet' ? 2 : c.noiseLevel === 'moderate' ? 3 : 4)
+        : c.noiseLevel;
+      if (typeof convertedNoise === 'number') {
+        noiseLevels.push(convertedNoise);
+        if (convertedNoise <= 2) nextNoiseBuckets.quiet += 1;
+        else if (convertedNoise >= 4) nextNoiseBuckets.lively += 1;
+        else nextNoiseBuckets.moderate += 1;
+      }
+    }
+
+    if (c.outletAvailability && outletCounts[c.outletAvailability] !== undefined) {
+      outletCounts[c.outletAvailability]++;
+    }
+
+    if (c.laptopFriendly === true) laptopYes++;
+    else if (c.laptopFriendly === false) laptopNo++;
+
+    // Get check-in timestamp
+    const checkinTime = c.createdAt?.seconds
+      ? c.createdAt.seconds * 1000
+      : typeof c.createdAt === 'number'
+        ? c.createdAt
+        : new Date(c.createdAt).getTime();
+
+    // Track popular hours
+    if (checkinTime) {
+      const hour = new Date(checkinTime).getHours();
+      popularHours[hour]++;
+    }
+
+    // Check if check-in is within last 2 hours
+    if (now - checkinTime <= TWO_HOURS_MS && c.userId) {
+      // Avoid duplicates (same user checking in multiple times)
+      if (!hereNowUsers.find(u => u.userId === c.userId)) {
+        hereNowUsers.push({
+          userId: c.userId,
+          userName: c.userName || 'Someone',
+          userPhotoUrl: c.userPhotoUrl,
+        });
+      }
+    }
+  });
+
+  const avgWifiSpeed = wifiSpeeds.length > 0 ? Math.round(wifiSpeeds.reduce((a, b) => a + b, 0) / wifiSpeeds.length * 10) / 10 : null;
+  const avgBusyness = busynessValues.length > 0 ? Math.round(busynessValues.reduce((a, b) => a + b, 0) / busynessValues.length * 10) / 10 : null;
+  const avgNoiseLevel = noiseLevels.length > 0 ? Math.round(noiseLevels.reduce((a, b) => a + b, 0) / noiseLevels.length * 10) / 10 : null;
+
+  // Find most common outlet availability
+  const outletEntries = Object.entries(outletCounts).filter(([_, count]) => count > 0);
+  const topOutletAvailability = outletEntries.length > 0
+    ? outletEntries.sort((a, b) => b[1] - a[1])[0][0] as 'plenty' | 'some' | 'few' | 'none'
+    : null;
+
+  // Calculate laptop-friendly percentage
+  const totalLaptop = laptopYes + laptopNo;
+  const laptopFriendlyPct = totalLaptop > 0 ? Math.round((laptopYes / totalLaptop) * 100) : null;
+  const rankedNoise = Object.entries(nextNoiseBuckets).sort((a, b) => b[1] - a[1]);
+  const topNoiseLevel = rankedNoise[0]?.[1] ? (rankedNoise[0][0] as 'quiet' | 'moderate' | 'lively') : null;
+
+  return {
+    avgWifiSpeed,
+    avgBusyness,
+    avgNoiseLevel,
+    laptopFriendlyPct,
+    topNoiseLevel,
+    topOutletAvailability,
+    hereNowCount: hereNowUsers.length,
+    hereNowUsers: hereNowUsers.slice(0, 3), // Only show up to 3 avatars
+    popularHours,
+    checkinCount: checkins.length,
+  };
+}
+
+function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number } | null, rankByQuality = false) {
+  const grouped: Record<string, any> = {};
+  items.forEach((it: any) => {
+    const name = it.spotName || it.spot || 'Unknown';
+    const key = spotKey(it.spotPlaceId, name);
+    if (!grouped[key]) {
+      grouped[key] = {
+        name,
+        count: 0,
+        example: it,
+        openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
+        tagScores: {},
+        _checkins: [],
+      };
+    }
+    grouped[key].count += 1;
+    grouped[key]._checkins.push(it);
+    if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
+    if (Array.isArray(it.tags)) {
+      it.tags.forEach((tag: any) => {
+        const t = String(tag || '').trim();
+        if (!t) return;
+        grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
+      });
+    }
+  });
+
+  Object.values(grouped).forEach((spot: any) => {
+    const metrics = aggregateSpotMetrics(spot._checkins);
+    Object.assign(spot, metrics);
+    delete spot._checkins;
+  });
+
+  const arr = Object.values(grouped) as any[];
+  if (focus) {
+    arr.forEach((a) => {
+      const coords = a.example?.spotLatLng || a.example?.location;
+      if (coords && typeof coords.lat === 'number' && typeof coords.lng === 'number') {
+        a.distance = haversine(focus, { lat: coords.lat, lng: coords.lng });
+      } else {
+        a.distance = Infinity;
+      }
+    });
+    arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
+  } else if (rankByQuality) {
+    arr.sort((a, b) => {
+      const scoreA = calculateCompositeScore(a, null);
+      const scoreB = calculateCompositeScore(b, null);
+      return scoreB - scoreA;
+    });
+  } else {
+    arr.sort((a, b) => b.count - a.count);
+  }
+  return arr;
 }
 
 function formatTime(input: string | { seconds?: number } | undefined) {
@@ -66,7 +250,13 @@ function fuzzLocation(coords: { lat: number; lng: number }, key: string) {
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
   const miles = distanceKm * 0.621371;
-  return `${Math.round(miles)} mi`;
+  // Calculate walk time assuming 5 km/h walking speed (about 3.1 mph)
+  const walkMinutes = Math.round(distanceKm / 5 * 60);
+  if (miles < 0.1) return '< 1 min walk';
+  if (miles < 2) {
+    return `${miles.toFixed(1)} mi · ${walkMinutes} min walk`;
+  }
+  return `${miles.toFixed(1)} mi`;
 }
 
 function describeSpot(name?: string, address?: string) {
@@ -168,13 +358,26 @@ function formatVibeLabel(vibe: ExploreVibe) {
 }
 
 const ASK_PRESETS = [
-  { label: 'Quiet + outlets', query: 'quiet cafe with outlets' },
-  { label: 'Study + Wi‑Fi', query: 'study spot with wifi' },
-  { label: 'Coworking', query: 'coworking space' },
-  { label: 'Open now', query: 'open now' },
+  { label: '💎 Hidden gems', query: 'hidden gem' },
+  { label: '☀️ Patio vibes', query: 'outdoor patio seating' },
+  { label: '💕 Date spots', query: 'romantic date spot' },
+  { label: '🐕 Dog friendly', query: 'dog friendly patio' },
+  { label: '🥞 Brunch', query: 'brunch spot' },
+  { label: '📸 Instagrammable', query: 'instagram worthy aesthetic' },
 ] as const;
 
 const FILTER_GROUPS: FilterGroup[] = [
+  {
+    id: 'sort',
+    title: 'Sort By',
+    icon: 'arrow.up.arrow.down',
+    multiSelect: false,
+    options: [
+      { id: 'popular', label: '🔥 Popular', value: 'popular' },
+      { id: 'nearest', label: '📍 Nearest', value: 'nearest' },
+      { id: 'quality', label: '⭐ Top Rated', value: 'quality' },
+    ],
+  },
   {
     id: 'atmosphere',
     title: 'Atmosphere',
@@ -199,6 +402,20 @@ const FILTER_GROUPS: FilterGroup[] = [
       { id: 'seating', label: 'Seating', value: 'seating' },
       { id: 'outdoor', label: 'Outdoor', value: 'outdoor' },
       { id: 'parking', label: 'Parking', value: 'parking' },
+    ],
+  },
+  {
+    id: 'spotIntel',
+    title: 'Spot Intel',
+    icon: 'chart.bar.fill',
+    multiSelect: true,
+    premium: true, // Premium feature
+    options: [
+      { id: 'fast-wifi', label: '🚀 Fast WiFi', value: 'fast-wifi' },
+      { id: 'has-outlets', label: '🔌 Has Outlets', value: 'has-outlets' },
+      { id: 'not-busy', label: '🧘 Not Busy', value: 'not-busy' },
+      { id: 'quiet-spot', label: '🤫 Quiet', value: 'quiet-spot' },
+      { id: 'lively-spot', label: '🎉 Lively', value: 'lively-spot' },
     ],
   },
   {
@@ -234,6 +451,8 @@ export default function Explore() {
 
   const router = useRouter();
   const { user } = useAuth();
+  const { isPremium } = usePremium();
+  const [hasPremium, setHasPremium] = useState(false);
   const userId = user?.id || null;
   const border = useThemeColor({}, 'border');
   const card = useThemeColor({}, 'card');
@@ -247,23 +466,39 @@ export default function Explore() {
   const [seedLoading, setSeedLoading] = useState(false);
   const [checkins, setCheckins] = useState<any[]>([]);
   const [query, setQuery] = useState('');
+  const deferredQuery = React.useDeferredValue(query);
   const [loc, setLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
   const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [mapFetchFocus, setMapFetchFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [mapUrl, setMapUrl] = useState<string | null>(null);
   const [scope, setScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
-  const [vibe, setVibe] = useState<ExploreVibe>('all');
-  const [openFilter, setOpenFilter] = useState<'all' | 'open' | 'closed'>('all');
-  const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
+  const [vibe] = useState<ExploreVibe>('all');
+  const [openFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [selectedFilters] = useState<Record<string, string[]>>({});
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  const [intelSpots, setIntelSpots] = useState<any[]>([]);
+  const [intelFetched, setIntelFetched] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
   const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
   const [status, setStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'error' | 'success' } | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallFeature] = useState<string>('');
   const { showToast } = useToast();
-  const friendIdSet = React.useMemo(() => new Set(friendIds), [friendIds]);
+  const friendIdsKey = React.useMemo(() => friendIds.slice().sort().join(','), [friendIds]);
+  const blockedIdsKey = React.useMemo(() => blockedIds.slice().sort().join(','), [blockedIds]);
+  const friendIdSet = React.useMemo(
+    () => new Set(friendIdsKey ? friendIdsKey.split(',').filter(Boolean) : []),
+    [friendIdsKey]
+  );
+  const blockedIdSet = React.useMemo(
+    () => new Set(blockedIdsKey ? blockedIdsKey.split(',').filter(Boolean) : []),
+    [blockedIdsKey]
+  );
   const campusKey = user?.campus || null;
   const wasOfflineRef = React.useRef(false);
   const detailFetchRef = React.useRef(new Set<string>());
@@ -273,23 +508,38 @@ export default function Explore() {
   const enrichRef = React.useRef(new Set<string>());
   const fetchKeyRef = React.useRef<string | null>(null);
   const seedCacheRef = React.useRef<Map<string, any[]>>(new Map());
+  const slowQueryNoticeRef = React.useRef(false);
   const lastLocateFailRef = React.useRef(0);
   const lastOpenSettingsRef = React.useRef(0);
+  const mapViewRef = React.useRef<any>(null);
   const [preferenceScores, setPreferenceScores] = useState<Record<string, number>>({});
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
   const [selectedSaved, setSelectedSaved] = useState(false);
+  const [savedNote, setSavedNote] = useState('');
+  const [smartData, setSmartData] = useState<SmartSpotData | null>(null);
+  const [lifestyleData, setLifestyleData] = useState<LifestyleSpotData | null>(null);
+  const [timeContext, setTimeContext] = useState<{ timeContext: string; recommendedCategories: string[] } | null>(null);
+  const [lifestyleFilters, setLifestyleFilters] = useState<string[]>([]);
+  const rawIntelFlag = (Constants.expoConfig as any)?.extra?.INTEL_V1_ENABLED;
+  const intelV1Enabled = React.useMemo(() => {
+    if (rawIntelFlag === true || rawIntelFlag === 'true' || rawIntelFlag === 1 || rawIntelFlag === '1') return true;
+    return isIntelV1Enabled();
+  }, [rawIntelFlag]);
+  const hasPremiumAccess = isPremium || hasPremium;
+  const activeFilterCount = React.useMemo(() => getActiveFilterCount(filters), [filters]);
+  const hasActiveFilterState = React.useMemo(() => hasActiveFiltersUtil(filters), [filters]);
   const hasRealSpots = spots.length > 0;
   const mapKey = getMapsKey();
   const hasMapKey = !!mapKey;
 
-  const parsedIntent = React.useMemo(() => parsePerchedQuery(query), [query]);
+  const parsedIntent = React.useMemo(() => parsePerchedQuery(deferredQuery), [deferredQuery]);
   const activeIntent = React.useMemo(() => {
     if (!parsedIntent) return null;
     const hasSignals = parsedIntent.vibe !== 'all' || parsedIntent.openFilter !== 'all' || parsedIntent.tags.length > 0;
     return hasSignals ? parsedIntent : null;
   }, [parsedIntent]);
   const intentChips = React.useMemo(() => formatIntentChips(activeIntent), [activeIntent]);
-  const aiMode = !!activeIntent && !!query.trim();
+  const aiMode = !!activeIntent && !!deferredQuery.trim();
   // While an "Ask Perched" query is active, avoid accidental empty states by ignoring manual filters
   // unless the query explicitly asks for them (e.g. "open now").
   const appliedVibe = aiMode
@@ -300,15 +550,39 @@ export default function Explore() {
     : openFilter;
 
   useEffect(() => {
+    let mounted = true;
+    const syncPremium = async () => {
+      const status = await checkPremiumAccess(userId || undefined);
+      if (mounted) {
+        setHasPremium(status);
+      }
+    };
+    void syncPremium();
+    return () => {
+      mounted = false;
+    };
+  }, [userId]);
+
+  useEffect(() => {
     if (!demoMode) return;
     setSeedSpots([]);
   }, [demoMode]);
   const mapCenter = React.useMemo(() => {
+    // User-set focus always wins
     if (mapFocus) return mapFocus;
+
+    // Demo mode: prefer demo data over device location
+    const demoModeEnabled = isDemoMode();
+    if (demoModeEnabled) {
+      const first = (spots.length ? spots : seedSpots).find((s) => s.example?.spotLatLng || s.example?.location);
+      const coords = first?.example?.spotLatLng || first?.example?.location;
+      if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') return { lat: coords.lat, lng: coords.lng };
+    }
+
+    // Non-demo: use device location if available
     if (loc) return loc;
-    const first = (spots.length ? spots : seedSpots).find((s) => s.example?.spotLatLng || s.example?.location);
-    const coords = first?.example?.spotLatLng || first?.example?.location;
-    if (coords?.lat && coords?.lng) return { lat: coords.lat, lng: coords.lng };
+
+    // Final fallback: Houston default
     return { lat: 29.7604, lng: -95.3698 };
   }, [mapFocus, loc, spots, seedSpots]);
   const fallbackMapUrl = React.useMemo(() => {
@@ -340,6 +614,163 @@ export default function Explore() {
     });
     return counts;
   }, [checkins, friendIdSet, user]);
+
+  const applyFirestoreFilters = useCallback((queryRef: any, nextFilters: FilterState) => {
+    let query = queryRef;
+
+    if (nextFilters.openNow) {
+      query = query.where('intel.isOpenNow', '==', true);
+    }
+
+    if (nextFilters.priceLevel.length > 0) {
+      query = query.where('intel.priceLevel', 'in', nextFilters.priceLevel);
+    }
+
+    if (!intelV1Enabled) return query;
+
+    // Keep high-rated client-side to avoid inequality + geohash ordering conflicts.
+
+    if (nextFilters.goodForStudying) {
+      query = query.where('intel.goodForStudying', '==', true);
+    }
+
+    if (nextFilters.goodForMeetings) {
+      query = query.where('intel.goodForMeetings', '==', true);
+    }
+
+    return query;
+  }, [intelV1Enabled]);
+
+  const fetchNearbySpots = useCallback(async (
+    userLat: number,
+    userLng: number,
+    radiusMiles: number,
+    nextFilters: FilterState
+  ) => {
+    const fb = ensureFirebase();
+    if (!fb) return [] as any[];
+
+    const db = fb.firestore();
+    const { normalized: safeFilters, downgraded, activeFirestoreFilters } = normalizeQueryFilters(nextFilters);
+    const radiusMeters = Math.max(0.5, Math.min(5, radiusMiles)) * 1609.34;
+    const bounds = geohashQueryBounds([userLat, userLng], radiusMeters);
+
+    if (downgraded.length > 0 && !slowQueryNoticeRef.current) {
+      slowQueryNoticeRef.current = true;
+      showToast(
+        `Optimized query mode: up to ${MAX_FIRESTORE_FILTERS}/${FIRESTORE_FILTERS.length} filters run on Firestore, ${CLIENT_FILTERS.length} stay client-side.`,
+        'info'
+      );
+    } else if (downgraded.length === 0 && slowQueryNoticeRef.current) {
+      slowQueryNoticeRef.current = false;
+    }
+
+    const merged = new Map<string, any>();
+
+    try {
+      const snapshots = await Promise.all(
+        bounds.map((bound) => {
+          let query: any = db
+            .collection('spots')
+            .orderBy('geoHash')
+            .startAt(bound[0])
+            .endAt(bound[1]);
+          query = applyFirestoreFilters(query, safeFilters);
+          return query.limit(120).get();
+        })
+      );
+
+      snapshots.forEach((snapshot: any) => {
+        snapshot.docs.forEach((doc: any) => {
+          if (!merged.has(doc.id)) {
+            merged.set(doc.id, { id: doc.id, ...doc.data() });
+          }
+        });
+      });
+    } catch {
+      // Fallback query for documents missing geoHash/indexes.
+      const fallback = await db.collection('spots').limit(250).get();
+      fallback.docs.forEach((doc: any) => {
+        if (!merged.has(doc.id)) {
+          merged.set(doc.id, { id: doc.id, ...doc.data() });
+        }
+      });
+    }
+
+    if (merged.size === 0) {
+      const fallback = await db.collection('spots').limit(250).get();
+      fallback.docs.forEach((doc: any) => {
+        if (!merged.has(doc.id)) {
+          merged.set(doc.id, { id: doc.id, ...doc.data() });
+        }
+      });
+    }
+
+    const normalized = normalizeSpotsForExplore(Array.from(merged.values()))
+      .map((spot: any) => {
+        const lat = typeof spot?.lat === 'number' ? spot.lat : spot?.location?.lat;
+        const lng = typeof spot?.lng === 'number' ? spot.lng : spot?.location?.lng;
+        if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+
+        const distanceKm = distanceBetween([userLat, userLng], [lat, lng]);
+        const distanceMeters = distanceKm * 1000;
+        const busyness = spot?.display?.busyness || spot?.live?.busyness;
+        const noise = spot?.display?.noise || spot?.live?.noise || spot?.intel?.inferredNoise;
+        const noiseMatches = safeFilters.noiseLevel === 'any' || noise === safeFilters.noiseLevel;
+        const rating = typeof spot?.intel?.avgRating === 'number' ? spot.intel.avgRating : spot?.rating || 0;
+
+        if (distanceMeters > radiusMeters) return null;
+        if (safeFilters.notCrowded && busyness === 'packed') return null;
+        if (safeFilters.highRated && rating < 4) return null;
+        if (!noiseMatches) return null;
+        if (safeFilters.goodForStudying && spot?.intel?.goodForStudying !== true) return null;
+        if (safeFilters.goodForMeetings && spot?.intel?.goodForMeetings !== true) return null;
+
+        return {
+          ...spot,
+          distance: distanceKm,
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity));
+
+    if (activeFirestoreFilters.length > MAX_FIRESTORE_FILTERS) {
+      showToast('Query narrowed for speed. Remaining filters were applied locally.', 'info');
+    }
+
+    return normalized as any[];
+  }, [applyFirestoreFilters, showToast]);
+
+  useEffect(() => {
+    if (!intelV1Enabled || !loc) {
+      setIntelSpots([]);
+      setIntelFetched(false);
+      return;
+    }
+    let active = true;
+
+    (async () => {
+      try {
+        const next = await fetchNearbySpots(loc.lat, loc.lng, filters.distance, filters);
+        if (!active) return;
+        setIntelSpots(next);
+        setIntelFetched(true);
+      } catch {
+        if (!active) return;
+        setIntelSpots([]);
+        setIntelFetched(true);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    intelV1Enabled,
+    loc,
+    filters,
+    fetchNearbySpots,
+  ]);
 
   useEffect(() => {
     (async () => {
@@ -403,6 +834,21 @@ export default function Explore() {
     return () => clearTimeout(id);
   }, [mapFocus]);
 
+  // Animate map to new focus when mapFocus changes (e.g., user clicks locate button)
+  useEffect(() => {
+    if (!mapFocus || !mapViewRef.current) return;
+    try {
+      mapViewRef.current.animateToRegion({
+        latitude: mapFocus.lat,
+        longitude: mapFocus.lng,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      }, 500);
+    } catch {
+      // Map ref may not support animateToRegion
+    }
+  }, [mapFocus]);
+
   useEffect(() => {
     if (!mapKey || !mapCenter) return;
     const center = `${mapCenter.lat},${mapCenter.lng}`;
@@ -410,10 +856,21 @@ export default function Explore() {
     setMapUrl(url);
   }, [mapKey, mapCenter]);
 
+  // Fetch time-aware recommendations on mount and every hour
+  useEffect(() => {
+    const updateTimeContext = () => {
+      const ctx = getTimeAwareRecommendations();
+      setTimeContext(ctx);
+    };
+    updateTimeContext();
+    const interval = setInterval(updateTimeContext, 60 * 60 * 1000); // Update hourly
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     let active = true;
     const locKey = loc ? `${loc.lat.toFixed(2)}:${loc.lng.toFixed(2)}` : 'none';
-    const fetchKey = `${scope}|${userId || 'anon'}|${campusKey || 'none'}|${friendIds.join(',')}|${blockedIds.join(',')}|${locKey}|${refreshToken}`;
+    const fetchKey = `${scope}|${userId || 'anon'}|${campusKey || 'none'}|${friendIdsKey}|${blockedIdsKey}|${locKey}|${refreshToken}`;
     if (fetchKeyRef.current === fetchKey) return;
     fetchKeyRef.current = fetchKey;
     (async () => {
@@ -428,63 +885,26 @@ export default function Explore() {
           try {
             items = await getCheckins();
           } catch {}
-          items = (items || []).filter((it: any) => {
-            if (user && blockedIds.includes(it.userId)) return false;
-            if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-            if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+            items = (items || []).filter((it: any) => {
+            if (user && blockedIdSet.has(it.userId)) return false;
+            if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+            if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
             if (!passesScope(it)) return false;
             return true;
           });
           if (!active) return;
           setCheckins(items);
-          const grouped: Record<string, any> = {};
-          items.forEach((it: any) => {
-            const name = it.spotName || it.spot || 'Unknown';
-            const key = spotKey(it.spotPlaceId, name);
-            if (!grouped[key]) {
-              grouped[key] = {
-                name,
-                count: 0,
-                example: it,
-                openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-                tagScores: {},
-              };
-            }
-            grouped[key].count += 1;
-            if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-            if (Array.isArray(it.tags)) {
-              it.tags.forEach((tag: any) => {
-                const t = String(tag || '').trim();
-                if (!t) return;
-                grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-              });
-            }
-          });
-          const arr = Object.values(grouped) as any[];
-          const focus = loc;
-          if (focus) {
-            arr.forEach((a) => {
-              const coords = a.example?.spotLatLng || a.example?.location;
-              if (coords && coords.lat && coords.lng) {
-                a.distance = haversine(focus, { lat: coords.lat, lng: coords.lng });
-              } else {
-                a.distance = Infinity;
-              }
-            });
-            arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
-          } else {
-            arr.sort((a, b) => b.count - a.count);
-          }
+          const arr = buildSpotsFromCheckins(items, loc, false);
           setSpots(arr.slice(0, 30));
           setStatus(null);
           setLoading(false);
           return;
         }
-        const res = await getCheckinsRemote(500);
+        const res = await getCheckinsRemote(240);
         let items = (res.items || []).filter((it: any) => {
-          if (user && blockedIds.includes(it.userId)) return false;
-          if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-          if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+          if (user && blockedIdSet.has(it.userId)) return false;
+          if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+          if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
           if (!passesScope(it)) return false;
           return true;
         });
@@ -501,9 +921,9 @@ export default function Explore() {
 	            await seedDemoNetwork(user?.id);
 	            const local = await getCheckins();
 	            const fallback = local.filter((it: any) => {
-	              if (user && blockedIds.includes(it.userId)) return false;
-	              if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-	              if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+	              if (user && blockedIdSet.has(it.userId)) return false;
+	              if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+	              if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
 	              if (!passesScope(it)) return false;
 	              return true;
 	            });
@@ -512,45 +932,7 @@ export default function Explore() {
         }
         setCheckins(items);
         void syncPendingCheckins(1);
-        // compute top spots and attach distance if possible
-        const grouped: Record<string, any> = {};
-        items.forEach((it: any) => {
-          const name = it.spotName || it.spot || 'Unknown';
-          const key = spotKey(it.spotPlaceId, name);
-          if (!grouped[key]) {
-            grouped[key] = {
-              name,
-              count: 0,
-              example: it,
-              openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-              tagScores: {},
-            };
-          }
-          grouped[key].count += 1;
-          if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-          if (Array.isArray(it.tags)) {
-            it.tags.forEach((tag: any) => {
-              const t = String(tag || '').trim();
-              if (!t) return;
-              grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-            });
-          }
-        });
-        const arr = Object.values(grouped) as any[];
-        const focus = loc;
-        if (focus) {
-          arr.forEach((a) => {
-            const coords = a.example?.spotLatLng || a.example?.location;
-            if (coords && coords.lat && coords.lng) {
-              a.distance = loc ? haversine(loc, { lat: coords.lat, lng: coords.lng }) : haversine(focus, { lat: coords.lat, lng: coords.lng });
-            } else {
-              a.distance = Infinity;
-            }
-          });
-          arr.sort((a, b) => (a.distance || 99999) - (b.distance || 99999));
-        } else {
-          arr.sort((a, b) => b.count - a.count);
-        }
+        const arr = buildSpotsFromCheckins(items, loc, !loc);
         if (!active) return;
         const baseSpots = arr.slice(0, 30);
         setSpots(baseSpots);
@@ -593,37 +975,14 @@ export default function Explore() {
       } catch {
         const local = await getCheckins();
         const filtered = local.filter((it: any) => {
-          if (user && blockedIds.includes(it.userId)) return false;
-          if (it.visibility === 'friends' && (!user || !friendIds.includes(it.userId))) return false;
-          if (it.visibility === 'close' && (!user || !friendIds.includes(it.userId))) return false;
+          if (user && blockedIdSet.has(it.userId)) return false;
+          if (it.visibility === 'friends' && (!user || !friendIdSet.has(it.userId))) return false;
+          if (it.visibility === 'close' && (!user || !friendIdSet.has(it.userId))) return false;
           if (!passesScope(it)) return false;
           return true;
         });
         setCheckins(filtered);
-        const grouped: Record<string, any> = {};
-        filtered.forEach((it: any) => {
-          const name = it.spotName || it.spot || 'Unknown';
-          const key = spotKey(it.spotPlaceId, name);
-          if (!grouped[key]) {
-            grouped[key] = {
-              name,
-              count: 0,
-              example: it,
-              openNow: typeof it.openNow === 'boolean' ? it.openNow : undefined,
-              tagScores: {},
-            };
-          }
-          grouped[key].count += 1;
-          if (typeof it.openNow === 'boolean') grouped[key].openNow = it.openNow;
-          if (Array.isArray(it.tags)) {
-            it.tags.forEach((tag: any) => {
-              const t = String(tag || '').trim();
-              if (!t) return;
-              grouped[key].tagScores[t] = (grouped[key].tagScores[t] || 0) + 1;
-            });
-          }
-        });
-        const offlineArr = Object.values(grouped).sort((a, b) => b.count - a.count);
+        const offlineArr = buildSpotsFromCheckins(filtered, loc, true);
         if (!active) return;
         setSpots(offlineArr);
         setStatus({ message: 'Offline right now. Showing saved spots.', tone: 'warning' });
@@ -636,7 +995,7 @@ export default function Explore() {
     return () => {
       active = false;
     };
-  }, [scope, friendIds, user, userId, loc, blockedIds, refreshToken, showToast, campusKey, passesScope]);
+  }, [scope, user, userId, loc, refreshToken, showToast, campusKey, passesScope, friendIdsKey, blockedIdsKey, friendIdSet, blockedIdSet]);
 
   useEffect(() => {
     const focus = loc || mapFocus;
@@ -644,7 +1003,7 @@ export default function Explore() {
     setSpots((prev) => {
       const next = prev.map((a) => {
         const coords = a.example?.spotLatLng || a.example?.location;
-        if (coords && coords.lat && coords.lng) {
+        if (typeof coords?.lat === 'number' && typeof coords?.lng === 'number') {
           return { ...a, distance: haversine(focus, { lat: coords.lat, lng: coords.lng }) };
         }
         return { ...a, distance: Infinity };
@@ -779,8 +1138,8 @@ export default function Explore() {
         const results: any[] = [];
         if (focus) {
           const [nearbyStudy, nearbyGeneral] = await Promise.all([
-            searchPlacesNearby(focus.lat, focus.lng, 4500, 'study'),
-            searchPlacesNearby(focus.lat, focus.lng, 4500, 'general'),
+            searchPlacesNearby(focus.lat, focus.lng, 3500, 'study'),
+            searchPlacesNearby(focus.lat, focus.lng, 3500, 'general'),
           ]);
           const biasQueries = seedVibe === 'cowork'
             ? [
@@ -788,10 +1147,6 @@ export default function Explore() {
                 'shared office',
                 'flex office',
                 'workspace',
-                'wework',
-                'regus',
-                'industrious',
-                'common desk',
                 'student center workspace',
               ]
             : [
@@ -800,18 +1155,18 @@ export default function Explore() {
                 'library',
                 'coworking space',
                 'study spot',
-                'bookstore',
-                'student center',
-                'campus library',
+                'bookstore nearby',
               ];
           const biasResults = await Promise.all(
-            biasQueries.map((q) => searchPlacesWithBias(q, focus.lat, focus.lng, 12000, 8))
+            biasQueries.map((q) => searchPlacesWithBias(q, focus.lat, focus.lng, 9000, 6))
           );
           const merged = [...nearbyStudy];
+          const seenKeys = new Set(merged.map((m) => `${m.placeId || ''}-${m.name || ''}`));
           [nearbyGeneral, ...biasResults].forEach((list) => {
             list.forEach((p) => {
               const key = `${p.placeId || ''}-${p.name}`;
-              if (merged.some((m) => `${m.placeId || ''}-${m.name}` === key)) return;
+              if (!key || seenKeys.has(key)) return;
+              seenKeys.add(key);
               merged.push(p);
             });
           });
@@ -1180,7 +1535,14 @@ export default function Explore() {
       recordPlaceEventRemote(eventPayload);
     });
   }, [filteredSeedSpots, userId]);
-  const displaySpots = demoMode ? spots : (filteredSeedSpots.length ? filteredSeedSpots : spots);
+  const displaySpots = React.useMemo(() => {
+    if (demoMode) return spots;
+    if (intelV1Enabled) {
+      if (intelFetched) return normalizeSpotsForExplore(intelSpots);
+      return normalizeSpotsForExplore(filteredSeedSpots.length ? filteredSeedSpots : spots);
+    }
+    return normalizeSpotsForExplore(filteredSeedSpots.length ? filteredSeedSpots : spots);
+  }, [demoMode, spots, intelV1Enabled, intelFetched, intelSpots, filteredSeedSpots]);
   const isSeeded = !demoMode && filteredSeedSpots.length > 0;
   const liveCheckins = React.useMemo(
     () => checkins.filter((it: any) => it.spotLatLng || it.location).slice(0, 6),
@@ -1199,7 +1561,7 @@ export default function Explore() {
     });
   }, [liveCheckins, spots]);
   const filteredSpots = React.useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     const isNameSearch = !!q && !activeIntent;
     const byQuery = isNameSearch ? displaySpots.filter((s) => (s.name || '').toLowerCase().includes(q)) : displaySpots;
     if (aiMode) return byQuery;
@@ -1265,12 +1627,54 @@ export default function Explore() {
         if (!hoursMatch) return false;
       }
 
+      // Spot Intel filters (utility metrics from check-ins)
+      const spotIntelFilters = hasPremiumAccess ? (selectedFilters.spotIntel || []) : [];
+      if (spotIntelFilters.length > 0) {
+        const intelMatch = spotIntelFilters.every(filter => {
+          if (filter === 'fast-wifi') return s.avgWifiSpeed && s.avgWifiSpeed >= 4;
+          if (filter === 'has-outlets') return s.topOutletAvailability === 'plenty' || s.topOutletAvailability === 'some';
+          if (filter === 'not-busy') return s.avgBusyness && s.avgBusyness <= 2;
+          if (filter === 'quiet-spot') return s.avgNoiseLevel && s.avgNoiseLevel <= 2;
+          if (filter === 'lively-spot') return s.avgNoiseLevel && s.avgNoiseLevel >= 4;
+          return true;
+        });
+        if (!intelMatch) return false;
+      }
+
       // Legacy vibe filter (for backward compatibility)
       if (vibe !== 'all' && !matchesVibe(hay, vibe)) return false;
 
+      const maxDistanceKm = Math.max(0.5, Math.min(5, filters.distance)) * 1.60934;
+      if (typeof s.distance === 'number' && s.distance !== Infinity && s.distance > maxDistanceKm) return false;
+
+      if (filters.openNow && s.openNow !== true) return false;
+
+      if (filters.priceLevel.length > 0) {
+        const priceLevel = s?.intel?.priceLevel || s?.priceLevel || s?.metadata?.priceLevel;
+        if (!priceLevel || !filters.priceLevel.includes(priceLevel)) return false;
+      }
+
+      if (intelV1Enabled) {
+        const normalizedNoise = String(s?.display?.noise || s?.live?.noise || s?.intel?.inferredNoise || '').toLowerCase();
+        if (filters.noiseLevel !== 'any' && normalizedNoise !== filters.noiseLevel) return false;
+
+        if (filters.notCrowded) {
+          const busyness = String(s?.display?.busyness || s?.live?.busyness || '').toLowerCase();
+          if (busyness === 'packed') return false;
+        }
+
+        if (filters.highRated) {
+          const rating = typeof s?.intel?.avgRating === 'number' ? s.intel.avgRating : s?.rating || 0;
+          if (rating < 4) return false;
+        }
+
+        if (filters.goodForStudying && s?.intel?.goodForStudying !== true) return false;
+        if (filters.goodForMeetings && s?.intel?.goodForMeetings !== true) return false;
+      }
+
       return true;
     });
-  }, [query, displaySpots, activeIntent, aiMode, selectedFilters, vibe, matchesVibe]);
+  }, [deferredQuery, displaySpots, activeIntent, aiMode, selectedFilters, vibe, matchesVibe, hasPremiumAccess, filters, intelV1Enabled]);
 
   const filteredByOpen = React.useMemo(() => {
     // Hours filter is now handled in filteredSpots, but keep for backward compatibility
@@ -1280,13 +1684,36 @@ export default function Explore() {
       return appliedOpenFilter === 'open' ? s.openNow : !s.openNow;
     });
   }, [filteredSpots, appliedOpenFilter]);
+  const sortOption = selectedFilters.sort?.[0] || 'popular';
   const rankedSpots = React.useMemo(() => {
-    if (!aiMode) return filteredByOpen;
     const next = filteredByOpen.slice();
-    next.sort((a: any, b: any) => scoreNearby(b) - scoreNearby(a));
+
+    // Apply sorting based on selected sort option
+    if (intelV1Enabled || sortOption === 'nearest') {
+      // Sort by distance (nearest first)
+      next.sort((a: any, b: any) => {
+        const distA = a.distance ?? Infinity;
+        const distB = b.distance ?? Infinity;
+        return distA - distB;
+      });
+    } else if (sortOption === 'quality') {
+      // Sort by quality score (WiFi, noise, busyness, outlets)
+      next.sort((a: any, b: any) => {
+        const scoreA = calculateCompositeScore(a, null);
+        const scoreB = calculateCompositeScore(b, null);
+        return scoreB - scoreA;
+      });
+    } else if (aiMode) {
+      // Default AI mode sorting
+      next.sort((a: any, b: any) => scoreNearby(b) - scoreNearby(a));
+    } else {
+      // Default: sort by popularity (check-in count)
+      next.sort((a: any, b: any) => (b.count || 0) - (a.count || 0));
+    }
+
     return next;
-  }, [filteredByOpen, aiMode, scoreNearby]);
-  const showRanks = !query.trim() || aiMode;
+  }, [filteredByOpen, aiMode, scoreNearby, sortOption, intelV1Enabled]);
+  const showRanks = !deferredQuery.trim() || aiMode;
 
   // Memoize spot tags to avoid recomputing on every render
   const spotTagsMap = React.useMemo(() => {
@@ -1298,28 +1725,11 @@ export default function Explore() {
     return map;
   }, [rankedSpots]);
 
-  // Memoize spot press handler
-  const handleSpotPress = useCallback((item: any) => {
-    try {
-      const category = classifySpotCategory(item.name, item.types);
-      const eventPayload = {
-        event: 'tap' as const,
-        ts: Date.now(),
-        userId: userId || undefined,
-        placeId: item.example?.spotPlaceId || null,
-        name: item.name,
-        category,
-      };
-      recordPlaceEvent(eventPayload);
-      recordPlaceEventRemote(eventPayload);
-      openSpotSheet(item);
-    } catch {}
-  }, [userId]);
   const listData = React.useMemo(() => {
     if (!rankedSpots.length) return [];
-    if (query.trim()) return rankedSpots;
+    if (deferredQuery.trim()) return rankedSpots;
     return rankedSpots.slice(0, 10);
-  }, [rankedSpots, query]);
+  }, [rankedSpots, deferredQuery]);
 
   const friendSuggested = React.useMemo(() => {
     if (!user) return [];
@@ -1353,7 +1763,7 @@ export default function Explore() {
   }, []);
 
   const handleRegionChange = React.useCallback((region: any) => {
-    if (!region?.latitude || !region?.longitude) return;
+    if (typeof region?.latitude !== 'number' || typeof region?.longitude !== 'number') return;
     const next = { lat: region.latitude, lng: region.longitude };
     setMapFocus((prev) => {
       if (!prev) return next;
@@ -1379,22 +1789,17 @@ export default function Explore() {
         return;
       }
 
-      // If we already have a location, just re-center without extra prompts.
-      if (loc) {
-        setMapFocus(loc);
-        return;
-      }
-
       try {
         await setPermissionPrimerSeen('location', true);
         await setLocationEnabled(true);
       } catch {}
 
-      const current = await requestForegroundLocation();
+      // Always request fresh location, ignore cache
+      const current = await requestForegroundLocation({ ignoreCache: true });
       if (current) {
         setLoc(current);
-        setMapFocus(current);
-        showToast('Centered on you.', 'success');
+        setMapFocus(current); // Force map to center on new location
+        showToast('Location updated', 'success');
         return;
       }
 
@@ -1416,11 +1821,11 @@ export default function Explore() {
     } finally {
       setLocBusy(false);
     }
-  }, [loc, locBusy, router, showToast]);
+  }, [locBusy, router, showToast]);
 
   function getSpotCoords(spot: any) {
     const coords = spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
-    if (!coords?.lat || !coords?.lng) return null;
+    if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
     return coords;
   }
 
@@ -1434,28 +1839,95 @@ export default function Explore() {
     );
   }
 
-  async function refreshSelectedSaved(spot: any) {
+  const refreshSelectedSaved = useCallback(async (spot: any) => {
     if (!spot) return;
     try {
       const list = await getSavedSpots(200);
       const placeId = getSpotPlaceId(spot);
       const key = placeId ? `place:${placeId}` : `name:${spot.name || ''}`;
-      setSelectedSaved(list.some((s: any) => s.key === key));
+      const saved = list.find((s: any) => s.key === key);
+      setSelectedSaved(!!saved);
+      setSavedNote(saved?.note || '');
     } catch {
       setSelectedSaved(false);
+      setSavedNote('');
     }
-  }
+  }, []);
 
-  function openSpotSheet(spot: any) {
-    setSelectedSpot(spot);
-    void refreshSelectedSaved(spot);
-  }
+  const openSpotSheet = useCallback(async (spot: any) => {
+    const safeSpot = normalizeSpotForExplore(spot);
+    setSelectedSpot(safeSpot);
+    setSmartData(null); // Reset while loading
+    setLifestyleData(null);
+    void refreshSelectedSaved(safeSpot);
 
-  function closeSpotSheet() {
+    // Fetch smart data and lifestyle data from external sources
+    const placeId = getSpotPlaceId(safeSpot);
+    const spotLocation = safeSpot.example?.spotLatLng || safeSpot.example?.location || safeSpot.location;
+    try {
+      const category = classifySpotCategory(safeSpot.name);
+      const [smartResult, lifestyleResult] = await Promise.all([
+        getSmartSpotData(placeId, safeSpot.name, category, spotLocation),
+        getLifestyleSpotData(placeId),
+      ]);
+      setSmartData(smartResult);
+      setLifestyleData(lifestyleResult);
+    } catch {
+      // Data enrichment is optional, fail silently
+    }
+  }, [refreshSelectedSaved]);
+
+  const closeSpotSheet = useCallback(() => {
     setSelectedSpot(null);
     setSelectedSaved(false);
+    setSmartData(null);
+    setLifestyleData(null);
+  }, []);
+
+  // Memoize spot press handler
+  const handleSpotPress = useCallback((item: any) => {
+    try {
+      const category = classifySpotCategory(item.name, item.types);
+      const eventPayload = {
+        event: 'tap' as const,
+        ts: Date.now(),
+        userId: userId || undefined,
+        placeId: item.example?.spotPlaceId || null,
+        name: item.name,
+        category,
+      };
+      recordPlaceEvent(eventPayload);
+      recordPlaceEventRemote(eventPayload);
+      const tappedPlaceId = item?.example?.spotPlaceId || item?.placeId;
+      if (typeof tappedPlaceId === 'string' && tappedPlaceId.trim()) {
+        void trackSpotViewed(tappedPlaceId);
+      }
+      void openSpotSheet(item);
+    } catch {}
+  }, [userId, openSpotSheet]);
+
+  function handleLifestyleFilter(filter: string) {
+    setLifestyleFilters((prev) =>
+      prev.includes(filter) ? prev.filter((f) => f !== filter) : [...prev, filter]
+    );
   }
 
+  function handleCuratedListSelect(list: CuratedList) {
+    // For now, just set a search query - could navigate to a filtered view
+    setQuery(list.title.toLowerCase());
+  }
+
+  function handleMoodSelect(mood: string) {
+    // Map moods to search queries
+    const moodQueries: Record<string, string> = {
+      chill: 'quiet cozy spot',
+      social: 'lively hangout',
+      romantic: 'date spot romantic',
+      productive: 'quiet wifi outlets',
+      adventurous: 'hidden gem',
+    };
+    setQuery(moodQueries[mood] || '');
+  }
   const selectedTags = React.useMemo(() => (
     selectedSpot ? buildSpotTags(selectedSpot) : []
   ), [selectedSpot]);
@@ -1469,9 +1941,6 @@ export default function Explore() {
         contentContainerStyle={styles.listContent}
         initialNumToRender={5}
         maxToRenderPerBatch={5}
-        windowSize={5}
-        removeClippedSubviews={true}
-        updateCellsBatchingPeriod={100}
         windowSize={7}
         updateCellsBatchingPeriod={40}
         removeClippedSubviews={Platform.OS !== 'web'}
@@ -1480,23 +1949,38 @@ export default function Explore() {
         }
         ListHeaderComponent={
           <View style={styles.header}>
-            <Label style={{ color: muted, marginBottom: 8 }}>Explore</Label>
-            <H1 style={{ color }}>Find your next third place.</H1>
+            <Label style={{ color: muted, marginBottom: 8 }}>Discover</Label>
+            <H1 style={{ color }}>Find your perfect spot.</H1>
             <Body style={{ color: muted }}>
-              See trending spots and live check-ins near you.
+              {timeContext?.timeContext || 'Coffee shops, cafes, and hidden gems near you.'}
             </Body>
             <View style={{ height: 12 }} />
             <TextInput
-              placeholder="Search, or ask Perched…"
+              placeholder="Search cafes, vibes, or ask anything…"
               placeholderTextColor={muted}
               value={query}
               onChangeText={setQuery}
               returnKeyType="search"
               style={[styles.searchInput, { borderColor: border, backgroundColor: card, color }]}
             />
+            {/* Lifestyle Quick Filters */}
+            {!query.trim() && (
+              <LifestyleQuickFilters
+                onSelectFilter={handleLifestyleFilter}
+                activeFilters={lifestyleFilters}
+              />
+            )}
+            {/* Mood Selector */}
+            {!query.trim() && (
+              <MoodSelector onSelectMood={handleMoodSelect} />
+            )}
+            {/* Curated Discovery Lists */}
+            {!query.trim() && (
+              <CuratedLists onSelectList={handleCuratedListSelect} compact />
+            )}
             {!query.trim() ? (
               <View style={{ marginTop: 10 }}>
-                <Text style={{ color: muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Try:</Text>
+                <Text style={{ color: muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>Quick search:</Text>
                 <View style={styles.vibeRow}>
                   {ASK_PRESETS.map((preset) => (
                     <Pressable
@@ -1566,19 +2050,71 @@ export default function Explore() {
                   {scope === 'campus' && !campusKey ? (
                     <Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>Add a campus in Profile to enable this feed.</Text>
                   ) : null}
+                  {scope === 'campus' && campusKey ? (
+                    <Pressable
+                      onPress={() => router.push('/campus-leaderboard' as any)}
+                      style={{
+                        marginTop: 8,
+                        padding: 8,
+                        backgroundColor: withAlpha(primary, 0.1),
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: withAlpha(primary, 0.2)
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <IconSymbol name="trophy.fill" size={14} color={primary} />
+                          <Text style={{ color: primary, fontSize: 12, fontWeight: '600' }}>
+                            View Campus Leaderboard
+                          </Text>
+                        </View>
+                        <IconSymbol name="chevron.right" size={12} color={primary} />
+                      </View>
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
             ) : null}
-            <FilterGroups
-              groups={FILTER_GROUPS}
-              selectedFilters={selectedFilters}
-              onFilterChange={(groupId, values) => {
-                setSelectedFilters(prev => ({
-                  ...prev,
-                  [groupId]: values,
-                }));
-              }}
-            />
+            {!hasPremiumAccess && !intelV1Enabled ? (
+              <View style={[styles.premiumPrompt, { backgroundColor: withAlpha(primary, 0.1), borderColor: withAlpha(primary, 0.24) }]}>
+                <Text style={[styles.premiumPromptTitle, { color }]}>Premium Feature</Text>
+                <Text style={{ color: muted, marginTop: 4 }}>Unlock advanced filters and deeper spot intelligence with Premium.</Text>
+                <TouchableOpacity
+                  onPress={() => router.push('/premium-upgrade')}
+                  style={[styles.upgradeButton, { backgroundColor: primary }]}
+                  activeOpacity={0.85}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Upgrade to Premium</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            <View style={styles.filterActionRow}>
+              <Pressable
+                onPress={() => setShowFilters(true)}
+                style={({ pressed }) => [
+                  styles.filterButton,
+                  { borderColor: border, backgroundColor: pressed ? highlight : card },
+                ]}
+              >
+                <IconSymbol name="line.3.horizontal.decrease.circle.fill" size={18} color={primary} />
+                <Text style={{ color, fontWeight: '700', marginLeft: 8 }}>Filters</Text>
+                {hasActiveFilterState ? (
+                  <View style={[styles.filterBadge, { backgroundColor: primary }]}>
+                    <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+              {intelV1Enabled ? (
+                <View style={[styles.intelBadge, { borderColor: withAlpha(primary, 0.3), backgroundColor: withAlpha(primary, 0.08) }]}>
+                  <Text style={{ color: primary, fontSize: 11, fontWeight: '700' }}>INTEL V1</Text>
+                </View>
+              ) : FILTER_GROUPS.length ? (
+                <Text style={{ color: muted, fontSize: 11 }}>
+                  Legacy mode
+                </Text>
+              ) : null}
+            </View>
             <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
               {filteredByOpen.length
                 ? `Showing ${filteredByOpen.length} spot${filteredByOpen.length === 1 ? '' : 's'}`
@@ -1606,6 +2142,7 @@ export default function Explore() {
                   </View>
                 ) : null}
                 <MapView
+                  ref={mapViewRef}
                   provider={hasMapKey ? PROVIDER_GOOGLE : undefined}
                   style={styles.map}
                   initialRegion={{ latitude: mapCenter.lat, longitude: mapCenter.lng, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
@@ -1626,7 +2163,7 @@ export default function Explore() {
                   ) : null}
                     {markerSpots.map((s) => {
                       const coords = s.example?.spotLatLng || s.example?.location;
-                      if (!coords || !coords.lat || !coords.lng) return null;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
                       const markerKey = spotKey(s.example?.spotPlaceId || s.placeId, s.name || 'spot');
                       const isFriend = !!(user && friendIdSet.has(s.example?.userId));
                       const displayCoords = !isFriend && s.example?.visibility !== 'friends' && s.example?.visibility !== 'close'
@@ -1653,7 +2190,7 @@ export default function Explore() {
                   })}
                     {liveUnique.map((it: any) => {
                       const coords = it.spotLatLng || it.location;
-                      if (!coords?.lat || !coords?.lng) return null;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
                       const isFriend = !!(user && friendIdSet.has(it.userId));
                       const displayCoords = !isFriend && it.visibility !== 'friends' && it.visibility !== 'close'
                         ? fuzzLocation(coords, `live-${it.id}`)
@@ -1910,6 +2447,28 @@ export default function Explore() {
                 {`${selectedSpot.rating.toFixed(1)} ★${selectedSpot.ratingCount ? ` · ${selectedSpot.ratingCount} reviews` : ''}`}
               </Text>
             ) : null}
+            {intelV1Enabled ? (
+              <SpotIntelligence
+                intel={selectedSpot?.intel}
+                display={selectedSpot?.display}
+                liveCheckinCount={selectedSpot?.live?.checkinCount || selectedSpot?.checkinCount || selectedSpot?.count || 0}
+                containerStyle={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}
+              />
+            ) : null}
+            {/* Smart Data from External Sources */}
+            {smartData && (
+              <SmartSpotInfo smartData={smartData} compact />
+            )}
+            {/* Lifestyle Data - Drinks, Tags, Features */}
+            {lifestyleData && (
+              <LifestyleSpotInfo data={lifestyleData} compact />
+            )}
+            {/* Popular Times Chart */}
+            <PopularTimes
+              popularHours={selectedSpot.popularHours}
+              checkinCount={selectedSpot.checkinCount || selectedSpot.count || 0}
+              compact
+            />
             <View style={styles.sheetActions}>
               <Pressable
                 onPress={() => {
@@ -1962,6 +2521,26 @@ export default function Explore() {
                 </Text>
               </Pressable>
             </View>
+            {/* Personal Note Input - shows when saved */}
+            {selectedSaved && (
+              <View style={[styles.noteContainer, { borderColor: border }]}>
+                <Text style={{ color: muted, fontSize: 12, marginBottom: 6 }}>Personal note</Text>
+                <TextInput
+                  style={[styles.noteInput, { borderColor: border, color, backgroundColor: withAlpha(border, 0.3) }]}
+                  placeholder="Add a note (e.g., 'good matcha', 'outlet by window')"
+                  placeholderTextColor={muted}
+                  value={savedNote}
+                  onChangeText={setSavedNote}
+                  onBlur={async () => {
+                    try {
+                      await updateSavedSpotNote(getSpotPlaceId(selectedSpot), selectedSpot.name, savedNote);
+                    } catch {}
+                  }}
+                  multiline
+                  numberOfLines={2}
+                />
+              </View>
+            )}
             <Pressable
               onPress={() => {
                 try {
@@ -1977,6 +2556,28 @@ export default function Explore() {
           </Pressable>
         </Pressable>
       ) : null}
+
+      <FilterBottomSheet
+        visible={showFilters}
+        currentFilters={filters}
+        onDismiss={() => setShowFilters(false)}
+        onApply={(nextFilters) => {
+          setFilters(nextFilters);
+          setShowFilters(false);
+        }}
+      />
+
+      {/* Premium Paywall */}
+      <PaywallModal
+        visible={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        onSelectPlan={(period) => {
+          setShowPaywall(false);
+          // TODO: Integrate payment processing
+          showToast('Payment integration coming soon!', 'info');
+        }}
+        feature={paywallFeature}
+      />
     </ThemedView>
   );
 }
@@ -1985,6 +2586,24 @@ const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
   listContent: { paddingHorizontal: 20, paddingBottom: 140 },
   header: { paddingTop: 20, paddingBottom: 16, paddingHorizontal: 20 },
+  premiumPrompt: {
+    marginTop: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  premiumPromptTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  upgradeButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
   mapCard: {
     borderRadius: 22,
     borderWidth: 1,
@@ -2047,6 +2666,8 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 20, fontWeight: '700' },
   sheetActions: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 14 },
   sheetButton: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, marginRight: 10, marginBottom: 10 },
+  noteContainer: { marginTop: 12, marginBottom: 8 },
+  noteInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, minHeight: 50 },
   sheetLink: { marginTop: 12, borderWidth: 1, paddingVertical: 10, borderRadius: 12, alignItems: 'center' },
   sectionHeader: {
     marginTop: 18,
@@ -2054,6 +2675,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  filterActionRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  filterBadge: {
+    marginLeft: 8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  filterBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  intelBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   filterRow: { marginTop: 12, alignItems: 'center', justifyContent: 'center' },
   vibeRow: { flexDirection: 'row', marginTop: 10, flexWrap: 'wrap' },
@@ -2144,6 +2799,13 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 6,
     opacity: 0.35,
+  },
+  intelSection: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
   fab: {
     position: 'absolute',

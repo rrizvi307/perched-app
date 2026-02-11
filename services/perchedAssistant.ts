@@ -1,11 +1,21 @@
 export type ExploreVibe = 'all' | 'quiet' | 'study' | 'social' | 'late' | 'cowork';
 export type OpenFilter = 'all' | 'open' | 'closed';
+export type NoisePreference = 'any' | 'quiet' | 'moderate' | 'lively';
+export type WifiPreference = 'any' | 'fast' | 'ok';
+export type BusynessPreference = 'any' | 'empty' | 'moderate' | 'busy';
+
+export type OutletPreference = 'any' | 'has-outlets';
 
 export type PerchedIntent = {
   raw: string;
   vibe: ExploreVibe;
   openFilter: OpenFilter;
   tags: string[];
+  // Utility metric filters
+  wifiSpeed: WifiPreference;
+  noiseLevel: NoisePreference;
+  busyness: BusynessPreference;
+  outlets: OutletPreference;
 };
 
 const TAG_CANONICAL: Array<{ match: RegExp; tag: string }> = [
@@ -74,6 +84,36 @@ function pickOpenFilter(text: string): OpenFilter {
   return 'all';
 }
 
+// Utility metric parsers
+function pickWifiSpeed(text: string): WifiPreference {
+  const t = text.toLowerCase();
+  if (/\bfast\s*wi[\s-]?fi\b|\bgood\s*wi[\s-]?fi\b|\bstrong\s*wi[\s-]?fi\b|\bfast\s*internet\b|\bgreat\s*wi[\s-]?fi\b|\breliable\s*wi[\s-]?fi\b/.test(t)) return 'fast';
+  if (/\bdecent\s*wi[\s-]?fi\b|\bok\s*wi[\s-]?fi\b/.test(t)) return 'ok';
+  return 'any';
+}
+
+function pickNoiseLevel(text: string): NoisePreference {
+  const t = text.toLowerCase();
+  if (/\bquiet\b|\bsilent\b|\bpeaceful\b|\blow noise\b|\bno noise\b|\bhush\b|\bcalm\b/.test(t)) return 'quiet';
+  if (/\blively\b|\bbuzzy\b|\benergetic\b|\bloud\b|\bnoisy\b|\bbusy atmosphere\b/.test(t)) return 'lively';
+  if (/\bmoderate noise\b|\bsome noise\b|\bbackground noise\b|\blight buzz\b/.test(t)) return 'moderate';
+  return 'any';
+}
+
+function pickBusyness(text: string): BusynessPreference {
+  const t = text.toLowerCase();
+  if (/\bempty\b|\bnot busy\b|\bnot crowded\b|\bquiet spot\b|\bavailable seats\b|\bseats available\b|\buncrowded\b|\bnot packed\b/.test(t)) return 'empty';
+  if (/\bbusy\b|\bcrowded\b|\bpacked\b|\bpopular\b|\bhot spot\b/.test(t)) return 'busy';
+  if (/\bmoderate crowd\b|\bsome people\b|\bfew people\b/.test(t)) return 'moderate';
+  return 'any';
+}
+
+function pickOutlets(text: string): OutletPreference {
+  const t = text.toLowerCase();
+  if (/\boutlet(s)?\b|\bpower\b|\bcharger\b|\bcharging\b|\bplug(s)?\b|\bcharge my\b/.test(t)) return 'has-outlets';
+  return 'any';
+}
+
 function pickTags(text: string): string[] {
   const tags: string[] = [];
   for (const rule of TAG_CANONICAL) {
@@ -91,7 +131,11 @@ export function parsePerchedQuery(raw: string): PerchedIntent | null {
   const vibe = pickVibe(text);
   const openFilter = pickOpenFilter(text);
   const tags = pickTags(text);
-  return { raw: trimmed, vibe, openFilter, tags };
+  const wifiSpeed = pickWifiSpeed(text);
+  const noiseLevel = pickNoiseLevel(text);
+  const busyness = pickBusyness(text);
+  const outlets = pickOutlets(text);
+  return { raw: trimmed, vibe, openFilter, tags, wifiSpeed, noiseLevel, busyness, outlets };
 }
 
 export function formatIntentChips(intent: PerchedIntent | null): string[] {
@@ -102,7 +146,16 @@ export function formatIntentChips(intent: PerchedIntent | null): string[] {
   }
   if (intent.openFilter === 'open') chips.push('Open now');
   if (intent.openFilter === 'closed') chips.push('Closed now');
+  // Utility metric chips
+  if (intent.wifiSpeed === 'fast') chips.push('Fast WiFi');
+  if (intent.wifiSpeed === 'ok') chips.push('Decent WiFi');
+  if (intent.noiseLevel === 'quiet') chips.push('Quiet');
+  if (intent.noiseLevel === 'lively') chips.push('Lively');
+  if (intent.noiseLevel === 'moderate') chips.push('Moderate noise');
+  if (intent.busyness === 'empty') chips.push('Not busy');
+  if (intent.busyness === 'busy') chips.push('Busy spot');
+  if (intent.outlets === 'has-outlets') chips.push('Has Outlets');
   intent.tags.forEach((t) => chips.push(t));
-  return uniq(chips).slice(0, 5);
+  return uniq(chips).slice(0, 6);
 }
 

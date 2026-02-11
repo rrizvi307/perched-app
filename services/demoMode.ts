@@ -1,4 +1,5 @@
 import { getCheckins, getDemoModeEnabled, resetDemoNetwork, seedDemoNetwork, setDemoModeEnabled } from '@/storage/local';
+import { clearLocationCache } from '@/services/location';
 
 export const DEMO_USER_IDS = [
   'demo-u1',
@@ -79,6 +80,9 @@ export async function ensureDemoModeReady(currentUserId?: string) {
   if (forced) {
     try {
       await setDemoModeEnabled(true);
+
+      // Clear cached location so demo data takes priority
+      clearLocationCache();
     } catch {}
   }
   const enabled = forced || (await getDemoModeEnabled().catch(() => false));

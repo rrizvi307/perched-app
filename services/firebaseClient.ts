@@ -9,6 +9,16 @@ import Constants from 'expo-constants';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
 import { normalizePhone } from '@/utils/phone';
+import { recordPerfMetric } from './perfMonitor';
+import { withErrorBoundary } from './errorBoundary';
+import { registerSubscription } from './memoryMonitor';
+import {
+  invalidateCacheOnCheckinCreate,
+  invalidateCacheOnCheckinDelete,
+  invalidateCacheOnCheckinUpdate,
+  invalidateCacheOnMetricUpdate,
+} from './cacheInvalidation';
+import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -88,6 +98,78 @@ let _initError: any = null;
 const checkinsCache = new Map<string, { ts: number; payload: any }>();
 const usersByIdCache = new Map<string, { ts: number; payload: any[] }>();
 const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
+const CHECKINS_CACHE_MAX = 120;
+const USERS_BY_ID_CACHE_MAX = 160;
+const USER_FRIENDS_CACHE_MAX = 300;
+
+function getCachedValue<T>(
+  cache: Map<string, { ts: number; payload: T }>,
+  key: string,
+  ttlMs: number
+): T | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.ts >= ttlMs) {
+    cache.delete(key);
+    return null;
+  }
+  // Promote hot keys to keep LRU-ish eviction behavior.
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached.payload;
+}
+
+function setCachedValue<T>(
+  cache: Map<string, { ts: number; payload: T }>,
+  key: string,
+  payload: T,
+  maxEntries: number
+) {
+  cache.set(key, { ts: Date.now(), payload });
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
+function toMillisSafe(value: any): number {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  if (typeof value?.toMillis === 'function') {
+    try {
+      return value.toMillis();
+    } catch {}
+  }
+  if (typeof value?.seconds === 'number') return value.seconds * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function invalidateCheckinsCache() {
+  checkinsCache.clear();
+}
+
+function invalidateUserFriendsCache(userIds: Array<string | undefined | null>) {
+  userIds.forEach((userId) => {
+    if (!userId) return;
+    userFriendsCache.delete(userId);
+  });
+}
+
+function resolveSpotId(payload: Record<string, any> | null | undefined): string {
+  if (!payload) return '';
+  const spotPlaceId = payload.spotPlaceId;
+  if (typeof spotPlaceId === 'string' && spotPlaceId.trim()) return spotPlaceId.trim();
+  const spotId = payload.spotId;
+  if (typeof spotId === 'string' && spotId.trim()) return spotId.trim();
+  return '';
+}
+
+function hasMetricUpdates(fields: Record<string, any>): boolean {
+  const metricFields = ['wifiSpeed', 'noiseLevel', 'busyness', 'outletAvailability', 'outlets', 'tags', 'spotLatLng'];
+  return metricFields.some((field) => Object.prototype.hasOwnProperty.call(fields, field));
+}
 
 function normalizeStringArray(value: unknown) {
   if (!Array.isArray(value)) return [] as string[];
@@ -292,6 +374,8 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
   };
 
   const ref = await db.collection('checkins').add(doc);
+  invalidateCheckinsCache();
+  void invalidateCacheOnCheckinCreate(ref.id, resolveSpotId(doc), userId || '');
   return { id: ref.id, ...doc };
 }
 
@@ -355,6 +439,9 @@ export async function recordPlaceTagRemote(payload: { placeId?: string | null; n
       [`tags.${payload.tag}`]: fb.firestore.FieldValue.increment(delta),
       updatedAt: fb.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
+    if (payload.placeId) {
+      void invalidateCacheOnMetricUpdate(payload.placeId);
+    }
   } catch {
     // ignore
   }
@@ -406,128 +493,116 @@ export async function getPlaceTagVotesRemote(userId: string, placeId?: string, n
 }
 
 export async function getCheckinsRemote(limit = 50, startAfter?: any) {
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
+  return withErrorBoundary('firebase_get_checkins_remote', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    const cacheKey = `${limit}:${cursorKey(startAfter)}`;
+    const cached = getCachedValue(checkinsCache, cacheKey, 10000);
+    if (cached) {
+      void recordPerfMetric('firebase_get_checkins_remote_cache_hit', Date.now() - startedAt, true);
+      return cached;
+    }
 
-  const cacheKey = `${limit}:${cursorKey(startAfter)}`;
-  const cached = checkinsCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 10000) {
-    return cached.payload;
-  }
+    const db = fb.firestore();
 
-  const db = fb.firestore();
-  let q: any = db.collection('checkins').orderBy('createdAt', 'desc');
-  if (startAfter) {
-    q = q.startAfter(startAfter);
-  }
-  q = q.limit(limit);
+    // Use schema helper with automatic fallback for legacy data
+    const snapshot = await queryAllCheckins(db, { limit, startAfter });
+    const items: any[] = [];
+    snapshot.forEach((doc: any) => {
+      items.push({ id: doc.id, ...(doc.data() || {}) });
+    });
 
-  const snapshot = await q.get();
-  const items: any[] = [];
-  snapshot.forEach((doc: any) => {
-    items.push({ id: doc.id, ...(doc.data() || {}) });
-  });
-
-  // lastCursor is the createdAt value of the last item (useful as a startAfter cursor)
-  const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-  const payload = { items, lastCursor };
-  checkinsCache.set(cacheKey, { ts: Date.now(), payload });
-  return payload;
+    // lastCursor is the createdAt value of the last item (useful as a startAfter cursor)
+    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const payload = { items, lastCursor };
+    setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
+    return payload;
+  }, { items: [], lastCursor: null });
 }
 
 export async function getCheckinsForUserRemote(userId: string, limit = 80, startAfter?: any) {
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
-  if (!userId) return { items: [], lastCursor: null };
+  return withErrorBoundary('firebase_get_checkins_for_user', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    if (!userId) return { items: [], lastCursor: null };
+    const cacheKey = `user:${userId}:${limit}:${cursorKey(startAfter)}`;
+    const cached = getCachedValue(checkinsCache, cacheKey, 10000);
+    if (cached) {
+      void recordPerfMetric('firebase_get_checkins_for_user_cache_hit', Date.now() - startedAt, true);
+      return cached;
+    }
 
-  const cacheKey = `user:${userId}:${limit}:${cursorKey(startAfter)}`;
-  const cached = checkinsCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 10000) {
-    return cached.payload;
-  }
+    const db = fb.firestore();
 
-  const db = fb.firestore();
-  let q: any = db.collection('checkins').where('userId', '==', userId).orderBy('createdAt', 'desc');
-  if (startAfter) q = q.startAfter(startAfter);
-  q = q.limit(limit);
-
-  try {
-    const snapshot = await q.get();
+    // Use schema helper with automatic fallback for legacy data
+    const snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
     const lastCursor = items.length ? items[items.length - 1].createdAt : null;
     const payload = { items, lastCursor };
-    checkinsCache.set(cacheKey, { ts: Date.now(), payload });
+    setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
-  } catch (err: any) {
-    const msg = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
-    const needsIndex = msg.includes('index') || msg.includes('indexes') || msg.includes('failed_precondition');
-    if (!needsIndex) throw err;
-
-    // Fallback for dev/demo environments where the userId+createdAt index isn't configured yet.
-    const fallback = await getCheckinsRemote(Math.max(200, limit * 4));
-    const items = (fallback?.items || []).filter((c: any) => c?.userId === userId).slice(0, limit);
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-    const payload = { items, lastCursor };
-    checkinsCache.set(cacheKey, { ts: Date.now(), payload });
-    return payload;
-  }
+  }, { items: [], lastCursor: null });
 }
 
 export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
+  return withErrorBoundary('firebase_get_approved_checkins', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    const cacheKey = `approved:${limit}:${cursorKey(startAfter)}`;
+    const cached = getCachedValue(checkinsCache, cacheKey, 10000);
+    if (cached) {
+      void recordPerfMetric('firebase_get_approved_checkins_cache_hit', Date.now() - startedAt, true);
+      return cached;
+    }
 
-  const cacheKey = `approved:${limit}:${cursorKey(startAfter)}`;
-  const cached = checkinsCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < 10000) {
-    return cached.payload;
-  }
+    const db = fb.firestore();
 
-  const db = fb.firestore();
-  let q: any = db.collection('checkins').where('approved', '==', true).orderBy('createdAt', 'desc');
-  if (startAfter) q = q.startAfter(startAfter);
-  q = q.limit(limit);
-
-  const snapshot = await q.get();
-  const items: any[] = [];
-  snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-  const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-  const payload = { items, lastCursor };
-  checkinsCache.set(cacheKey, { ts: Date.now(), payload });
-  return payload;
+    // Use schema helper with automatic fallback for legacy data
+    const snapshot = await queryAllCheckins(db, { limit, startAfter, approvedOnly: true });
+    const items: any[] = [];
+    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const payload = { items, lastCursor };
+    setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
+    return payload;
+  }, { items: [], lastCursor: null });
 }
 
 export function subscribeApprovedCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
   const db = fb.firestore();
-  const q = db.collection('checkins').where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
-  const unsub = q.onSnapshot((snapshot: any) => {
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    onUpdate(items);
-  });
-  return unsub;
+
+  // Use schema helper with automatic fallback for legacy data
+  const unsubscribe = subscribeApprovedCheckinsHelper(db, onUpdate, limit);
+  return registerSubscription(unsubscribe);
 }
 
 export async function getUsersByIdsCached(ids: string[], ttlMs = 15000) {
-  if (!ids || ids.length === 0) return [];
-  const key = ids.slice().sort().join('|');
-  const cached = usersByIdCache.get(key);
-  if (cached && Date.now() - cached.ts < ttlMs) return cached.payload;
-  const payload = await getUsersByIds(ids);
-  usersByIdCache.set(key, { ts: Date.now(), payload });
-  return payload;
+  return withErrorBoundary('firebase_get_users_by_ids_cached', async () => {
+    if (!ids || ids.length === 0) return [];
+    const key = ids.slice().sort().join('|');
+    const cached = getCachedValue(usersByIdCache, key, ttlMs);
+    if (cached) return cached;
+    const payload = await getUsersByIds(ids);
+    setCachedValue(usersByIdCache, key, payload, USERS_BY_ID_CACHE_MAX);
+    return payload;
+  }, []);
 }
 
 export async function getUserFriendsCached(userId: string, ttlMs = 15000) {
-  if (!userId) return [];
-  const cached = userFriendsCache.get(userId);
-  if (cached && Date.now() - cached.ts < ttlMs) return cached.payload;
-  const payload = await getUserFriends(userId);
-  userFriendsCache.set(userId, { ts: Date.now(), payload });
-  return payload;
+  return withErrorBoundary('firebase_get_user_friends_cached', async () => {
+    if (!userId) return [];
+    const cached = getCachedValue(userFriendsCache, userId, ttlMs);
+    if (cached) return cached;
+    const payload = await getUserFriends(userId);
+    setCachedValue(userFriendsCache, userId, payload, USER_FRIENDS_CACHE_MAX);
+    return payload;
+  }, []);
 }
 
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
@@ -535,14 +610,39 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
   if (!fb) return () => {};
 
   const db = fb.firestore();
-  const q = db.collection('checkins').orderBy('createdAt', 'desc').limit(limit);
-  const unsub = q.onSnapshot((snapshot: any) => {
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    onUpdate(items);
-  });
 
-  return unsub;
+  // Try primary schema first (createdAt)
+  let primaryUnsub: (() => void) | null = null;
+  let legacyUnsub: (() => void) | null = null;
+
+  const primaryQuery = db.collection('checkins').orderBy('createdAt', 'desc').limit(limit);
+  primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+    if (!snapshot.empty) {
+      const items: any[] = [];
+      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+      onUpdate(items);
+
+      // Clean up legacy subscription if it exists
+      if (legacyUnsub) {
+        legacyUnsub();
+        legacyUnsub = null;
+      }
+    } else {
+      // No results, try legacy schema (timestamp)
+      const legacyQuery = db.collection('checkins').orderBy('timestamp', 'desc').limit(limit);
+      legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+        const items: any[] = [];
+        legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        onUpdate(items);
+      }));
+    }
+  }));
+
+  // Return combined unsubscribe function
+  return () => {
+    if (primaryUnsub) primaryUnsub();
+    if (legacyUnsub) legacyUnsub();
+  };
 }
 
 export async function getCheckinByClientId(clientId: string) {
@@ -578,7 +678,12 @@ export async function deleteCheckinRemote(checkinId: string) {
   const fb = ensureFirebase();
   if (!fb) return false;
   try {
-    await fb.firestore().collection('checkins').doc(checkinId).delete();
+    const docRef = fb.firestore().collection('checkins').doc(checkinId);
+    const snapshot = await docRef.get();
+    const existing = snapshot.exists ? (snapshot.data() || {}) : {};
+    await docRef.delete();
+    invalidateCheckinsCache();
+    void invalidateCacheOnCheckinDelete(checkinId, resolveSpotId(existing), existing.userId);
     return true;
   } catch {
     return false;
@@ -590,7 +695,18 @@ export async function updateCheckinRemote(checkinId: string, fields: Record<stri
   if (!fb || !checkinId) return;
   try {
     const db = fb.firestore();
-    await db.collection('checkins').doc(checkinId).set(fields, { merge: true });
+    const docRef = db.collection('checkins').doc(checkinId);
+    const snapshot = await docRef.get();
+    const existing = snapshot.exists ? (snapshot.data() || {}) : {};
+    const merged = { ...existing, ...fields };
+    await docRef.set(fields, { merge: true });
+    invalidateCheckinsCache();
+    const spotId = resolveSpotId(merged);
+    const userId = merged.userId;
+    void invalidateCacheOnCheckinUpdate(checkinId, spotId || undefined, userId);
+    if (hasMetricUpdates(fields) && spotId) {
+      void invalidateCacheOnMetricUpdate(spotId, userId);
+    }
   } catch {
     // ignore
   }
@@ -603,20 +719,82 @@ export function subscribeCheckinsForUsers(userIds: string[], onUpdate: (items: a
   if (!userIds || userIds.length === 0) return () => {};
   const db = fb.firestore();
   const unsubs: Array<() => void> = [];
+  const snapshotsByBatch = new Map<number, any[]>();
+  let emitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = () => {
+    emitTimer = null;
+    const deduped = new Map<string, any>();
+    snapshotsByBatch.forEach((batchItems) => {
+      batchItems.forEach((item) => {
+        const fallbackKey = `${item.userId || 'anon'}:${item.spotPlaceId || item.spotName || 'spot'}:${toMillisSafe(item.createdAt)}`;
+        const key = item.id || item.clientId || fallbackKey;
+        const existing = deduped.get(key);
+        if (!existing || toMillisSafe(item.createdAt) > toMillisSafe(existing.createdAt)) {
+          deduped.set(key, item);
+        }
+      });
+    });
+    const merged = Array.from(deduped.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt) - toMillisSafe(a.createdAt)
+    );
+    const maxItems = Math.max(limit, 20) * Math.max(1, snapshotsByBatch.size);
+    onUpdate(merged.slice(0, maxItems));
+  };
+
+  const scheduleFlush = () => {
+    if (emitTimer) return;
+    emitTimer = setTimeout(flush, 0);
+  };
 
   // Firestore 'in' supports up to 10 values — batch if needed
   for (let i = 0; i < userIds.length; i += 10) {
+    const batchIndex = i / 10;
     const batch = userIds.slice(i, i + 10);
-    const q = db.collection('checkins').where('userId', 'in', batch).orderBy('createdAt', 'desc').limit(limit);
-    const unsub = q.onSnapshot((snapshot: any) => {
-      const items: any[] = [];
-      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-      onUpdate(items);
+
+    // Try primary schema first (createdAt)
+    const primaryQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('createdAt', 'desc').limit(limit);
+    let legacyUnsub: (() => void) | null = null;
+
+    const primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+      if (!snapshot.empty) {
+        // Primary schema has data, use it
+        const items: any[] = [];
+        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+
+        // Clean up legacy subscription if it exists
+        if (legacyUnsub) {
+          legacyUnsub();
+          legacyUnsub = null;
+        }
+      } else {
+        // No results from primary, try legacy schema (timestamp)
+        const legacyQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('timestamp', 'desc').limit(limit);
+        legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+          const items: any[] = [];
+          legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        }));
+      }
+    }));
+
+    unsubs.push(() => {
+      primaryUnsub();
+      if (legacyUnsub) legacyUnsub();
     });
-    unsubs.push(unsub);
   }
 
-  return () => unsubs.forEach((u) => u());
+  return () => {
+    if (emitTimer) {
+      clearTimeout(emitTimer);
+      emitTimer = null;
+    }
+    unsubs.forEach((u) => u());
+    snapshotsByBatch.clear();
+  };
 }
 
 // Subscribe to approved checkins for a specific set of user IDs (handles Firestore 'in' batching)
@@ -626,20 +804,82 @@ export function subscribeApprovedCheckinsForUsers(userIds: string[], onUpdate: (
   if (!userIds || userIds.length === 0) return () => {};
   const db = fb.firestore();
   const unsubs: Array<() => void> = [];
+  const snapshotsByBatch = new Map<number, any[]>();
+  let emitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = () => {
+    emitTimer = null;
+    const deduped = new Map<string, any>();
+    snapshotsByBatch.forEach((batchItems) => {
+      batchItems.forEach((item) => {
+        const fallbackKey = `${item.userId || 'anon'}:${item.spotPlaceId || item.spotName || 'spot'}:${toMillisSafe(item.createdAt)}`;
+        const key = item.id || item.clientId || fallbackKey;
+        const existing = deduped.get(key);
+        if (!existing || toMillisSafe(item.createdAt) > toMillisSafe(existing.createdAt)) {
+          deduped.set(key, item);
+        }
+      });
+    });
+    const merged = Array.from(deduped.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt) - toMillisSafe(a.createdAt)
+    );
+    const maxItems = Math.max(limit, 20) * Math.max(1, snapshotsByBatch.size);
+    onUpdate(merged.slice(0, maxItems));
+  };
+
+  const scheduleFlush = () => {
+    if (emitTimer) return;
+    emitTimer = setTimeout(flush, 0);
+  };
 
   // Firestore 'in' supports up to 10 values — batch if needed
   for (let i = 0; i < userIds.length; i += 10) {
+    const batchIndex = i / 10;
     const batch = userIds.slice(i, i + 10);
-    const q = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
-    const unsub = q.onSnapshot((snapshot: any) => {
-      const items: any[] = [];
-      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-      onUpdate(items);
+
+    // Try primary schema first (createdAt)
+    const primaryQuery = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
+    let legacyUnsub: (() => void) | null = null;
+
+    const primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+      if (!snapshot.empty) {
+        // Primary schema has data, use it
+        const items: any[] = [];
+        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+
+        // Clean up legacy subscription if it exists
+        if (legacyUnsub) {
+          legacyUnsub();
+          legacyUnsub = null;
+        }
+      } else {
+        // No results from primary, try legacy schema (timestamp)
+        const legacyQuery = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('timestamp', 'desc').limit(limit);
+        legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+          const items: any[] = [];
+          legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        }));
+      }
+    }));
+
+    unsubs.push(() => {
+      primaryUnsub();
+      if (legacyUnsub) legacyUnsub();
     });
-    unsubs.push(unsub);
   }
 
-  return () => unsubs.forEach((u) => u());
+  return () => {
+    if (emitTimer) {
+      clearTimeout(emitTimer);
+      emitTimer = null;
+    }
+    unsubs.forEach((u) => u());
+    snapshotsByBatch.clear();
+  };
 }
 
 function readLocalBlocked() {
@@ -715,11 +955,13 @@ export async function followUserRemote(currentUserId: string, targetUserId: stri
     current.add(targetUserId);
     map[currentUserId] = Array.from(current);
     writeLocalFriends(map);
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
   const db = fb.firestore();
   const ref = db.collection('users').doc(currentUserId);
   await ref.set({ friends: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
+  invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
 export async function unfollowUserRemote(currentUserId: string, targetUserId: string) {
@@ -728,11 +970,13 @@ export async function unfollowUserRemote(currentUserId: string, targetUserId: st
     const map = readLocalFriends();
     map[currentUserId] = (map[currentUserId] || []).filter((id: string) => id !== targetUserId);
     writeLocalFriends(map);
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
   const db = fb.firestore();
   const ref = db.collection('users').doc(currentUserId);
   await ref.set({ friends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+  invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
 export async function setCloseFriendRemote(currentUserId: string, targetUserId: string, makeClose: boolean) {
@@ -745,6 +989,7 @@ export async function setCloseFriendRemote(currentUserId: string, targetUserId: 
   } else {
     await ref.set({ closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
   }
+  invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
 export async function createUserRemote({ userId, name, city, campus, campusOrCity, campusType, handle, email, photoUrl, phone }: any) {
@@ -770,6 +1015,7 @@ export async function createUserRemote({ userId, name, city, campus, campusOrCit
     createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
   await db.collection('users').doc(userId).set(payload);
+  usersByIdCache.clear();
 }
 
 export async function updateUserRemote(userId: string, fields: any) {
@@ -785,6 +1031,7 @@ export async function updateUserRemote(userId: string, fields: any) {
     updatedAt: fb.firestore.FieldValue.serverTimestamp(),
   });
   await db.collection('users').doc(userId).set(payload, { merge: true });
+  usersByIdCache.clear();
 }
 
 export async function findUserByEmail(email: string) {
@@ -937,12 +1184,14 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
     writeLocalFriends(map);
     const requests = readLocalRequests().filter((r: any) => r.id !== requestId);
     writeLocalRequests(requests);
+    invalidateUserFriendsCache([fromId, toId]);
     return;
   }
   const db = fb.firestore();
   await db.collection('users').doc(toId).set({ friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
   await db.collection('users').doc(fromId).set({ friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
   await db.collection('friendRequests').doc(requestId).delete();
+  invalidateUserFriendsCache([fromId, toId]);
 }
 
 export async function declineFriendRequest(requestId: string) {
@@ -963,10 +1212,11 @@ export async function reportUserRemote(reporterId: string | undefined, targetUse
     return;
   }
   const db = fb.firestore();
-  await db.collection('userReports').add({
+  await db.collection('reports').add({
     reporterId: reporterId || null,
-    targetUserId,
+    reportedUserId: targetUserId,
     reason: reason || null,
+    status: 'open',
     createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
 }
@@ -1244,4 +1494,128 @@ export async function reauthenticateCurrentUser({ email, password }: { email: st
   } else {
     throw new Error('Reauthentication not supported in this Firebase SDK');
   }
+}
+
+export async function addReactionToFirestore(reaction: {
+  id: string;
+  checkinId: string;
+  userId: string;
+  userName: string;
+  userHandle?: string;
+  type: string;
+  createdAt: number;
+}) {
+  const fb = ensureFirebase();
+  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return;
+  const db = fb.firestore();
+  const id = reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
+  await db.collection('reactions').doc(id).set({
+    ...reaction,
+    createdAt: reaction.createdAt || Date.now(),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function removeReactionFromFirestore(checkinId: string, userId: string, type: string) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId || !userId || !type) return;
+  const db = fb.firestore();
+  const snap = await db
+    .collection('reactions')
+    .where('checkinId', '==', checkinId)
+    .where('userId', '==', userId)
+    .where('type', '==', type)
+    .limit(10)
+    .get();
+  if (snap.empty) return;
+  const batch = db.batch();
+  snap.docs.forEach((doc: any) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+export async function getReactionsFromFirestore(checkinId: string, limit = 250) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return [];
+  const db = fb.firestore();
+  const safeLimit = Math.min(Math.max(limit, 1), 500);
+  const snap = await db
+    .collection('reactions')
+    .where('checkinId', '==', checkinId)
+    .orderBy('createdAt', 'desc')
+    .limit(safeLimit)
+    .get();
+  const items: any[] = [];
+  snap.forEach((doc: any) => {
+    items.push({ id: doc.id, ...(doc.data() || {}) });
+  });
+  return items;
+}
+
+export async function addCommentToFirestore(comment: {
+  id: string;
+  checkinId: string;
+  userId: string;
+  userName: string;
+  userHandle?: string;
+  userPhotoUrl?: string;
+  text: string;
+  createdAt: number;
+}) {
+  const fb = ensureFirebase();
+  if (!fb || !comment?.checkinId || !comment?.userId || !comment?.text) return;
+  const db = fb.firestore();
+  const id = comment.id || `comment_${Date.now()}`;
+  await db.collection('comments').doc(id).set({
+    ...comment,
+    createdAt: comment.createdAt || Date.now(),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+export async function getCommentsFromFirestore(checkinId: string, limit = 200) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return [];
+  const db = fb.firestore();
+  const safeLimit = Math.min(Math.max(limit, 1), 300);
+  const snap = await db
+    .collection('comments')
+    .where('checkinId', '==', checkinId)
+    .orderBy('createdAt', 'asc')
+    .limit(safeLimit)
+    .get();
+  const items: any[] = [];
+  snap.forEach((doc: any) => {
+    items.push({ id: doc.id, ...(doc.data() || {}) });
+  });
+  return items;
+}
+
+export async function deleteCommentFromFirestore(commentId: string, userId: string) {
+  const fb = ensureFirebase();
+  if (!fb || !commentId || !userId) return;
+  const db = fb.firestore();
+  const ref = db.collection('comments').doc(commentId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const data = snap.data() || {};
+  if (data.userId !== userId) return;
+  await ref.delete();
+}
+
+export async function updateCommentInFirestore(commentId: string, userId: string, text: string) {
+  const fb = ensureFirebase();
+  if (!fb || !commentId || !userId || !text.trim()) return;
+  const db = fb.firestore();
+  const ref = db.collection('comments').doc(commentId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const data = snap.data() || {};
+  if (data.userId !== userId) return;
+  await ref.set(
+    {
+      text: text.trim(),
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
 }

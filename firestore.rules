@@ -81,37 +81,39 @@ service cloud.firestore {
     match /friendRequests/{requestId} {
       // Users can read requests involving them
       allow read: if isAuthenticated() && (
-        resource.data.from == request.auth.uid ||
-        resource.data.to == request.auth.uid
+        resource.data.fromId == request.auth.uid ||
+        resource.data.toId == request.auth.uid
       );
 
       // Users can create friend requests (from themselves)
       allow create: if isAuthenticated() &&
-                      request.resource.data.from == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['from', 'to', 'status', 'createdAt']);
+                      request.resource.data.fromId == request.auth.uid &&
+                      request.resource.data.toId != request.auth.uid &&
+                      request.resource.data.keys().hasAll(['fromId', 'toId', 'status', 'createdAt']);
 
       // Users can update requests they're involved in (to accept/reject)
       allow update: if isAuthenticated() && (
-        resource.data.from == request.auth.uid ||
-        resource.data.to == request.auth.uid
+        resource.data.fromId == request.auth.uid ||
+        resource.data.toId == request.auth.uid
       );
 
       // Users can delete their own requests
       allow delete: if isAuthenticated() && (
-        resource.data.from == request.auth.uid ||
-        resource.data.to == request.auth.uid
+        resource.data.fromId == request.auth.uid ||
+        resource.data.toId == request.auth.uid
       );
     }
 
     // Reports collection
     match /reports/{reportId} {
       // Only admins can read reports
-      allow read: if isAdmin();
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.reporterId == request.auth.uid);
 
       // Any authenticated user can create a report
       allow create: if isAuthenticated() &&
                       request.resource.data.reporterId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['reporterId', 'reportedUserId', 'reason', 'createdAt']);
+                      request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt']) &&
+                      request.resource.data.keys().hasAny(['reportedUserId', 'reportedId', 'checkinId']);
 
       // Only admins can update (to change status)
       allow update: if isAdmin();
@@ -174,7 +176,7 @@ service cloud.firestore {
                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
 
       // System/Cloud Functions can create notifications
-      allow create: if isAuthenticated();
+      allow create: if false;
 
       // Users can delete their own notifications
       allow delete: if isAuthenticated() &&
@@ -253,6 +255,147 @@ service cloud.firestore {
 
       // No updates or deletes (achievements are permanent)
       allow update, delete: if false;
+    }
+
+    // Friends graph
+    match /friends/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // Business ownership claims
+    match /businessSpots/{businessSpotId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    // Promotions for business spots
+    match /promotions/{promotionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /promotionRedemptions/{redemptionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /checkinResponses/{responseId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid ||
+                     resource.data.ownerId == request.auth.uid ||
+                     isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    // Partner program
+    match /partners/{partnerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /loyaltyCards/{cardId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                      (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if false;
+    }
+
+    match /loyaltyRedemptions/{redemptionId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /partnerEvents/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.keys().hasAll(['partnerId']) &&
+                      exists(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)) &&
+                      get(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)).data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              exists(/databases/$(database)/documents/partners/$(resource.data.partnerId)) &&
+                              get(/databases/$(database)/documents/partners/$(resource.data.partnerId)).data.ownerId == request.auth.uid;
+    }
+
+    match /equipmentSponsorships/{sponsorshipId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.keys().hasAll(['partnerId']) &&
+                      exists(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)) &&
+                      get(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)).data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              exists(/databases/$(database)/documents/partners/$(resource.data.partnerId)) &&
+                              get(/databases/$(database)/documents/partners/$(resource.data.partnerId)).data.ownerId == request.auth.uid;
+    }
+
+    // Trust & safety collections
+    match /blockedUsers/{blockId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.blockerId == request.auth.uid ||
+                     resource.data.blockedId == request.auth.uid ||
+                     isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.blockerId == request.auth.uid &&
+                      request.resource.data.blockedId != request.auth.uid;
+      allow update: if false;
+      allow delete: if isAuthenticated() &&
+                      (resource.data.blockerId == request.auth.uid || isAdmin());
+    }
+
+    match /safetySettings/{userId} {
+      allow read: if isAuthenticated() &&
+                    (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAuthenticated() &&
+                              request.auth.uid == userId &&
+                              request.resource.data.userId == userId;
+      allow delete: if false;
+    }
+
+    match /userWarnings/{warningId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /flaggedContent/{contentId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // B2B keys/logs must be server-managed
+    match /apiKeys/{apiKeyId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /apiUsageLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     // Default deny

@@ -1,4 +1,5 @@
-import { View, StyleSheet, Pressable, ViewStyle, PressableProps } from 'react-native';
+import { StyleSheet, Pressable, ViewStyle, PressableProps } from 'react-native';
+import * as React from 'react';
 import { ReactNode } from 'react';
 import Animated, {
   useSharedValue,
@@ -39,13 +40,13 @@ export function PolishedCard({
 
   // Entrance animation
   React.useEffect(() => {
-    if (animated) {
-      setTimeout(() => {
-        opacity.value = withTiming(1, { duration: 300, easing: Easing.out(Easing.ease) });
-        scale.value = withSpring(1, { damping: 15, stiffness: 150 });
-      }, delay);
-    }
-  }, [animated, delay]);
+    if (!animated) return;
+    const timer = setTimeout(() => {
+      opacity.value = withTiming(1, { duration: 300, easing: Easing.out(Easing.ease) });
+      scale.value = withSpring(1, { damping: 15, stiffness: 150 });
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [animated, delay, opacity, scale]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
@@ -130,6 +131,3 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
 });
-
-// Add React import
-import * as React from 'react';

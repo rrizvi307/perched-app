@@ -59,7 +59,12 @@
       "ADMIN_EMAILS": "",
       "SUPPORT_EMAIL": "perchedappteam@gmail.com",
       "INSTAGRAM_URL": "https://instagram.com/perchedapp",
+      "REVENUECAT_PUBLIC_KEY": "",
       "TIKTOK_URL": "https://tiktok.com/@perchedapp",
+      "OPENAI_API_KEY": "",
+      "YELP_API_KEY": "",
+      "FOURSQUARE_API_KEY": "",
+      "INTEL_V1_ENABLED": false,
       "eas": {
         "projectId": ""
       }
@@ -73,11 +78,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/brand/Perched App Logo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#FBFAF8",
           "dark": {
+            "image": "./assets/brand/Perched App Logo.png",
             "backgroundColor": "#0E0F12"
           }
         }

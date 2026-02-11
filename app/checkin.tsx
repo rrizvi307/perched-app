@@ -1,6 +1,7 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
 import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
@@ -45,14 +46,14 @@ function dmsToDeg(value: any, ref?: string) {
 		deg = Number(value) || 0;
 	}
 	if (ref === 'S' || ref === 'W') deg *= -1;
-	return deg || null;
+	return Number.isFinite(deg) ? deg : null;
 }
 
 function exifToLocation(exif: any) {
 	if (!exif) return null;
 	const lat = dmsToDeg(exif.GPSLatitude, exif.GPSLatitudeRef);
 	const lng = dmsToDeg(exif.GPSLongitude, exif.GPSLongitudeRef);
-	if (lat && lng) return { lat, lng };
+	if (typeof lat === 'number' && typeof lng === 'number') return { lat, lng };
 	return null;
 }
 
@@ -69,6 +70,11 @@ export default function CheckinScreen() {
 	const [hasPermission, setHasPermission] = useState<boolean | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
+	// Utility metrics for spot intel
+	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
+	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [outletAvailability, setOutletAvailability] = useState<'plenty' | 'some' | 'few' | 'none' | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -82,6 +88,7 @@ export default function CheckinScreen() {
 	const inputBg = useThemeColor({}, 'surface');
 	const text = useThemeColor({}, 'text');
 	const muted = useThemeColor({}, 'muted');
+	const success = useThemeColor({}, 'success');
 	const backgroundAltLight = withAlpha(surface, 0.92);
 	const backgroundAltLibrary = withAlpha(primary, 0.14);
 	const { user } = useAuth();
@@ -154,6 +161,17 @@ export default function CheckinScreen() {
 		}
 	})();
 
+	// Celebrate when all metrics are completed
+	const prevMetricsCompleteRef = useRef(false);
+	useEffect(() => {
+		const allComplete = wifiSpeed !== null && noiseLevel !== null && busyness !== null && outletAvailability !== null;
+		if (allComplete && !prevMetricsCompleteRef.current) {
+			// Just completed all metrics - celebrate!
+			Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+		}
+		prevMetricsCompleteRef.current = allComplete;
+	}, [wifiSpeed, noiseLevel, busyness, outletAvailability]);
+
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
 		const editParam = typeof params.editId === 'string' ? params.editId : null;
@@ -163,11 +181,11 @@ export default function CheckinScreen() {
 		if (prefillSpot && !spot) {
 			setSpot(prefillSpot);
 		}
-		if (prefillPlaceId || (prefillLat && prefillLng)) {
+		if (prefillPlaceId || (typeof prefillLat === 'number' && typeof prefillLng === 'number')) {
 			setPlaceInfo({
 				placeId: prefillPlaceId || undefined,
 				name: prefillSpot || undefined,
-				location: prefillLat && prefillLng ? { lat: prefillLat, lng: prefillLng } : undefined,
+				location: typeof prefillLat === 'number' && typeof prefillLng === 'number' ? { lat: prefillLat, lng: prefillLng } : undefined,
 			});
 		}
 		if (editParam) {
@@ -184,6 +202,16 @@ export default function CheckinScreen() {
 						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
+					// Load metrics from edit mode
+					if (check.wifiSpeed) setWifiSpeed(check.wifiSpeed);
+					if (check.noiseLevel) {
+						const convertedNoise = typeof check.noiseLevel === 'string'
+							? (check.noiseLevel === 'quiet' ? 2 : check.noiseLevel === 'moderate' ? 3 : 4)
+							: check.noiseLevel;
+						setNoiseLevel(convertedNoise);
+					}
+					if (check.busyness) setBusyness(check.busyness);
+					if (check.outletAvailability) setOutletAvailability(check.outletAvailability);
 					}
 				} catch {
 					try {
@@ -195,6 +223,16 @@ export default function CheckinScreen() {
 							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
+							// Load metrics from edit mode (local fallback)
+							if (found.wifiSpeed) setWifiSpeed(found.wifiSpeed);
+							if (found.noiseLevel) {
+								const convertedNoise = typeof found.noiseLevel === 'string'
+									? (found.noiseLevel === 'quiet' ? 2 : found.noiseLevel === 'moderate' ? 3 : 4)
+									: found.noiseLevel;
+								setNoiseLevel(convertedNoise);
+							}
+							if (found.busyness) setBusyness(found.busyness);
+							if (found.outletAvailability) setOutletAvailability(found.outletAvailability);
 						}
 					} catch {}
 					}
@@ -290,6 +328,16 @@ export default function CheckinScreen() {
 							location: draft.location,
 						});
 					}
+					// Load metrics from draft
+					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
+					if (draft.noiseLevel) {
+						const convertedNoise = typeof draft.noiseLevel === 'string' 
+							? (draft.noiseLevel === 'quiet' ? 2 : draft.noiseLevel === 'moderate' ? 3 : 4)
+							: draft.noiseLevel;
+						setNoiseLevel(convertedNoise);
+					}
+					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
+					if (draft.outletAvailability) setOutletAvailability(draft.outletAvailability);
 				}
 			} catch {}
 			const seen = await getPermissionPrimerSeen('camera');
@@ -338,10 +386,14 @@ export default function CheckinScreen() {
 				tags: selectedTags,
 				placeId: placeInfo?.placeId || detectedPlace?.placeId,
 				location: placeInfo?.location || detectedPlace?.location,
+				wifiSpeed,
+				noiseLevel,
+				busyness,
+				outletAvailability,
 			});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, wifiSpeed, noiseLevel, busyness, outletAvailability]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -508,6 +560,12 @@ export default function CheckinScreen() {
 				setPostStatus({ message: 'Add a short caption or select a tag.', tone: 'warning' });
 				return;
 			}
+		// Gentle encouragement for metrics (non-blocking)
+		const metricsProvided = [wifiSpeed, noiseLevel, busyness, outletAvailability].filter(Boolean).length;
+		if (metricsProvided === 0) {
+			showToast('💡 Consider adding Spot Intel to help others!', 'info');
+			// Still allow posting - don't block
+		}
 		const last = await getLastCheckinAt();
 		const now = Date.now();
 			// rate-limit public posts: 10 minutes for public posts, 5 for others
@@ -534,12 +592,24 @@ export default function CheckinScreen() {
 							caption,
 							tags: selectedTags,
 							visibility,
+							// Utility metrics
+							...(wifiSpeed && { wifiSpeed }),
+							...(noiseLevel && { noiseLevel }),
+							...(busyness && { busyness }),
+							...(outletAvailability && { outletAvailability }),
 						};
 						await fb.updateCheckinRemote(editId, updates);
 						// update local copy
 						const local = await import('@/storage/local');
 						await local.updateCheckinLocalById(editId, updates as any);
 						publishCheckin({ id: editId, ...updates });
+						// Track metrics impact for edits
+						try {
+							const { updateMetricsImpact } = await import('@/services/metricsImpact');
+							await updateMetricsImpact(uid, updates);
+						} catch (error) {
+							console.error('Failed to update metrics impact:', error);
+						}
 						showToast('Check-in updated.', 'success');
 						try {
 							await clearCheckinDraft();
@@ -584,6 +654,11 @@ export default function CheckinScreen() {
 				campus: user?.campus,
 				visibility,
 				clientId,
+				// Utility metrics
+				...(wifiSpeed && { wifiSpeed }),
+				...(noiseLevel && { noiseLevel }),
+				...(busyness && { busyness }),
+				...(outletAvailability && { outletAvailability }),
 			} as any;
 			const pendingPayload = {
 				userId: uid,
@@ -601,6 +676,11 @@ export default function CheckinScreen() {
 				campus: user?.campus,
 				visibility,
 				clientId,
+				// Utility metrics
+				...(wifiSpeed && { wifiSpeed }),
+				...(noiseLevel && { noiseLevel }),
+				...(busyness && { busyness }),
+				...(outletAvailability && { outletAvailability }),
 			};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
@@ -636,6 +716,14 @@ export default function CheckinScreen() {
 					} catch (error) {
 						console.error('Failed to update gamification stats:', error);
 					}
+				}
+
+				// Track metrics impact
+				try {
+					const { updateMetricsImpact } = await import('@/services/metricsImpact');
+					await updateMetricsImpact(uid, localPayload);
+				} catch (error) {
+					console.error('Failed to update metrics impact:', error);
 				}
 			} catch {}
 			setPendingRemote(pendingPayload);
@@ -879,6 +967,181 @@ export default function CheckinScreen() {
 							})}
 						</View>
 						<Text style={{ color: muted, marginBottom: 8 }}>Pick up to {MAX_TAGS} tags to describe the vibe.</Text>
+
+
+						{/* Calculate metrics completion */}
+						{(() => {
+							const metricsCompleted = [
+								wifiSpeed !== null,
+								noiseLevel !== null,
+								busyness !== null,
+								outletAvailability !== null,
+							].filter(Boolean).length;
+							const metricsTotal = 4;
+							const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
+
+							return (
+								<>
+
+						{/* Spot Intel Section - Utility Metrics */}
+						<View style={{ marginTop: 16, marginBottom: 8 }}>
+						<View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+							<Text style={{ color: text, fontWeight: '700', fontSize: 16 }}>
+								Spot Intel (optional)
+							</Text>
+							{metricsCompleted > 0 && (
+								<View style={{
+									marginLeft: 8,
+									paddingHorizontal: 8,
+									paddingVertical: 2,
+									borderRadius: 12,
+									backgroundColor: metricsPercentage === 100
+										? withAlpha(success, 0.15)
+										: withAlpha(primary, 0.15)
+								}}>
+									<Text style={{
+										color: metricsPercentage === 100 ? success : primary,
+										fontSize: 11,
+										fontWeight: '700'
+									}}>
+										{metricsCompleted}/{metricsTotal} ✓
+									</Text>
+								</View>
+							)}
+						</View>
+						<Text style={{ color: muted, marginBottom: 12 }}>
+							{metricsCompleted === 0
+								? 'Help others find the perfect spot by sharing a few quick details'
+								: metricsPercentage === 100
+								? '🎉 Thanks for helping the community!'
+								: `Great start! ${metricsTotal - metricsCompleted} more to go`}
+						</Text>
+
+							{/* WiFi Speed */}
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>WiFi Speed</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`wifi-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setWifiSpeed(wifiSpeed === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: wifiSpeed === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text style={{ color: wifiSpeed === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+												{level === 1 ? '😩' : level === 2 ? '😕' : level === 3 ? '😐' : level === 4 ? '😊' : '🚀'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{wifiSpeed === 1 ? 'Unusable' : wifiSpeed === 2 ? 'Slow' : wifiSpeed === 3 ? 'OK' : wifiSpeed === 4 ? 'Fast' : wifiSpeed === 5 ? 'Blazing' : 'Tap to rate WiFi'}
+								</Text>
+							</View>
+
+						{/* Noise Level */}
+						<View style={{ marginBottom: 16 }}>
+							<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Noise Level</Text>
+							<View style={{ flexDirection: 'row', gap: 8 }}>
+								{([1, 2, 3, 4, 5] as const).map((level) => (
+									<Pressable
+										key={`noise-${level}`}
+										onPress={() => {
+											Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+											setNoiseLevel(noiseLevel === level ? null : level);
+										}}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: noiseLevel === level ? primary : 'transparent',
+												minWidth: 50,
+											},
+										]}
+									>
+										<Text style={{ color: noiseLevel === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+											{level === 1 ? '🔇' : level === 2 ? '🤫' : level === 3 ? '💬' : level === 4 ? '🎉' : '📢'}
+										</Text>
+									</Pressable>
+								))}
+							</View>
+							<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+								{noiseLevel === 1 ? 'Silent' : noiseLevel === 2 ? 'Quiet' : noiseLevel === 3 ? 'Moderate' : noiseLevel === 4 ? 'Lively' : noiseLevel === 5 ? 'Loud' : 'Tap to rate noise'}
+							</Text>
+						</View>
+
+							{/* Busyness */}
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>How Busy?</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`busy-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setBusyness(busyness === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: busyness === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text style={{ color: busyness === level ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+												{level === 1 ? '👻' : level === 2 ? '🧘' : level === 3 ? '👥' : level === 4 ? '😅' : '🔥'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{busyness === 1 ? 'Empty' : busyness === 2 ? 'Quiet' : busyness === 3 ? 'Some people' : busyness === 4 ? 'Busy' : busyness === 5 ? 'Packed!' : 'Tap to rate how crowded'}
+								</Text>
+							</View>
+
+							{/* Outlet Availability */}
+							<View style={{ marginBottom: 8 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Power Outlets</Text>
+								<View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+									{(['plenty', 'some', 'few', 'none'] as const).map((level) => (
+										<Pressable
+											key={`outlet-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setOutletAvailability(outletAvailability === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: outletAvailability === level ? primary : 'transparent',
+													paddingHorizontal: 12,
+												},
+											]}
+										>
+											<Text style={{ color: outletAvailability === level ? '#FFFFFF' : text, fontWeight: '600' }}>
+												{level === 'plenty' ? '🔌 Plenty' : level === 'some' ? '🔌 Some' : level === 'few' ? '🔌 Few' : '❌ None'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+							</View>
+						</View>
+								</>
+							);
+						})()}
+
 						<View style={{ height: 8 }} />
 						{spot ? (
 							<Pressable
@@ -1177,6 +1440,14 @@ export default function CheckinScreen() {
 		borderWidth: 1,
 		marginRight: tokens.space.s8,
 		marginBottom: tokens.space.s8,
+	},
+	metricChip: {
+		paddingHorizontal: tokens.space.s12,
+		paddingVertical: tokens.space.s10,
+		borderRadius: 12,
+		borderWidth: 1,
+		alignItems: 'center',
+		justifyContent: 'center',
 	},
 	photoButton: {
 		height: 52,

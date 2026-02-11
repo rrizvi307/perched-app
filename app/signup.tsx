@@ -14,6 +14,8 @@ import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { normalizePhone } from '@/utils/phone';
 import { getForegroundLocationIfPermitted } from '@/services/location';
+import { getAndClearReferralCode } from '@/services/deepLinking';
+import { trackReferralSignup } from '@/services/shareInvite';
 import { useEffect, useRef, useState } from 'react';
 import { useRootNavigationState, useRouter } from 'expo-router';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -46,6 +48,7 @@ export default function SignUp() {
   const [campusLoading, setCampusLoading] = useState(false);
   const [detectingCity, setDetectingCity] = useState(false);
   const [geoBias, setGeoBias] = useState<{ lat: number; lng: number } | null>(null);
+  const [referralCode, setReferralCode] = useState<string | null>(null);
   const { register, user, refreshUser } = useAuth();
   const fbAvailable = isFirebaseConfigured();
   const color = useThemeColor({}, 'text');
@@ -196,6 +199,10 @@ export default function SignUp() {
           handle: normalizedHandle,
           phone: normalizedPhone,
         });
+        // Track referral if user came from a referral link
+        if (referralCode) {
+          void trackReferralSignup(uid, referralCode);
+        }
         await refreshUser?.();
       } catch (e: any) {
         devLog('phone register error', e);
@@ -237,6 +244,7 @@ export default function SignUp() {
       }
       const campusType = campus ? 'campus' : 'city';
       await register(email.trim(), password, name || undefined, city || undefined, normalizedHandle, campusType, campus || undefined, normalizedPhone || undefined);
+      // Referral tracking will be handled in useEffect when user state updates
     } catch (e) {
       devLog('register error', e);
       const msg = (e as any)?.message || String(e);
@@ -273,6 +281,27 @@ export default function SignUp() {
       if (pos) setGeoBias(pos);
     })().catch(() => {});
   }, []);
+
+  // Load referral code if user came from a referral link
+  useEffect(() => {
+    (async () => {
+      const code = await getAndClearReferralCode();
+      if (code) {
+        setReferralCode(code);
+        devLog('Referral code loaded:', code);
+      }
+    })();
+  }, []);
+
+  // Track referral when new user is created
+  const referralTrackedRef = useRef(false);
+  useEffect(() => {
+    if (user?.id && referralCode && !referralTrackedRef.current) {
+      referralTrackedRef.current = true;
+      void trackReferralSignup(user.id, referralCode);
+      devLog('Referral tracked for user:', user.id, 'code:', referralCode);
+    }
+  }, [user?.id, referralCode]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;

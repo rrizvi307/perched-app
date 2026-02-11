@@ -1,3 +1,4 @@
+import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
 const KEY = 'spot_checkins_v1';
 const CHECKIN_COOLDOWN_KEY = 'spot_checkin_last_v1';
 const DEMO_SEED_KEY = 'spot_demo_seeded_v1';
@@ -30,6 +31,11 @@ type Checkin = {
   expiresAt?: string;
   createdAt: string;
   tags?: string[];
+  // Utility metrics
+  wifiSpeed?: 1 | 2 | 3 | 4 | 5; // 1=unusable, 5=blazing fast
+  noiseLevel?: 'quiet' | 'moderate' | 'lively' | 1 | 2 | 3 | 4 | 5; // Legacy string or new 1-5 scale (1=silent, 5=loud)
+  busyness?: 1 | 2 | 3 | 4 | 5; // 1=empty, 5=packed
+  outletAvailability?: 'plenty' | 'some' | 'few' | 'none'; // power outlet availability
 };
 
 type DemoCustomPhoto = { uri: string; fileName?: string | null };
@@ -794,299 +800,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
         checkins = checkinsRaw ? JSON.parse(checkinsRaw) : [];
       }
     }
-    let demoCheckins = [
-      {
-        id: `demo-c1-${now}`,
-        createdAt: new Date(now - 4 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u1',
-        userName: 'Maya Patel',
-        userHandle: 'mayap',
-        userPhotoUrl: demoAvatars['demo-u1'],
-        campus: 'Rice University',
-        city: 'Houston',
-        spotName: 'Agora Coffee',
-        spotPlaceId: 'demo-place-agora',
-        spotLatLng: { lat: 29.7172, lng: -95.4018 },
-        photoUrl: 'https://images.unsplash.com/photo-1504754524776-8f4f37790ca0?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Coffee + laptop for an hour',
-        tags: ['Study', 'Wi-Fi', 'Bright'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c2-${now}`,
-        createdAt: new Date(now - 12 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u2',
-        userName: 'Jon Lee',
-        userHandle: 'jonstudy',
-        userPhotoUrl: demoAvatars['demo-u2'],
-        campus: 'University of Houston',
-        city: 'Houston',
-        spotName: 'Fondren Library',
-        spotPlaceId: 'demo-place-fondren',
-        spotLatLng: { lat: 29.7174, lng: -95.4011 },
-        photoUrl: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Quiet floor today',
-        tags: ['Quiet', 'Study', 'Seating'],
-        openNow: false,
-        visibility: 'friends',
-      },
-      {
-        id: `demo-c3-${now}`,
-        createdAt: new Date(now - 22 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u3',
-        userName: 'Ava Brooks',
-        userHandle: 'avab',
-        userPhotoUrl: demoAvatars['demo-u3'],
-        city: 'Houston',
-        spotName: 'Doshi House',
-        spotPlaceId: 'demo-place-doshi',
-        spotLatLng: { lat: 29.7346, lng: -95.3896 },
-        photoUrl: 'https://images.unsplash.com/photo-1529070538774-1843cb3265df?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Sunlight + a warm drink',
-        tags: ['Bright', 'Social', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c4-${now}`,
-        createdAt: new Date(now - 31 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u4',
-        userName: 'Leo Nguyen',
-        userHandle: 'leon',
-        userPhotoUrl: demoAvatars['demo-u4'],
-        campus: 'Rice University',
-        city: 'Houston',
-        spotName: 'The Nook',
-        spotPlaceId: 'demo-place-nook',
-        spotLatLng: { lat: 29.7372, lng: -95.3915 },
-        photoUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Work block with friends',
-        tags: ['Coworking', 'Outlets', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c5-${now}`,
-        createdAt: new Date(now - 44 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u5',
-        userName: 'Sofia Kim',
-        userHandle: 'sofiak',
-        userPhotoUrl: demoAvatars['demo-u5'],
-        city: 'Houston',
-        spotName: 'Common Bond Cafe',
-        spotPlaceId: 'demo-place-commonbond',
-        spotLatLng: { lat: 29.7396, lng: -95.4012 },
-        photoUrl: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Pastry break, then back to it',
-        tags: ['Social', 'Spacious', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c6-${now}`,
-        createdAt: new Date(now - 58 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u6',
-        userName: 'Noah Johnson',
-        userHandle: 'noahj',
-        userPhotoUrl: demoAvatars['demo-u6'],
-        city: 'Houston',
-        spotName: 'Downtown Cowork',
-        spotPlaceId: 'demo-place-downtowncowork',
-        spotLatLng: { lat: 29.7604, lng: -95.3698 },
-        photoUrl: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Deep work hour',
-        tags: ['Coworking', 'Outlets', 'Seating'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c7-${now}`,
-        createdAt: new Date(now - 73 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u7',
-        userName: 'Priya Shah',
-        userHandle: 'priyash',
-        userPhotoUrl: demoAvatars['demo-u7'],
-        city: 'Houston',
-        spotName: 'Siphon Coffee',
-        spotPlaceId: 'demo-place-siphon',
-        spotLatLng: { lat: 29.7392, lng: -95.3856 },
-        photoUrl: 'https://images.unsplash.com/photo-1501139083538-0139583c060f?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Coffee and notes',
-        tags: ['Study', 'Wi-Fi', 'Spacious'],
-        openNow: true,
-        visibility: 'friends',
-      },
-      {
-        id: `demo-c8-${now}`,
-        createdAt: new Date(now - 88 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u8',
-        userName: 'Ethan Chen',
-        userHandle: 'ethanc',
-        userPhotoUrl: demoAvatars['demo-u8'],
-        city: 'Houston',
-        spotName: 'Rice Coffeehouse',
-        spotPlaceId: 'demo-place-ricecoffee',
-        spotLatLng: { lat: 29.7178, lng: -95.4012 },
-        photoUrl: 'https://images.unsplash.com/photo-1517685352821-92cf88aee5a5?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Reading + espresso',
-        tags: ['Quiet', 'Study', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c9-${now}`,
-        createdAt: new Date(now - 102 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u9',
-        userName: 'Camila Rivera',
-        userHandle: 'cami',
-        userPhotoUrl: demoAvatars['demo-u9'],
-        city: 'Houston',
-        spotName: 'Agora Coffee',
-        spotPlaceId: 'demo-place-agora',
-        spotLatLng: { lat: 29.7172, lng: -95.4018 },
-        photoUrl: 'https://images.unsplash.com/photo-1482192596544-9eb780fc7f66?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Same spot, different day',
-        tags: ['Social', 'Bright', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c10-${now}`,
-        createdAt: new Date(now - 121 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u10',
-        userName: 'Jordan Wells',
-        userHandle: 'jordanw',
-        userPhotoUrl: demoAvatars['demo-u10'],
-        city: 'Houston',
-        spotName: 'The Nook',
-        spotPlaceId: 'demo-place-nook',
-        spotLatLng: { lat: 29.7372, lng: -95.3915 },
-        photoUrl: 'https://images.unsplash.com/photo-1506377247377-2a5b3b417ebb?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Headphones in',
-        tags: ['Study', 'Outlets', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c11-${now}`,
-        createdAt: new Date(now - 140 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u11',
-        userName: 'Hannah Park',
-        userHandle: 'hannahp',
-        userPhotoUrl: demoAvatars['demo-u11'],
-        city: 'Houston',
-        spotName: 'Midnight Diner',
-        spotPlaceId: 'demo-place-midnightdiner',
-        spotLatLng: { lat: 29.7568, lng: -95.3667 },
-        photoUrl: 'https://images.unsplash.com/photo-1421622548261-c45bfe178854?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Late-night catch-up',
-        tags: ['Late-night', 'Social', 'Seating'],
-        openNow: true,
-        visibility: 'friends',
-      },
-      {
-        id: `demo-c12-${now}`,
-        createdAt: new Date(now - 158 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u12',
-        userName: 'Omar Hassan',
-        userHandle: 'omarh',
-        userPhotoUrl: demoAvatars['demo-u12'],
-        city: 'Houston',
-        spotName: 'Agora Coffee',
-        spotPlaceId: 'demo-place-agora',
-        spotLatLng: { lat: 29.7172, lng: -95.4018 },
-        photoUrl: 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Quick sprint',
-        tags: ['Study', 'Outlets', 'Wi-Fi'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c13-${now}`,
-        createdAt: new Date(now - 176 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u13',
-        userName: 'Grace Liu',
-        userHandle: 'gracel',
-        userPhotoUrl: demoAvatars['demo-u13'],
-        city: 'Houston',
-        spotName: 'Fondren Library',
-        spotPlaceId: 'demo-place-fondren',
-        spotLatLng: { lat: 29.7174, lng: -95.4011 },
-        photoUrl: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Just one more chapter',
-        tags: ['Quiet', 'Study', 'Seating'],
-        openNow: false,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c14-${now}`,
-        createdAt: new Date(now - 195 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u14',
-        userName: 'Diego Martinez',
-        userHandle: 'diegom',
-        userPhotoUrl: demoAvatars['demo-u14'],
-        city: 'Houston',
-        spotName: 'Bookshop Cafe',
-        spotPlaceId: 'demo-place-bookshop',
-        spotLatLng: { lat: 29.742, lng: -95.409 },
-        photoUrl: 'https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=1400&q=80',
-        caption: 'POV: book + coffee',
-        tags: ['Quiet', 'Study', 'Bright'],
-        openNow: false,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c15-${now}`,
-        createdAt: new Date(now - 214 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u15',
-        userName: 'Nina Singh',
-        userHandle: 'ninasingh',
-        userPhotoUrl: demoAvatars['demo-u15'],
-        city: 'Houston',
-        spotName: 'Midnight Diner',
-        spotPlaceId: 'demo-place-midnightdiner',
-        spotLatLng: { lat: 29.7568, lng: -95.3667 },
-        photoUrl: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Late-night reset',
-        tags: ['Late-night', 'Wi-Fi', 'Seating'],
-        openNow: true,
-        visibility: 'public',
-      },
-      {
-        id: `demo-c16-${now}`,
-        createdAt: new Date(now - 238 * 60 * 1000).toISOString(),
-        expiresAt: new Date(now + 12 * 60 * 60 * 1000).toISOString(),
-        userId: 'demo-u16',
-        userName: 'Sam Carter',
-        userHandle: 'samc',
-        userPhotoUrl: demoAvatars['demo-u16'],
-        city: 'Houston',
-        spotName: 'Agora Coffee',
-        spotPlaceId: 'demo-place-agora',
-        spotLatLng: { lat: 29.7172, lng: -95.4018 },
-        photoUrl: 'https://images.unsplash.com/photo-1521017432531-fbd92d768814?auto=format&fit=crop&w=1400&q=80',
-        caption: 'Afternoon desk setup',
-        tags: ['Social', 'Wi-Fi', 'Seating'],
-        openNow: true,
-        visibility: 'public',
-      },
-    ];
+    let demoCheckins = BETTER_DEMO_CHECKINS(now, demoAvatars);
     const isDemoSeedId = (id: any) => {
       const s = String(id || '');
       return s.startsWith('demo-c') || s.startsWith('demo-self-');
@@ -1435,6 +1149,15 @@ export async function seedDemoNetwork(currentUserId?: string) {
             await store.setItem(KEY, JSON.stringify(adjusted));
           }
         } catch {}
+        // Seed comprehensive demo data (stats, achievements, saved spots, friend requests, impact)
+        if (currentUserId) {
+          try {
+            const { seedComprehensiveDemoData } = await import('./seed-comprehensive-demo');
+            await seedComprehensiveDemoData(currentUserId);
+          } catch (e) {
+            console.warn('Failed to seed comprehensive demo data:', e);
+          }
+        }
       } else {
         memory = next;
       }
@@ -1861,11 +1584,11 @@ export async function isSavedSpot(placeId?: string, name?: string) {
   return list.some((s: any) => (s.key || '') === key);
 }
 
-export async function toggleSavedSpot(spot: { placeId?: string; name?: string }) {
+export async function toggleSavedSpot(spot: { placeId?: string; name?: string; note?: string }) {
   const placeId = spot.placeId || '';
   const name = spot.name || '';
   const key = placeId ? `place:${placeId}` : `name:${name}`;
-  const entry = { key, placeId: placeId || null, name: name || 'Unknown', savedAt: Date.now() };
+  const entry = { key, placeId: placeId || null, name: name || 'Unknown', savedAt: Date.now(), note: spot.note || '' };
   if (isWeb()) {
     try {
       const raw = window.localStorage.getItem(SAVED_SPOTS_KEY);
@@ -1888,6 +1611,37 @@ export async function toggleSavedSpot(spot: { placeId?: string; name?: string })
   await writeNativeJson(SAVED_SPOTS_KEY, next);
   savedSpotListeners.forEach((cb) => cb(next));
   return !exists;
+}
+
+export async function updateSavedSpotNote(placeId: string | undefined, name: string | undefined, note: string) {
+  const key = placeId ? `place:${placeId}` : `name:${name || ''}`;
+  if (isWeb()) {
+    try {
+      const raw = window.localStorage.getItem(SAVED_SPOTS_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const next = Array.isArray(list) ? list.map((s: any) =>
+        s.key === key ? { ...s, note } : s
+      ) : [];
+      window.localStorage.setItem(SAVED_SPOTS_KEY, JSON.stringify(next));
+      savedSpotListeners.forEach((cb) => cb(next));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const list = await readNativeJson<any[]>(SAVED_SPOTS_KEY, []);
+  const safeList = Array.isArray(list) ? list : [];
+  const next = safeList.map((s: any) => s.key === key ? { ...s, note } : s);
+  await writeNativeJson(SAVED_SPOTS_KEY, next);
+  savedSpotListeners.forEach((cb) => cb(next));
+  return true;
+}
+
+export async function getSavedSpotNote(placeId?: string, name?: string): Promise<string> {
+  const list = await getSavedSpots(200);
+  const key = placeId ? `place:${placeId}` : `name:${name || ''}`;
+  const spot = list.find((s: any) => (s.key || '') === key);
+  return spot?.note || '';
 }
 
 export function subscribeSavedSpots(callback: (spots: any[]) => void) {

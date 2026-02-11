@@ -3,12 +3,14 @@ import PermissionSheet from '@/components/ui/permission-sheet';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
-import { Body, H1, H2, Label } from '@/components/ui/typography';
+import { Body, H2, Label } from '@/components/ui/typography';
 import { StreakBadge } from '@/components/ui/streak-badge';
 import { PolishedCard } from '@/components/ui/polished-card';
+import MetricsImpactCard from '@/components/ui/metrics-impact-card';
 import { PolishedLargeHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
-import { SkeletonProfile } from '@/components/ui/skeleton-loader';
+import { PremiumBadge } from '@/components/ui/premium-badge';
+import { usePremium } from '@/hooks/use-premium';
 import { getLocationOptions } from '@/constants/locations';
 import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import { getForegroundLocationIfPermitted } from '@/services/location';
@@ -54,6 +56,7 @@ function toRows(items: any[], columns = 2): CheckinRow[] {
 export default function ProfileScreen() {
   const { user, updateProfile } = useAuth();
   const { preference } = useThemePreference();
+  const { isPremium } = usePremium();
   const systemScheme = useColorScheme();
   const textColor = useThemeColor({}, 'text');
   const borderColor = useThemeColor({}, 'border');
@@ -142,7 +145,7 @@ export default function ProfileScreen() {
         setStatus(null);
         return;
       }
-      const remoteRes = await getCheckinsForUserRemote(user?.id || '', 240);
+      const remoteRes = await getCheckinsForUserRemote(user?.id || '', 180);
       const remote = Array.isArray(remoteRes) ? remoteRes : (remoteRes && (remoteRes.items ?? [])) as any[];
       const mineRemote = remote.filter((c: any) => c.userId === user?.id);
       const local = await getCheckins();
@@ -382,7 +385,7 @@ export default function ProfileScreen() {
 
         // active check-ins today for discovery
         try {
-          const recentRes = await getCheckinsRemote(120);
+          const recentRes = await getCheckinsRemote(80);
           const items = (recentRes.items || []) as any[];
           const now = Date.now();
           const TWELVE_HOURS = 12 * 60 * 60 * 1000;
@@ -716,14 +719,13 @@ export default function ProfileScreen() {
       const uniqueEmails = Array.from(new Set<string>(emails)).slice(0, 25);
       const uniquePhones = Array.from(new Set<string>(phoneNumbers)).slice(0, 25);
       const matchesMap = new Map<string, any>();
-      for (const email of uniqueEmails) {
-        const userMatch = await findUserByEmail(email);
-        if (userMatch && !matchesMap.has(userMatch.id)) matchesMap.set(userMatch.id, userMatch);
-      }
-      for (const phone of uniquePhones) {
-        const userMatch = await findUserByPhone(phone);
-        if (userMatch && !matchesMap.has(userMatch.id)) matchesMap.set(userMatch.id, userMatch);
-      }
+      const [emailMatches, phoneMatches] = await Promise.all([
+        Promise.all(uniqueEmails.map((email) => findUserByEmail(email))),
+        Promise.all(uniquePhones.map((phone) => findUserByPhone(phone))),
+      ]);
+      [...emailMatches, ...phoneMatches].forEach((match) => {
+        if (match && !matchesMap.has(match.id)) matchesMap.set(match.id, match);
+      });
       setContactMatches(Array.from(matchesMap.values()).slice(0, 8));
     } catch {
       setContactError('Unable to load contacts');
@@ -803,9 +805,12 @@ export default function ProfileScreen() {
             <View style={[{ flexDirection: 'row', alignItems: 'center' }, gapStyle(12)]}>
               <ProfilePicture size={84} />
               <View style={{ flex: 1 }}>
-                <Body style={{ color: textColor, marginBottom: 4 }}>
-                  {user ? `${user.name || 'Your profile'}` : 'Not signed in'}
-                </Body>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Body style={{ color: textColor }}>
+                    {user ? `${user.name || 'Your profile'}` : 'Not signed in'}
+                  </Body>
+                  {isPremium && <PremiumBadge size="small" />}
+                </View>
                 <Text style={{ color: muted, fontSize: 13 }}>
                   {user?.handle ? `@${user.handle}` : 'Add a username'}
                 </Text>
@@ -841,8 +846,19 @@ export default function ProfileScreen() {
                 >
                   View Achievements
                 </PremiumButton>
+                <PremiumButton
+                  onPress={() => router.push('/subscription' as any)}
+                  variant={isPremium ? 'ghost' : 'primary'}
+                  size="medium"
+                  icon={isPremium ? 'sparkles' : 'star.fill'}
+                  fullWidth
+                  style={{ marginTop: 8 }}
+                >
+                  {isPremium ? 'Manage Premium' : 'Upgrade to Premium'}
+                </PremiumButton>
               </>
             )}
+            <MetricsImpactCard />
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
                 onPress={() => router.push('/verify')}

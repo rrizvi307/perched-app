@@ -2,9 +2,51 @@ import * as Linking from 'expo-linking';
 import { router } from 'expo-router';
 import { track } from './analytics';
 import { captureException } from './sentry';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const APP_SCHEME = 'perched://';
 const UNIVERSAL_LINK_PREFIX = 'https://perched.app';
+const REFERRAL_CODE_KEY = 'perched_referral_code';
+
+/**
+ * Store a referral code for use during signup
+ */
+export async function storeReferralCode(code: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(REFERRAL_CODE_KEY, code.toUpperCase());
+    track('referral_code_stored', { code });
+  } catch (error) {
+    console.error('Failed to store referral code:', error);
+  }
+}
+
+/**
+ * Get stored referral code (and clear it after retrieval)
+ */
+export async function getAndClearReferralCode(): Promise<string | null> {
+  try {
+    const code = await AsyncStorage.getItem(REFERRAL_CODE_KEY);
+    if (code) {
+      await AsyncStorage.removeItem(REFERRAL_CODE_KEY);
+    }
+    return code;
+  } catch (error) {
+    console.error('Failed to get referral code:', error);
+    return null;
+  }
+}
+
+/**
+ * Check if there's a pending referral code
+ */
+export async function hasPendingReferralCode(): Promise<boolean> {
+  try {
+    const code = await AsyncStorage.getItem(REFERRAL_CODE_KEY);
+    return !!code;
+  } catch {
+    return false;
+  }
+}
 
 export type DeepLinkRoute =
   | 'profile'
@@ -82,10 +124,12 @@ export function parseDeepLink(url: string): {
       if (requestId) params.requestId = requestId;
     }
 
-    // Extract referral code if present
+    // Extract and store referral code if present
     const ref = getParam(queryParams?.ref);
     if (ref) {
       params.referralCode = ref;
+      // Store for use during signup
+      void storeReferralCode(ref);
     }
 
     return { route, params };
@@ -280,4 +324,7 @@ export default {
   createDeepLink,
   createShareContent,
   openDeepLink,
+  storeReferralCode,
+  getAndClearReferralCode,
+  hasPendingReferralCode,
 };

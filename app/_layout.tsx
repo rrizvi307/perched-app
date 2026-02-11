@@ -18,6 +18,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
+import { savePushToken } from '@/services/firebaseClient';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
@@ -146,9 +147,9 @@ function InnerApp() {
     const setupNotifications = async () => {
       try {
         const token = await initPushNotifications();
-        if (token) {
-          // TODO: Save token to user profile in Firebase if needed
-          // await updateUserRemote(user.id, { pushToken: token });
+        if (token && user?.id) {
+          // Save token to Firebase for Cloud Function notifications
+          await savePushToken(user.id, token);
         }
         // Schedule weekly recap
         await scheduleWeeklyRecap();
@@ -222,7 +223,9 @@ function InnerApp() {
 	        />
         <Stack.Screen name="verify" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="upgrade" options={{ headerShown: false }} />
+        <Stack.Screen name="premium-upgrade" options={{ headerShown: false }} />
         <Stack.Screen name="achievements" options={{ headerShown: false }} />
+        <Stack.Screen name="admin-observability" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
