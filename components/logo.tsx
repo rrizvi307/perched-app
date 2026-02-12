@@ -48,13 +48,13 @@ export default function Logo({
       <Line x1="68" y1="65" x2="78" y2="56" stroke="#4C1D95" strokeWidth="2.2" strokeLinecap="round" />
 
       {/* Bird body */}
-      <Ellipse cx="45" cy="48" rx="22" ry="19" fill="url(#bodyGrad)" rotation={-8} origin="45,48" />
+      <Ellipse cx="45" cy="48" rx="17" ry="14" fill="url(#bodyGrad)" rotation={-8} origin="45,48" />
 
       {/* Bird head */}
-      <Circle cx="55" cy="34" r="12" fill="url(#bodyGrad)" />
+      <Circle cx="55" cy="34" r="10" fill="url(#bodyGrad)" />
 
       {/* Wing */}
-      <Ellipse cx="37" cy="50" rx="16" ry="12" fill="url(#wingGrad)" rotation={-15} origin="37,50" />
+      <Ellipse cx="37" cy="50" rx="13" ry="9" fill="url(#wingGrad)" rotation={-15} origin="37,50" />
 
       {/* Tail */}
       <Polygon points="22,52 13,44 16,56" fill={gradientEnd} />
