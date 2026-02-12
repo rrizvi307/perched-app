@@ -306,6 +306,35 @@ Summary:
 - Removed unused legacy logo component files.
 - Validation: `npx tsc --noEmit` passed.
 
+### 17) Beta readiness hardening (Houston alignment + public feed seed + beta auth policy)
+Commit: `7ac80b3`
+Files:
+- `services/demoDataManager.ts`
+- `firestore.rules`
+- `functions/src/seedPublicHoustonCheckins.ts`
+- `functions/package.json`
+- `functions/package-lock.json`
+
+Summary:
+- Aligned demo dataset with Houston geography:
+  - Updated demo spot coordinates from SF/Bay Area to Houston (`29.7x`, `-95.3x` range).
+  - Updated demo user campus/city metadata to Houston-area institutions for consistency.
+- Added one-time public feed cold-start script for beta:
+  - `functions/src/seedPublicHoustonCheckins.ts`
+  - Seeds 12 deterministic public check-ins in Houston over the last 48 hours.
+  - Pulls demo users by email where available (`demo@perched.app`, `friend1-3@perched.app`) with fallbacks.
+  - Run command: `npm --prefix functions run seed:beta-feed`.
+- Relaxed beta friction in Firestore rules:
+  - Removed strict email-verification requirement for check-in creation.
+  - Added explicit TODO to restore verification/grace-period policy before GA.
+- Clarified rate-limit gap with an explicit TODO:
+  - `withinRateLimit()` now includes a GA-blocking note to move enforcement to server-side/App Check.
+- Security verification snapshot:
+  - Local secret-pattern scan across tracked files found placeholders only (no live key material).
+  - `npm audit --omit=dev` (root): `0` vulnerabilities.
+  - `npm --prefix functions audit --omit=dev` originally flagged low `qs` advisory; `npm --prefix functions audit fix` applied and now reports `0` vulnerabilities.
+  - Verification run: `npx tsc --noEmit`, `npm --prefix functions run build`, `npm --prefix functions test -- --runInBand` all passed.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -466,3 +495,5 @@ These are recommended next backend-only steps that do not require UI churn:
 - `dd6a918` Upgrade Cloud Functions runtime to Node.js 22
 - `444d12f` Harden Firestore rules/indexes and update Codex handoff
 - `409f3df` Slim logo mark geometry and remove unused logo components
+- `d94062b` Add latest Codex hardening and logo commits to handoff doc
+- `7ac80b3` Align demo data to Houston and add beta cold-start seeding script
