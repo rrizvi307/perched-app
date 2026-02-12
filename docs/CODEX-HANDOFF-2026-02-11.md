@@ -269,6 +269,43 @@ Summary:
   - `firebase deploy --only functions:socialGraphMutation --project spot-app-ce2d8` succeeded (Feb 12, 2026).
   - Function live: `socialGraphMutation(us-central1)`.
 
+### 15) Firestore checklist hardening pass + handoff sync
+Commit: `444d12f`
+Files:
+- `firestore.indexes.json`
+- `firestore.rules`
+- `storage.rules`
+- `docs/CODEX-HANDOFF-2026-02-11.md`
+
+Summary:
+- Added high-confidence composite indexes for active query paths:
+  - `reports` (`status`, `priority`, `createdAt`)
+  - `partnerEvents` (`status`, `date`)
+  - `loyaltyCards` (`userId`, `lastCheckinAt`)
+  - `flaggedContent` (`status`, `createdAt`)
+  - `campusChallenges` (`campusId`, `endDate`)
+  - legacy `checkins` branch (`spotPlaceId`, `timestamp`)
+- Tightened `friendRequests` rules:
+  - create requires pending status
+  - immutable identity fields on update
+  - create/update key allowlist
+- Updated storage delete policy to owner-or-admin for check-in/profile/story images.
+
+### 16) In-app logo SVG sync with slimmer icon + cleanup
+Commit: `409f3df`
+Files:
+- `components/logo.tsx`
+- `components/logo-old-bird.tsx` (deleted)
+- `components/logo-new.tsx` (deleted)
+
+Summary:
+- Synced `components/logo.tsx` bird geometry to slimmer icon proportions:
+  - body `rx/ry` from `22/19` to `17/14`
+  - head `r` from `12` to `10`
+  - wing `rx/ry` from `16/12` to `13/9`
+- Removed unused legacy logo component files.
+- Validation: `npx tsc --noEmit` passed.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -427,3 +464,5 @@ These are recommended next backend-only steps that do not require UI churn:
 - `5546ee9` Add server-authoritative social graph mutation callable
 - `e5ed760` Refresh Codex handoff with latest social graph deployment status
 - `dd6a918` Upgrade Cloud Functions runtime to Node.js 22
+- `444d12f` Harden Firestore rules/indexes and update Codex handoff
+- `409f3df` Slim logo mark geometry and remove unused logo components
