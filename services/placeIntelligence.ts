@@ -12,6 +12,14 @@ export type ExternalPlaceSignal = {
   categories?: string[];
 };
 
+export type ExternalSignalMeta = {
+  providerCount: number;
+  providerDiversity: number;
+  totalReviewCount: number;
+  ratingConsensus: number;
+  trustScore: number;
+};
+
 export type CrowdForecastPoint = {
   offsetHours: number;
   label: string;
@@ -55,6 +63,7 @@ export type PlaceIntelligence = {
   momentum: IntelligenceMomentum;
   highlights: string[];
   externalSignals: ExternalPlaceSignal[];
+  externalSignalMeta: ExternalSignalMeta;
   contextSignals: ContextSignal[];
   crowdForecast: CrowdForecastPoint[];
   useCases: string[];
@@ -74,7 +83,7 @@ type BuildIntelligenceInput = {
 
 const INTELLIGENCE_TTL_MS = 15 * 60 * 1000;
 const MOMENTUM_WINDOW_DAYS = 7;
-const PLACE_INTEL_MODEL_VERSION = '2026-02-11-r2';
+const PLACE_INTEL_MODEL_VERSION = '2026-02-11-r3';
 const INTEL_TELEMETRY_SAMPLE_RATE = 0.08;
 const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
 const WEATHER_TTL_MS = 30 * 60 * 1000;
@@ -107,6 +116,13 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
     },
     highlights: [],
     externalSignals: [],
+    externalSignalMeta: {
+      providerCount: 0,
+      providerDiversity: 0,
+      totalReviewCount: 0,
+      ratingConsensus: 0,
+      trustScore: 0,
+    },
     contextSignals: [],
     crowdForecast: [],
     useCases: ['Quick focus stop'],
@@ -461,15 +477,48 @@ function buildCrowdForecast(checkins: any[], baseConfidence: number): CrowdForec
   return points;
 }
 
+function buildExternalSignalMeta(externalSignals: ExternalPlaceSignal[]): ExternalSignalMeta {
+  const providerCount = new Set(externalSignals.map((signal) => signal.source)).size;
+  const providerDiversity = clamp(providerCount / 2, 0, 1);
+  const ratings = externalSignals
+    .map((signal) => signal.rating)
+    .filter((value): value is number => typeof value === 'number');
+  const totalReviewCount = externalSignals
+    .map((signal) => (typeof signal.reviewCount === 'number' ? signal.reviewCount : 0))
+    .reduce((sum, count) => sum + count, 0);
+
+  let ratingConsensus = 0;
+  if (ratings.length === 1) {
+    ratingConsensus = 0.6;
+  } else if (ratings.length >= 2) {
+    const spread = Math.max(...ratings) - Math.min(...ratings);
+    ratingConsensus = clamp(1 - spread / 2.5, 0, 1);
+  }
+
+  const reviewSupportNorm = clamp(Math.log10(1 + totalReviewCount) / 3.2, 0, 1);
+  const trustScore = round(
+    clamp(providerDiversity * 0.45 + ratingConsensus * 0.35 + reviewSupportNorm * 0.2, 0, 1),
+    2
+  );
+
+  return {
+    providerCount,
+    providerDiversity: round(providerDiversity, 2),
+    totalReviewCount,
+    ratingConsensus: round(ratingConsensus, 2),
+    trustScore,
+  };
+}
+
 function computeReliability(input: {
   sampleSize: number;
   wifiValues: number[];
   busynessValues: number[];
   noiseValues: number[];
   laptopVotes: boolean[];
-  externalSignals: ExternalPlaceSignal[];
+  externalSignalMeta: ExternalSignalMeta;
 }): IntelligenceReliability {
-  const { sampleSize, wifiValues, busynessValues, noiseValues, laptopVotes, externalSignals } = input;
+  const { sampleSize, wifiValues, busynessValues, noiseValues, laptopVotes, externalSignalMeta } = input;
   if (sampleSize <= 0) {
     return {
       sampleSize: 0,
@@ -505,7 +554,7 @@ function computeReliability(input: {
   );
 
   const sampleScore = clamp(Math.log10(1 + sampleSize) / 2, 0, 1);
-  const externalSupport = externalSignals.length ? 0.08 : 0;
+  const externalSupport = round(externalSignalMeta.trustScore * 0.12, 2);
   const score = round(
     clamp(
       sampleScore * 0.55 +
@@ -668,6 +717,10 @@ async function emitIntelligenceTelemetry(
       momentum: payload.momentum,
       externalSources: payload.externalSignals.map((s) => s.source),
       externalSignalCount: payload.externalSignals.length,
+      externalProviderCount: payload.externalSignalMeta.providerCount,
+      externalTotalReviewCount: payload.externalSignalMeta.totalReviewCount,
+      externalRatingConsensus: payload.externalSignalMeta.ratingConsensus,
+      externalTrustScore: payload.externalSignalMeta.trustScore,
       checkinCount: checkins.length,
       crowdLevel: payload.crowdLevel,
       bestTime: payload.bestTime,
@@ -758,6 +811,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     getProxySignals(input),
     getWeatherSignals(input),
   ]);
+  const externalSignalMeta = buildExternalSignalMeta(externalSignals);
   const externalRatingAvg = avg(externalSignals.map((s) => s.rating).filter((v): v is number => typeof v === 'number'));
   const weatherSignal = contextSignals.find((s) => s.source === 'weather') || null;
   const weatherCrowdDelta =
@@ -773,7 +827,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     busynessValues,
     noiseValues,
     laptopVotes,
-    externalSignals,
+    externalSignalMeta,
   });
   const momentum = computeMomentum(checkins);
 
@@ -808,8 +862,9 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
       .filter((v): v is number => typeof v === 'number')
   );
   const reviewSupport = clamp((avgExternalReviewCount || 0) / 500, 0, 0.12);
+  const externalTrustSupport = externalSignalMeta.trustScore * 0.16;
   const confidence = clamp(
-    round(reliability.score * 0.78 + (externalSignals.length ? 0.12 : 0) + reviewSupport, 2),
+    round(reliability.score * 0.72 + externalTrustSupport + reviewSupport, 2),
     0.1,
     0.97
   );
@@ -833,6 +888,9 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   if (crowdForecast[0]?.level === 'low') highlights.push('Low crowd now');
   if (externalSignals.some((s) => (s.reviewCount || 0) >= 100)) highlights.push('Strong external reviews');
   if (input.openNow === true) highlights.push('Open now');
+  if (externalSignalMeta.providerCount >= 2 && externalSignalMeta.ratingConsensus >= 0.72 && highlights.length < 4) {
+    highlights.push('Cross-source consensus');
+  }
   if (weatherSignal?.condition === 'rain' && highlights.length < 4) highlights.push('Rain may increase indoor traffic');
   if (weatherSignal?.condition === 'snow' && highlights.length < 4) highlights.push('Snow likely shifts traffic indoors');
   if (reliability.score >= 0.78 && highlights.length < 4) highlights.push('High confidence model');
@@ -848,6 +906,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     momentum,
     highlights: highlights.slice(0, 4),
     externalSignals,
+    externalSignalMeta,
     contextSignals,
     crowdForecast,
     useCases,

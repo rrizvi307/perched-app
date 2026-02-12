@@ -145,6 +145,30 @@ Summary:
   - Average outcome quality confidence
   - Quality mix distribution by label
 
+### 8) External-source consensus + trust scoring (outside intelligence uplift)
+Commit: _(see latest after this doc update)_
+Files:
+- `services/placeIntelligence.ts`
+- `services/__tests__/placeIntelligence.test.ts`
+
+Summary:
+- Added `externalSignalMeta` to place intelligence payload:
+  - `providerCount`
+  - `providerDiversity`
+  - `totalReviewCount`
+  - `ratingConsensus`
+  - `trustScore`
+- Added external-source consensus logic:
+  - Cross-provider agreement now contributes to confidence/reliability.
+  - Added highlight: `Cross-source consensus` when Yelp + Foursquare agree.
+- Updated confidence/reliability weighting to use external trust score (not just external signal count).
+- Extended prediction telemetry writes with:
+  - `externalProviderCount`
+  - `externalTotalReviewCount`
+  - `externalRatingConsensus`
+  - `externalTrustScore`
+- Bumped model version to `2026-02-11-r3`.
+
 ## Production/API Status (Current)
 
 ### Working

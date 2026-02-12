@@ -68,6 +68,13 @@ describe('buildPlaceIntelligence', () => {
       })
     );
     expect(result.momentum.trend).toBe('insufficient_data');
+    expect(result.externalSignalMeta).toEqual({
+      providerCount: 0,
+      providerDiversity: 0,
+      totalReviewCount: 0,
+      ratingConsensus: 0,
+      trustScore: 0,
+    });
     expect(typeof result.modelVersion).toBe('string');
     expect(typeof result.generatedAt).toBe('number');
     expect(result.generatedAt).toBeGreaterThan(0);
@@ -208,7 +215,33 @@ describe('buildPlaceIntelligence', () => {
       priceLevel: '$$',
       categories: ['coffee', 'study'],
     });
+    expect(result.externalSignalMeta.providerCount).toBe(1);
+    expect(result.externalSignalMeta.totalReviewCount).toBe(120);
+    expect(result.externalSignalMeta.trustScore).toBeGreaterThan(0);
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('raises external trust and adds cross-source consensus highlight when providers agree', async () => {
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        externalSignals: [
+          { source: 'yelp', rating: 4.5, reviewCount: 230 },
+          { source: 'foursquare', rating: 4.4, reviewCount: 110 },
+        ],
+      })
+    );
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Consensus Spot',
+      placeId: 'consensus-1',
+      location: { lat: 30, lng: -97 },
+      checkins: [mkCheckin({ wifiSpeed: 3.6, busyness: 2.6, noiseLevel: 'moderate' })],
+    });
+
+    expect(result.externalSignalMeta.providerCount).toBe(2);
+    expect(result.externalSignalMeta.ratingConsensus).toBeGreaterThanOrEqual(0.72);
+    expect(result.externalSignalMeta.trustScore).toBeGreaterThanOrEqual(0.7);
+    expect(result.highlights).toContain('Cross-source consensus');
   });
 
   it('uses coffee meetups use case when external rating is high', async () => {
