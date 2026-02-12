@@ -889,8 +889,15 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
 
     const db = fb.firestore();
 
-    // Use schema helper with automatic fallback for legacy data
-    const snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
+    // Use schema helper with automatic fallback for legacy data.
+    // If query fails (permissions/index/network/auth timing), degrade to empty state.
+    let snapshot: any;
+    try {
+      snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
+    } catch (error) {
+      devLog('getCheckinsForUserRemote query fallback to empty', error);
+      return { items: [], lastCursor: null };
+    }
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
     const lastCursor = items.length ? items[items.length - 1].createdAt : null;
@@ -1862,21 +1869,31 @@ export async function addReactionToFirestore(reaction: {
   createdAt: number;
 }) {
   const fb = ensureFirebase();
-  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return;
+  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return false;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  if (!currentUid || currentUid !== reaction.userId) return false;
   const db = fb.firestore();
   const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
   const deterministicId = `rx_${sanitizeId(reaction.checkinId)}_${sanitizeId(reaction.userId)}`;
   const id = deterministicId || reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
-  await db.collection('reactions').doc(id).set({
-    ...reaction,
-    createdAt: reaction.createdAt || Date.now(),
-    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  try {
+    await db.collection('reactions').doc(id).set({
+      ...reaction,
+      createdAt: reaction.createdAt || Date.now(),
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return true;
+  } catch (error) {
+    devLog('addReactionToFirestore failed', error);
+    return false;
+  }
 }
 
 export async function removeReactionFromFirestore(checkinId: string, userId: string, type: string) {
   const fb = ensureFirebase();
-  if (!fb || !checkinId || !userId || !type) return;
+  if (!fb || !checkinId || !userId || !type) return false;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  if (!currentUid || currentUid !== userId) return false;
   const db = fb.firestore();
   const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
   const deterministicId = `rx_${sanitizeId(checkinId)}_${sanitizeId(userId)}`;
@@ -1893,17 +1910,23 @@ export async function removeReactionFromFirestore(checkinId: string, userId: str
   } catch {}
 
   // Legacy cleanup for older reaction IDs.
-  const snap = await db
-    .collection('reactions')
-    .where('checkinId', '==', checkinId)
-    .where('userId', '==', userId)
-    .where('type', '==', type)
-    .limit(50)
-    .get();
-  if (snap.empty) return;
-  const batch = db.batch();
-  snap.docs.forEach((doc: any) => batch.delete(doc.ref));
-  await batch.commit();
+  try {
+    const snap = await db
+      .collection('reactions')
+      .where('checkinId', '==', checkinId)
+      .where('userId', '==', userId)
+      .where('type', '==', type)
+      .limit(50)
+      .get();
+    if (snap.empty) return true;
+    const batch = db.batch();
+    snap.docs.forEach((doc: any) => batch.delete(doc.ref));
+    await batch.commit();
+    return true;
+  } catch (error) {
+    devLog('removeReactionFromFirestore failed', error);
+    return false;
+  }
 }
 
 export async function getReactionsFromFirestore(checkinId: string, limit = 250) {
@@ -1911,12 +1934,18 @@ export async function getReactionsFromFirestore(checkinId: string, limit = 250) 
   if (!fb || !checkinId) return [];
   const db = fb.firestore();
   const safeLimit = Math.min(Math.max(limit, 1), 500);
-  const snap = await db
-    .collection('reactions')
-    .where('checkinId', '==', checkinId)
-    .orderBy('createdAt', 'desc')
-    .limit(safeLimit)
-    .get();
+  let snap: any;
+  try {
+    snap = await db
+      .collection('reactions')
+      .where('checkinId', '==', checkinId)
+      .orderBy('createdAt', 'desc')
+      .limit(safeLimit)
+      .get();
+  } catch (error) {
+    devLog('getReactionsFromFirestore failed', error);
+    return [];
+  }
   const items: any[] = [];
   snap.forEach((doc: any) => {
     items.push({ id: doc.id, ...(doc.data() || {}) });

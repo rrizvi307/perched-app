@@ -1,4 +1,5 @@
 import { track } from './analytics';
+import { devLog } from './logger';
 
 export type ReactionType = 'fire' | 'coffee' | 'book' | 'party' | 'heart' | 'thumbs_up';
 
@@ -65,7 +66,7 @@ export async function addReaction(
       checkin_id: checkinId,
     });
   } catch (error) {
-    console.error('Failed to add reaction:', error);
+    devLog('addReaction failed', error);
   }
 
   return reaction;
@@ -83,7 +84,7 @@ export async function removeReaction(
     const { removeReactionFromFirestore } = await import('./firebaseClient');
     await removeReactionFromFirestore(checkinId, userId, type);
   } catch (error) {
-    console.error('Failed to remove reaction:', error);
+    devLog('removeReaction failed', error);
   }
 }
 
@@ -95,7 +96,7 @@ export async function getReactions(checkinId: string): Promise<Reaction[]> {
     const { getReactionsFromFirestore } = await import('./firebaseClient');
     return await getReactionsFromFirestore(checkinId);
   } catch (error) {
-    console.error('Failed to get reactions:', error);
+    devLog('getReactions failed', error);
     return [];
   }
 }
