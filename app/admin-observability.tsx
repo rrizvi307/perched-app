@@ -67,6 +67,14 @@ type CalibrationSnapshot = {
   highMae: number | null;
   mediumMae: number | null;
   lowMae: number | null;
+  qualityAvgScore: number | null;
+  qualityAvgConfidence: number | null;
+  qualityDistribution: {
+    excellent: number;
+    good: number;
+    mixed: number;
+    poor: number;
+  };
   updatedAt: number;
   modelName: string;
 };
@@ -203,6 +211,7 @@ function parseCalibrationSnapshot(data: Record<string, unknown>): CalibrationSna
   const absErrorSum = toNumber(data.absErrorSum);
   const squaredErrorSum = toNumber(data.squaredErrorSum);
   const buckets = (data.confidenceBuckets as Record<string, any>) || {};
+  const qualityBuckets = (data.qualityBuckets as Record<string, any>) || {};
 
   const bucketMae = (bucketName: 'high' | 'medium' | 'low') => {
     const bucket = buckets[bucketName] || {};
@@ -217,6 +226,18 @@ function parseCalibrationSnapshot(data: Record<string, unknown>): CalibrationSna
     .map(([name, raw]) => ({ name, count: toNumber((raw as Record<string, unknown>).count) }))
     .sort((a, b) => b.count - a.count)[0];
 
+  const qualityCount = (quality: 'excellent' | 'good' | 'mixed' | 'poor') =>
+    toNumber((qualityBuckets[quality] || {}).count);
+  const qualityDistribution = {
+    excellent: qualityCount('excellent'),
+    good: qualityCount('good'),
+    mixed: qualityCount('mixed'),
+    poor: qualityCount('poor'),
+  };
+
+  const qualityScoreSum = toNumber(data.outcomeQualityScoreSum);
+  const qualityConfidenceSum = toNumber(data.outcomeQualityConfidenceSum);
+
   return {
     sampleCount,
     mae: absErrorSum / sampleCount,
@@ -224,6 +245,9 @@ function parseCalibrationSnapshot(data: Record<string, unknown>): CalibrationSna
     highMae: bucketMae('high'),
     mediumMae: bucketMae('medium'),
     lowMae: bucketMae('low'),
+    qualityAvgScore: qualityScoreSum > 0 ? qualityScoreSum / sampleCount : null,
+    qualityAvgConfidence: qualityConfidenceSum > 0 ? qualityConfidenceSum / sampleCount : null,
+    qualityDistribution,
     updatedAt: toMillis(data.updatedAt) || Date.now(),
     modelName: topModel?.name || 'unknown',
   };
@@ -764,6 +788,25 @@ export default function AdminObservabilityScreen() {
               </Text>
             </View>
           </View>
+          <View style={styles.calibrationRow}>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>Avg quality score</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>
+                {calibrationSnapshot.qualityAvgScore === null ? 'N/A' : calibrationSnapshot.qualityAvgScore.toFixed(1)}
+              </Text>
+            </View>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>Avg quality conf</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>
+                {calibrationSnapshot.qualityAvgConfidence === null
+                  ? 'N/A'
+                  : calibrationSnapshot.qualityAvgConfidence.toFixed(2)}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.tableSecondary, { color: muted }]}>
+            Quality mix • Excellent {calibrationSnapshot.qualityDistribution.excellent} • Good {calibrationSnapshot.qualityDistribution.good} • Mixed {calibrationSnapshot.qualityDistribution.mixed} • Poor {calibrationSnapshot.qualityDistribution.poor}
+          </Text>
           <Text style={[styles.tableSecondary, { color: muted }]}>
             Updated {formatTimestamp(calibrationSnapshot.updatedAt)}
           </Text>

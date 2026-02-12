@@ -209,6 +209,93 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+type OutcomeQualityLabel = 'excellent' | 'good' | 'mixed' | 'poor';
+
+function toLowerStrings(values: string[]) {
+  return values.map((value) => value.trim().toLowerCase()).filter(Boolean);
+}
+
+function estimateTagQualityDelta(tags: string[]) {
+  const normalized = toLowerStrings(tags);
+  const positive = [
+    'quiet',
+    'wifi',
+    'wi-fi',
+    'outlets',
+    'outlet',
+    'focus',
+    'study',
+    'laptop',
+    'productive',
+    'deep work',
+  ];
+  const negative = [
+    'loud',
+    'noisy',
+    'crowded',
+    'packed',
+    'slow wifi',
+    'no wifi',
+    'chaotic',
+  ];
+  let score = 0;
+  normalized.forEach((tag) => {
+    if (positive.some((token) => tag.includes(token))) score += 4;
+    if (negative.some((token) => tag.includes(token))) score -= 5;
+  });
+  return Math.max(-14, Math.min(14, score));
+}
+
+function estimateCaptionQualityDelta(caption: string) {
+  const normalized = String(caption || '').toLowerCase();
+  if (!normalized.trim()) return 0;
+  const positiveTokens = ['productive', 'great wifi', 'fast wifi', 'quiet', 'focused', 'smooth', 'good outlet'];
+  const negativeTokens = ['loud', 'noisy', 'crowded', 'packed', 'slow wifi', 'bad wifi', 'couldn\'t focus', 'chaos'];
+  let score = 0;
+  positiveTokens.forEach((token) => {
+    if (normalized.includes(token)) score += 5;
+  });
+  negativeTokens.forEach((token) => {
+    if (normalized.includes(token)) score -= 6;
+  });
+  return Math.max(-18, Math.min(18, score));
+}
+
+function deriveOutcomeQuality(
+  checkin: Record<string, any>,
+  observed: { observedWorkScore: number; signalCount: number }
+) {
+  const tags = normalizeStringArray(checkin.tags);
+  const caption = typeof checkin.caption === 'string' ? checkin.caption : '';
+  const tagDelta = estimateTagQualityDelta(tags);
+  const captionDelta = estimateCaptionQualityDelta(caption);
+  const outcomeQualityScore = Math.max(0, Math.min(100, observed.observedWorkScore + tagDelta + captionDelta));
+
+  let outcomeQualityLabel: OutcomeQualityLabel = 'mixed';
+  if (outcomeQualityScore >= 80) outcomeQualityLabel = 'excellent';
+  else if (outcomeQualityScore >= 65) outcomeQualityLabel = 'good';
+  else if (outcomeQualityScore < 45) outcomeQualityLabel = 'poor';
+
+  const signalBonus = Math.min(0.2, observed.signalCount * 0.04);
+  const annotationBonus = Math.min(0.15, (tags.length ? 0.08 : 0) + (caption.trim() ? 0.07 : 0));
+  const outcomeQualityConfidence = round(Math.max(0.2, Math.min(0.95, 0.45 + signalBonus + annotationBonus)), 2);
+
+  const reasons: string[] = [];
+  if (observed.observedWorkScore >= 75) reasons.push('strong_core_metrics');
+  if (observed.observedWorkScore < 45) reasons.push('weak_core_metrics');
+  if (tagDelta > 0) reasons.push('positive_tags');
+  if (tagDelta < 0) reasons.push('negative_tags');
+  if (captionDelta > 0) reasons.push('positive_caption_signal');
+  if (captionDelta < 0) reasons.push('negative_caption_signal');
+
+  return {
+    outcomeQualityLabel,
+    outcomeQualityScore,
+    outcomeQualityConfidence,
+    outcomeQualityReasons: reasons.slice(0, 4),
+  };
+}
+
 function buildObservedWorkScore(checkin: Record<string, any>) {
   const wifi = normalizeScore(checkin.wifiSpeed);
   const noise = normalizeNoiseScore(checkin.noiseLevel);
@@ -358,6 +445,8 @@ async function linkCheckinOutcomeTelemetry(checkinId: string, checkin: Record<st
 
     const confidenceBucket =
       predictedConfidence >= 0.75 ? 'high' : predictedConfidence >= 0.5 ? 'medium' : 'low';
+    const outcomeQuality = deriveOutcomeQuality(checkin, observed);
+    const qualityKey = outcomeQuality.outcomeQualityLabel;
     const modelKey = toSafeFieldKey(modelVersion);
     const outcomeId = toSafeFieldKey(`${checkinId}_${best.id}`);
     const outcomeRef = db.collection('intelligenceOutcomes').doc(outcomeId);
@@ -382,6 +471,10 @@ async function linkCheckinOutcomeTelemetry(checkinId: string, checkin: Record<st
       signedError,
       absError,
       squaredError,
+      outcomeQualityLabel: outcomeQuality.outcomeQualityLabel,
+      outcomeQualityScore: outcomeQuality.outcomeQualityScore,
+      outcomeQualityConfidence: outcomeQuality.outcomeQualityConfidence,
+      outcomeQualityReasons: outcomeQuality.outcomeQualityReasons,
       checkinCreatedAtMs: createdAtMs,
       linkedAt: fb.firestore.FieldValue.serverTimestamp(),
       linkedAtMs: Date.now(),
@@ -394,14 +487,24 @@ async function linkCheckinOutcomeTelemetry(checkinId: string, checkin: Record<st
       sampleCount: fb.firestore.FieldValue.increment(1),
       absErrorSum: fb.firestore.FieldValue.increment(absError),
       squaredErrorSum: fb.firestore.FieldValue.increment(squaredError),
+      outcomeQualityScoreSum: fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityScore),
+      outcomeQualityConfidenceSum: fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityConfidence),
       [`confidenceBuckets.${confidenceBucket}.count`]: fb.firestore.FieldValue.increment(1),
       [`confidenceBuckets.${confidenceBucket}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`qualityBuckets.${qualityKey}.count`]: fb.firestore.FieldValue.increment(1),
+      [`qualityBuckets.${qualityKey}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`qualityBuckets.${qualityKey}.qualityScoreSum`]:
+        fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityScore),
+      [`qualityBuckets.${qualityKey}.qualityConfidenceSum`]:
+        fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityConfidence),
       [`models.${modelKey}.count`]: fb.firestore.FieldValue.increment(1),
       [`models.${modelKey}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
       [`models.${modelKey}.squaredErrorSum`]: fb.firestore.FieldValue.increment(squaredError),
       lastOutcome: {
         absError,
         signedError,
+        outcomeQualityLabel: outcomeQuality.outcomeQualityLabel,
+        outcomeQualityScore: outcomeQuality.outcomeQualityScore,
         modelVersion,
         placeId: placeId || null,
       },

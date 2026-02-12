@@ -120,6 +120,31 @@ Summary:
   - Optional weather context ingestion from Open-Meteo in `placeIntelligence` via `PLACE_INTEL_ENABLE_WEATHER`.
   - Weather is disabled by default; no runtime behavior change unless enabled.
 
+### 7) Outcome quality labeling + quality bucket telemetry
+Commit: _(see latest after this doc update)_
+Files:
+- `services/firebaseClient.ts`
+- `app/admin-observability.tsx`
+
+Summary:
+- Added deterministic outcome-quality derivation for linked check-ins:
+  - `outcomeQualityLabel` (`excellent|good|mixed|poor`)
+  - `outcomeQualityScore`
+  - `outcomeQualityConfidence`
+  - `outcomeQualityReasons`
+- Persisted these fields in `intelligenceOutcomes`.
+- Added rolling calibration aggregates for quality:
+  - `outcomeQualityScoreSum`
+  - `outcomeQualityConfidenceSum`
+  - `qualityBuckets.<label>.count`
+  - `qualityBuckets.<label>.absErrorSum`
+  - `qualityBuckets.<label>.qualityScoreSum`
+  - `qualityBuckets.<label>.qualityConfidenceSum`
+- Extended admin observability calibration card with:
+  - Average outcome quality score
+  - Average outcome quality confidence
+  - Quality mix distribution by label
+
 ## Production/API Status (Current)
 
 ### Working
