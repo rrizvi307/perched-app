@@ -32,7 +32,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "rehan.rizvi307@gmail.com"
+        "appleId": "rehan.rizvi307@gmail.com",
+        "ascAppId": "6759113835",
+        "appleTeamId": "ZGYMN58SN5"
       }
     }
   }
