@@ -4,7 +4,7 @@
     "slug": "perched",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/brand/Perched App Logo.png",
+    "icon": "./assets/brand/perched-icon-purple.png",
     "scheme": "perched",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -34,8 +34,8 @@
         "READ_MEDIA_IMAGES"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#FBFAF8",
-        "foregroundImage": "./assets/brand/Perched App Logo.png"
+        "backgroundColor": "#7C3AED",
+        "foregroundImage": "./assets/brand/perched-icon-purple.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -74,20 +74,20 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/brand/Perched App Logo.png"
+      "favicon": "./assets/brand/perched-icon-purple.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/brand/Perched App Logo.png",
+          "image": "./assets/brand/perched-icon-purple.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#FBFAF8",
+          "backgroundColor": "#7C3AED",
           "dark": {
-            "image": "./assets/brand/Perched App Logo.png",
-            "backgroundColor": "#0E0F12"
+            "image": "./assets/brand/perched-icon-purple.png",
+            "backgroundColor": "#6D28D9"
           }
         }
       ]

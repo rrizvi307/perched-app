@@ -3,13 +3,12 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
-import Svg, { Path, Defs, LinearGradient, Stop, Circle } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient, Stop, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
 
 /**
- * Modern Perched Logo - Clean, minimal, vibrant
- * Concept: Stylized "P" that also looks like a location pin with a perch
+ * Perched Logo - Bird perched on branch in purple palette
  */
 export default function Logo({
   size = 28,
@@ -26,41 +25,49 @@ export default function Logo({
   const colorScheme = useColorScheme();
   const theme = preference === 'system' ? (colorScheme ?? 'light') : preference;
 
-  // Modern gradient colors - purple to pink
+  // Brand colors - purple palette
   const gradientStart = '#8B5CF6'; // Vibrant purple
   const gradientEnd = '#EC4899';   // Hot pink
 
-  // Modern SVG Logo Mark Component
-  const LogoMarkSVG = ({ size }: { size: number }) => (
-    <Svg width={size} height={size} viewBox="0 0 100 100">
+  // Bird SVG Logo Mark Component
+  const LogoMarkSVG = ({ size: s }: { size: number }) => (
+    <Svg width={s} height={s} viewBox="0 0 100 100">
       <Defs>
-        <LinearGradient id="modernGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <Stop offset="0%" stopColor={gradientStart} stopOpacity="1" />
-          <Stop offset="100%" stopColor={gradientEnd} stopOpacity="1" />
+        <LinearGradient id="bodyGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+          <Stop offset="0%" stopColor="#EDE9FE" stopOpacity="1" />
+          <Stop offset="100%" stopColor="#DDD6FE" stopOpacity="1" />
+        </LinearGradient>
+        <LinearGradient id="wingGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+          <Stop offset="0%" stopColor="#C4B5FD" stopOpacity="1" />
+          <Stop offset="100%" stopColor="#A78BFA" stopOpacity="1" />
         </LinearGradient>
       </Defs>
 
-      {/* Modern location pin shape - rounder, cleaner */}
-      <Path
-        d="M 50 15 C 35 15 23 27 23 42 C 23 52 28 60 38 69 L 50 82 L 62 69 C 72 60 77 52 77 42 C 77 27 65 15 50 15 Z"
-        fill="url(#modernGradient)"
-      />
+      {/* Branch */}
+      <Line x1="15" y1="72" x2="85" y2="62" stroke="#4C1D95" strokeWidth="3" strokeLinecap="round" />
+      <Line x1="68" y1="65" x2="78" y2="56" stroke="#4C1D95" strokeWidth="2.2" strokeLinecap="round" />
 
-      {/* Inner circle - white */}
-      <Circle cx="50" cy="40" r="14" fill="#FFFFFF" opacity="0.95" />
+      {/* Bird body */}
+      <Ellipse cx="45" cy="48" rx="22" ry="19" fill="url(#bodyGrad)" rotation={-8} origin="45,48" />
 
-      {/* Stylized "P" inside that looks like a perch/branch */}
-      <Path
-        d="M 46 32 L 46 48 M 46 32 C 46 32 54 32 54 37 C 54 42 46 42 46 42"
-        stroke={gradientEnd}
-        strokeWidth="3"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      {/* Bird head */}
+      <Circle cx="55" cy="34" r="12" fill="url(#bodyGrad)" />
 
-      {/* Small dot accent - represents "perching" */}
-      <Circle cx="54" cy="37" r="2" fill={gradientEnd} />
+      {/* Wing */}
+      <Ellipse cx="37" cy="50" rx="16" ry="12" fill="url(#wingGrad)" rotation={-15} origin="37,50" />
+
+      {/* Tail */}
+      <Polygon points="22,52 13,44 16,56" fill={gradientEnd} />
+
+      {/* Beak */}
+      <Polygon points="67,32 73,34 67,36" fill={gradientEnd} />
+
+      {/* Eye */}
+      <Circle cx="59" cy="32" r="2" fill="#FFFFFF" />
+
+      {/* Legs */}
+      <Line x1="45" y1="64" x2="42" y2="70" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
+      <Line x1="51" y1="63" x2="49" y2="69" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
     </Svg>
   );
 

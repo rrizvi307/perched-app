@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="bodyGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#EDE9FE"/>
+      <stop offset="100%" stop-color="#DDD6FE"/>
+    </linearGradient>
+    <linearGradient id="wingGrad" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#C4B5FD"/>
+      <stop offset="100%" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="0" fill="url(#bgGrad)"/>
+
+  <!-- Branch -->
+  <line x1="200" y1="720" x2="824" y2="620" stroke="#4C1D95" stroke-width="28" stroke-linecap="round"/>
+  <!-- Branch fork -->
+  <line x1="680" y1="648" x2="780" y2="560" stroke="#4C1D95" stroke-width="20" stroke-linecap="round"/>
+
+  <!-- Bird body - main shape -->
+  <ellipse cx="460" cy="480" rx="220" ry="190" fill="url(#bodyGrad)" transform="rotate(-8, 460, 480)"/>
+
+  <!-- Bird head -->
+  <circle cx="560" cy="340" r="120" fill="url(#bodyGrad)"/>
+
+  <!-- Wing -->
+  <ellipse cx="380" cy="500" rx="160" ry="120" fill="url(#wingGrad)" transform="rotate(-15, 380, 500)"/>
+
+  <!-- Tail -->
+  <polygon points="220,520 130,440 160,560" fill="#EC4899"/>
+
+  <!-- Beak -->
+  <polygon points="670,320 730,340 670,360" fill="#EC4899"/>
+
+  <!-- Eye -->
+  <circle cx="590" cy="320" r="18" fill="#FFFFFF"/>
+
+  <!-- Legs -->
+  <line x1="460" y1="640" x2="430" y2="700" stroke="#4C1D95" stroke-width="14" stroke-linecap="round"/>
+  <line x1="520" y1="630" x2="500" y2="690" stroke="#4C1D95" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Feet gripping branch -->
+  <line x1="430" y1="700" x2="400" y2="700" stroke="#4C1D95" stroke-width="10" stroke-linecap="round"/>
+  <line x1="430" y1="700" x2="450" y2="706" stroke="#4C1D95" stroke-width="10" stroke-linecap="round"/>
+  <line x1="500" y1="690" x2="475" y2="694" stroke="#4C1D95" stroke-width="10" stroke-linecap="round"/>
+  <line x1="500" y1="690" x2="520" y2="694" stroke="#4C1D95" stroke-width="10" stroke-linecap="round"/>
+</svg>
