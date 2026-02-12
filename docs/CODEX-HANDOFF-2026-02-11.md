@@ -208,7 +208,7 @@ Summary:
 - Replaced direct `console.error` noise in social reaction helpers with `devLog` to reduce user-facing error spam while preserving diagnostics.
 
 ### 12) Missing-index fallback for user checkins query
-Commit: _(latest in this handoff window; see commit chain below)_
+Commit: `4fb5b23`
 Files:
 - `services/schemaHelpers.ts`
 - `services/firebaseClient.ts`
@@ -222,7 +222,7 @@ Summary:
 - `getCheckinsForUserRemote` now sorts fallback results in memory by `createdAt || timestamp` to preserve stable newest-first behavior when the no-order fallback path is used.
 
 ### 13) Friend graph hardening (mutual unfriend + reciprocal request auto-accept)
-Commit: _(latest in this handoff window; see commit chain below)_
+Commit: `0041a29`
 Files:
 - `services/firebaseClient.ts`
 - `services/friendsLocalUtils.ts`
@@ -243,7 +243,7 @@ Summary:
 - Added pure local graph utility module + tests to keep friend graph logic deterministic and testable.
 
 ### 14) Server-authoritative friend mutations via Cloud Functions
-Commit: _(latest in this handoff window; see commit chain below)_
+Commit: `5546ee9`
 Files:
 - `functions/src/index.ts`
 - `services/firebaseClient.ts`
@@ -265,11 +265,15 @@ Summary:
   - `unblockUserRemote`
 - Added guard in `onFriendRequestAccepted` trigger to only notify when friendship is truly mutual, preventing false “accepted” pushes on non-accept delete paths.
 - This removes reliance on client-side cross-user writes in normal operation once callable is deployed.
+- Deployment status:
+  - `firebase deploy --only functions:socialGraphMutation --project spot-app-ce2d8` succeeded (Feb 12, 2026).
+  - Function live: `socialGraphMutation(us-central1)`.
 
 ## Production/API Status (Current)
 
 ### Working
 - `placeSignalsProxy` deployed and healthy.
+- `socialGraphMutation` callable deployed and live in production (`us-central1`).
 - Authenticated live probes return:
   - `status=200`
   - `externalSignals` source includes `yelp`
@@ -301,6 +305,13 @@ Summary:
 1. Migrate off `functions.config()`/Cloud Runtime Config before March 2026 deprecation.
 2. Upgrade Functions runtime/dependencies path (Node 20 deprecation warning in deploy output).
 3. Open/continue Foursquare support case with failing request IDs and project details.
+
+## Status vs Claude TestFlight Plan (Codex-owned track)
+- `X1` Premium graceful-degradation: previously hardened via beta-safe premium gating and no hard dependency path.
+- `X3` Demo account/data validation: completed (demo reseed with photos and verification snapshot).
+- `X4` CI + quality gates: completed repeatedly; currently green (`typecheck`, `lint` warnings-only, app tests, functions build/tests).
+- `X5` Firestore/security hardening: partial + targeted improvements completed (reaction integrity, friend graph callable path); full checklist pass still pending if needed.
+- `X6` Node runtime deprecation: pending (Node 20 warning still present).
 
 ## ML/Intelligence Optimization Plan (Not Yet Implemented)
 These are recommended next backend-only steps that do not require UI churn:
@@ -355,6 +366,6 @@ These are recommended next backend-only steps that do not require UI churn:
 - `8610a3b` Harden CI install step for npm peer resolution
 - `25a06c8` Add release preflight script and CI test job
 - `73797a0` Surface intelligence in feed/explore and finalize EAS beta prep
-- _(latest)_ Missing-index fallback for `firebase_get_checkins_for_user` in `schemaHelpers`/`firebaseClient`
-- _(latest)_ Friend graph hardening for reciprocal requests + mutual unfriend/block cleanup
-- _(latest)_ Server-authoritative social graph callable (`socialGraphMutation`) with client-first callable routing
+- `4fb5b23` Handle missing checkins index with safe query fallback
+- `0041a29` Harden friend graph flows for requests, unfriend, and block
+- `5546ee9` Add server-authoritative social graph mutation callable
