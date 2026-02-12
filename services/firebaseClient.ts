@@ -19,6 +19,7 @@ import {
   invalidateCacheOnMetricUpdate,
 } from './cacheInvalidation';
 import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
+import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -601,6 +602,18 @@ function writeLocalRequests(items: any[]) {
   try {
     window.localStorage.setItem('spot_friend_requests_v1', JSON.stringify(items));
   } catch {}
+}
+
+function removeLocalFriendRequestPair(items: any[], userA: string, userB: string) {
+  return removeFriendRequestPair(items, userA, userB);
+}
+
+function addLocalMutualFriend(map: any, userA: string, userB: string) {
+  addMutualFriend(map, userA, userB, normalizeStringArray);
+}
+
+function removeLocalMutualFriend(map: any, userA: string, userB: string) {
+  removeMutualFriend(map, userA, userB, normalizeStringArray);
 }
 
 export function ensureFirebase() {
@@ -1329,17 +1342,37 @@ export async function followUserRemote(currentUserId: string, targetUserId: stri
 }
 
 export async function unfollowUserRemote(currentUserId: string, targetUserId: string) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
   const fb = ensureFirebase();
   if (!fb) {
     const map = readLocalFriends();
-    map[currentUserId] = (map[currentUserId] || []).filter((id: string) => id !== targetUserId);
+    removeLocalMutualFriend(map, currentUserId, targetUserId);
     writeLocalFriends(map);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), currentUserId, targetUserId));
     invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
   const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  await ref.set({ friends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+  const batch = db.batch();
+  batch.set(
+    db.collection('users').doc(currentUserId),
+    {
+      friends: fb.firestore.FieldValue.arrayRemove(targetUserId),
+      closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId),
+    },
+    { merge: true }
+  );
+  batch.set(
+    db.collection('users').doc(targetUserId),
+    {
+      friends: fb.firestore.FieldValue.arrayRemove(currentUserId),
+      closeFriends: fb.firestore.FieldValue.arrayRemove(currentUserId),
+    },
+    { merge: true }
+  );
+  batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
+  batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
+  await batch.commit();
   invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
@@ -1482,21 +1515,59 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
 }
 
 export async function sendFriendRequest(fromId: string, toId: string) {
+  if (!fromId || !toId || fromId === toId) return null;
   const fb = ensureFirebase();
   if (!fb) {
-    if (!fromId || !toId || fromId === toId) return null;
+    const map = readLocalFriends();
+    if (normalizeStringArray(map[fromId]).includes(toId)) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return { id: `${fromId}_${toId}`, fromId, toId, status: 'accepted', alreadyFriends: true };
+    }
+
     const requests = readLocalRequests();
+    const reverseRequestId = `${toId}_${fromId}`;
+    const reverseRequest = requests.find((r: any) => r?.id === reverseRequestId && (r?.status || 'pending') === 'pending');
+    if (reverseRequest) {
+      addLocalMutualFriend(map, fromId, toId);
+      writeLocalFriends(map);
+      writeLocalRequests(removeLocalFriendRequestPair(requests, fromId, toId));
+      invalidateUserFriendsCache([fromId, toId]);
+      return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
+    }
     const requestId = `${fromId}_${toId}`;
-    if (!requests.find((r: any) => r.id === requestId)) {
+    if (!requests.find((r: any) => r?.id === requestId)) {
       requests.push({ id: requestId, fromId, toId, status: 'pending', createdAt: Date.now() });
       writeLocalRequests(requests);
     }
     return { id: requestId, fromId, toId, status: 'pending' };
   }
-  if (!fromId || !toId || fromId === toId) return null;
+
   const db = fb.firestore();
-  const requestId = `${fromId}_${toId}`;
-  const ref = db.collection('friendRequests').doc(requestId);
+  const currentUserRef = db.collection('users').doc(fromId);
+  const targetUserRef = db.collection('users').doc(toId);
+  const reverseRequestId = `${toId}_${fromId}`;
+  const reverseRef = db.collection('friendRequests').doc(reverseRequestId);
+  const forwardRequestId = `${fromId}_${toId}`;
+  const [currentUserDoc, reverseDoc] = await Promise.all([currentUserRef.get(), reverseRef.get()]);
+
+  const currentFriends = normalizeStringArray(currentUserDoc.data()?.friends);
+  if (currentFriends.includes(toId)) {
+    invalidateUserFriendsCache([fromId, toId]);
+    return { id: forwardRequestId, fromId, toId, status: 'accepted', alreadyFriends: true };
+  }
+
+  if (reverseDoc.exists && (reverseDoc.data()?.status || 'pending') === 'pending') {
+    const batch = db.batch();
+    batch.set(currentUserRef, { friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
+    batch.set(targetUserRef, { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
+    batch.delete(reverseRef);
+    batch.delete(db.collection('friendRequests').doc(forwardRequestId));
+    await batch.commit();
+    invalidateUserFriendsCache([fromId, toId]);
+    return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
+  }
+
+  const ref = db.collection('friendRequests').doc(forwardRequestId);
   await ref.set(
     {
       fromId,
@@ -1506,7 +1577,7 @@ export async function sendFriendRequest(fromId: string, toId: string) {
     },
     { merge: true }
   );
-  return { id: requestId, fromId, toId, status: 'pending' };
+  return { id: forwardRequestId, fromId, toId, status: 'pending' };
 }
 
 export async function getIncomingFriendRequests(userId: string) {
@@ -1539,22 +1610,20 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
   const fb = ensureFirebase();
   if (!fb) {
     const map = readLocalFriends();
-    const current = new Set(map[toId] || []);
-    current.add(fromId);
-    map[toId] = Array.from(current);
-    const other = new Set(map[fromId] || []);
-    other.add(toId);
-    map[fromId] = Array.from(other);
+    addLocalMutualFriend(map, fromId, toId);
     writeLocalFriends(map);
-    const requests = readLocalRequests().filter((r: any) => r.id !== requestId);
-    writeLocalRequests(requests);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), fromId, toId));
     invalidateUserFriendsCache([fromId, toId]);
     return;
   }
   const db = fb.firestore();
-  await db.collection('users').doc(toId).set({ friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
-  await db.collection('users').doc(fromId).set({ friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
-  await db.collection('friendRequests').doc(requestId).delete();
+  const batch = db.batch();
+  batch.set(db.collection('users').doc(toId), { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
+  batch.set(db.collection('users').doc(fromId), { friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
+  batch.delete(db.collection('friendRequests').doc(requestId));
+  batch.delete(db.collection('friendRequests').doc(`${toId}_${fromId}`));
+  batch.delete(db.collection('friendRequests').doc(`${fromId}_${toId}`));
+  await batch.commit();
   invalidateUserFriendsCache([fromId, toId]);
 }
 
@@ -1586,17 +1655,44 @@ export async function reportUserRemote(reporterId: string | undefined, targetUse
 }
 
 export async function blockUserRemote(currentUserId: string, targetUserId: string) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
   const fb = ensureFirebase();
   if (!fb) {
+    const friendsMap = readLocalFriends();
+    removeLocalMutualFriend(friendsMap, currentUserId, targetUserId);
+    writeLocalFriends(friendsMap);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), currentUserId, targetUserId));
     const map = readLocalBlocked();
     const set = new Set(map[currentUserId] || []);
     set.add(targetUserId);
     map[currentUserId] = Array.from(set);
     writeLocalBlocked(map);
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
   const db = fb.firestore();
-  await db.collection('users').doc(currentUserId).set({ blocked: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
+  const batch = db.batch();
+  batch.set(
+    db.collection('users').doc(currentUserId),
+    {
+      blocked: fb.firestore.FieldValue.arrayUnion(targetUserId),
+      friends: fb.firestore.FieldValue.arrayRemove(targetUserId),
+      closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId),
+    },
+    { merge: true }
+  );
+  batch.set(
+    db.collection('users').doc(targetUserId),
+    {
+      friends: fb.firestore.FieldValue.arrayRemove(currentUserId),
+      closeFriends: fb.firestore.FieldValue.arrayRemove(currentUserId),
+    },
+    { merge: true }
+  );
+  batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
+  batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
+  await batch.commit();
+  invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
 export async function unblockUserRemote(currentUserId: string, targetUserId: string) {

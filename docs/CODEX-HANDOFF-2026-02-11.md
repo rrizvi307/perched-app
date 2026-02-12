@@ -221,6 +221,27 @@ Summary:
   - If that throws (missing index), degrades to safe query (`where(userId).limit(...)`) so story-card generation does not hard-fail.
 - `getCheckinsForUserRemote` now sorts fallback results in memory by `createdAt || timestamp` to preserve stable newest-first behavior when the no-order fallback path is used.
 
+### 13) Friend graph hardening (mutual unfriend + reciprocal request auto-accept)
+Commit: _(latest in this handoff window; see commit chain below)_
+Files:
+- `services/firebaseClient.ts`
+- `services/friendsLocalUtils.ts`
+- `services/__tests__/friendsLocalUtils.test.ts`
+
+Summary:
+- `sendFriendRequest` now handles reciprocal pending requests by auto-accepting:
+  - If `B -> A` is already pending and `A -> B` is sent, friendship is established immediately and pair requests are cleaned up.
+- `sendFriendRequest` now short-circuits when users are already friends.
+- `unfollowUserRemote` is now mutual:
+  - Removes friendship on both users.
+  - Removes close-friend flags on both users.
+  - Cleans up pending requests in both directions.
+- `blockUserRemote` now severs social edges:
+  - Adds target to `blocked`.
+  - Removes friendship and close-friend edges on both users.
+  - Removes pending requests in both directions.
+- Added pure local graph utility module + tests to keep friend graph logic deterministic and testable.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -311,3 +332,4 @@ These are recommended next backend-only steps that do not require UI churn:
 - `25a06c8` Add release preflight script and CI test job
 - `73797a0` Surface intelligence in feed/explore and finalize EAS beta prep
 - _(latest)_ Missing-index fallback for `firebase_get_checkins_for_user` in `schemaHelpers`/`firebaseClient`
+- _(latest)_ Friend graph hardening for reciprocal requests + mutual unfriend/block cleanup
