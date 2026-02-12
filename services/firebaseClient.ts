@@ -5,6 +5,7 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
+import 'firebase/compat/functions';
 import Constants from 'expo-constants';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
@@ -979,6 +980,23 @@ export async function getUserFriendsCached(userId: string, ttlMs = 15000) {
   }, []);
 }
 
+async function callSocialGraphMutation(action: string, payload: Record<string, any>) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  try {
+    const region =
+      ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+      (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+      'us-central1';
+    const callable = (fb as any).functions(region).httpsCallable('socialGraphMutation');
+    const response = await callable({ action, ...payload });
+    return response?.data || null;
+  } catch (error) {
+    devLog(`socialGraphMutation(${action}) failed`, error);
+    return null;
+  }
+}
+
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
@@ -1352,6 +1370,13 @@ export async function unfollowUserRemote(currentUserId: string, targetUserId: st
     invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
+
+  const callableResult = await callSocialGraphMutation('unfriend', { targetUserId });
+  if (callableResult?.ok) {
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
+    return;
+  }
+
   const db = fb.firestore();
   const batch = db.batch();
   batch.set(
@@ -1542,6 +1567,19 @@ export async function sendFriendRequest(fromId: string, toId: string) {
     return { id: requestId, fromId, toId, status: 'pending' };
   }
 
+  const callableResult = await callSocialGraphMutation('send_friend_request', { toId });
+  if (callableResult?.ok) {
+    invalidateUserFriendsCache([fromId, toId]);
+    return {
+      id: callableResult.requestId || `${fromId}_${toId}`,
+      fromId,
+      toId,
+      status: callableResult.status || 'pending',
+      autoAccepted: Boolean(callableResult.autoAccepted),
+      alreadyFriends: Boolean(callableResult.alreadyFriends),
+    };
+  }
+
   const db = fb.firestore();
   const currentUserRef = db.collection('users').doc(fromId);
   const targetUserRef = db.collection('users').doc(toId);
@@ -1616,6 +1654,13 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
     invalidateUserFriendsCache([fromId, toId]);
     return;
   }
+
+  const callableResult = await callSocialGraphMutation('accept_friend_request', { requestId });
+  if (callableResult?.ok) {
+    invalidateUserFriendsCache([fromId, toId]);
+    return;
+  }
+
   const db = fb.firestore();
   const batch = db.batch();
   batch.set(db.collection('users').doc(toId), { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
@@ -1634,6 +1679,12 @@ export async function declineFriendRequest(requestId: string) {
     writeLocalRequests(requests);
     return;
   }
+
+  const callableResult = await callSocialGraphMutation('decline_friend_request', { requestId });
+  if (callableResult?.ok) {
+    return;
+  }
+
   const db = fb.firestore();
   await db.collection('friendRequests').doc(requestId).delete();
 }
@@ -1670,6 +1721,13 @@ export async function blockUserRemote(currentUserId: string, targetUserId: strin
     invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
+
+  const callableResult = await callSocialGraphMutation('block_user', { targetUserId });
+  if (callableResult?.ok) {
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
+    return;
+  }
+
   const db = fb.firestore();
   const batch = db.batch();
   batch.set(
@@ -1703,6 +1761,10 @@ export async function unblockUserRemote(currentUserId: string, targetUserId: str
     writeLocalBlocked(map);
     return;
   }
+
+  const callableResult = await callSocialGraphMutation('unblock_user', { targetUserId });
+  if (callableResult?.ok) return;
+
   const db = fb.firestore();
   await db.collection('users').doc(currentUserId).set({ blocked: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
 }

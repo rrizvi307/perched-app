@@ -66,6 +66,24 @@ function logRequest(
 
 const db = admin.firestore();
 
+function asId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    items.push(id);
+  }
+  return items;
+}
+
 // CORS allowed origins whitelist
 const ALLOWED_ORIGINS = [
   'https://perched.app',
@@ -271,6 +289,232 @@ export const processReferral = functions.firestore
 // FRIEND REQUEST NOTIFICATIONS
 // =============================================================================
 
+type SocialGraphAction =
+  | 'send_friend_request'
+  | 'accept_friend_request'
+  | 'decline_friend_request'
+  | 'unfriend'
+  | 'block_user'
+  | 'unblock_user';
+
+/**
+ * Server-authoritative social graph mutation endpoint.
+ * Client should prefer this over direct cross-user Firestore writes.
+ */
+export const socialGraphMutation = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const actorId = context.auth.uid;
+  const action = asId(data?.action) as SocialGraphAction;
+
+  if (!action) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing action');
+  }
+
+  if (action === 'send_friend_request') {
+    const targetUserId = asId(data?.toId);
+    if (!targetUserId || targetUserId === actorId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
+    }
+
+    const forwardRequestId = `${actorId}_${targetUserId}`;
+    const reverseRequestId = `${targetUserId}_${actorId}`;
+    const actorUserRef = db.collection('users').doc(actorId);
+    const targetUserRef = db.collection('users').doc(targetUserId);
+    const forwardRequestRef = db.collection('friendRequests').doc(forwardRequestId);
+    const reverseRequestRef = db.collection('friendRequests').doc(reverseRequestId);
+
+    let result:
+      | { ok: true; status: 'pending'; requestId: string }
+      | { ok: true; status: 'accepted'; requestId: string; autoAccepted: boolean; alreadyFriends?: boolean }
+      = { ok: true, status: 'pending', requestId: forwardRequestId };
+
+    await db.runTransaction(async (tx) => {
+      const [actorUserDoc, reverseRequestDoc] = await Promise.all([
+        tx.get(actorUserRef),
+        tx.get(reverseRequestRef),
+      ]);
+
+      const actorFriends = normalizeIdList(actorUserDoc.data()?.friends);
+      if (actorFriends.includes(targetUserId)) {
+        result = {
+          ok: true,
+          status: 'accepted',
+          requestId: forwardRequestId,
+          autoAccepted: false,
+          alreadyFriends: true,
+        };
+        return;
+      }
+
+      const reverseStatus = asId(reverseRequestDoc.data()?.status || 'pending') || 'pending';
+      if (reverseRequestDoc.exists && reverseStatus === 'pending') {
+        tx.set(actorUserRef, { friends: admin.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
+        tx.set(targetUserRef, { friends: admin.firestore.FieldValue.arrayUnion(actorId) }, { merge: true });
+        tx.delete(reverseRequestRef);
+        tx.delete(forwardRequestRef);
+        result = {
+          ok: true,
+          status: 'accepted',
+          requestId: reverseRequestId,
+          autoAccepted: true,
+        };
+        return;
+      }
+
+      tx.set(
+        forwardRequestRef,
+        {
+          fromId: actorId,
+          toId: targetUserId,
+          status: 'pending',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      result = { ok: true, status: 'pending', requestId: forwardRequestId };
+    });
+
+    return result;
+  }
+
+  if (action === 'accept_friend_request') {
+    const requestId = asId(data?.requestId);
+    if (!requestId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Missing requestId');
+    }
+
+    const requestRef = db.collection('friendRequests').doc(requestId);
+    let result: { ok: true; status: 'accepted' | 'not_found'; requestId: string; fromId?: string; toId?: string } = {
+      ok: true,
+      status: 'not_found',
+      requestId,
+    };
+
+    await db.runTransaction(async (tx) => {
+      const requestDoc = await tx.get(requestRef);
+      if (!requestDoc.exists) {
+        result = { ok: true, status: 'not_found', requestId };
+        return;
+      }
+
+      const fromId = asId(requestDoc.data()?.fromId);
+      const toId = asId(requestDoc.data()?.toId);
+      if (!fromId || !toId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Malformed friend request');
+      }
+      if (toId !== actorId) {
+        throw new functions.https.HttpsError('permission-denied', 'Only recipient can accept this request');
+      }
+
+      tx.set(db.collection('users').doc(toId), { friends: admin.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
+      tx.set(db.collection('users').doc(fromId), { friends: admin.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
+      tx.delete(requestRef);
+      tx.delete(db.collection('friendRequests').doc(`${toId}_${fromId}`));
+
+      result = { ok: true, status: 'accepted', requestId, fromId, toId };
+    });
+
+    return result;
+  }
+
+  if (action === 'decline_friend_request') {
+    const requestId = asId(data?.requestId);
+    if (!requestId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Missing requestId');
+    }
+
+    const requestRef = db.collection('friendRequests').doc(requestId);
+    await db.runTransaction(async (tx) => {
+      const requestDoc = await tx.get(requestRef);
+      if (!requestDoc.exists) return;
+      const fromId = asId(requestDoc.data()?.fromId);
+      const toId = asId(requestDoc.data()?.toId);
+      if (actorId !== fromId && actorId !== toId) {
+        throw new functions.https.HttpsError('permission-denied', 'Not allowed to decline this request');
+      }
+      tx.delete(requestRef);
+    });
+    return { ok: true, status: 'declined', requestId };
+  }
+
+  if (action === 'unfriend') {
+    const targetUserId = asId(data?.targetUserId);
+    if (!targetUserId || targetUserId === actorId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
+    }
+
+    await db.runTransaction(async (tx) => {
+      tx.set(
+        db.collection('users').doc(actorId),
+        {
+          friends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+          closeFriends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+        },
+        { merge: true }
+      );
+      tx.set(
+        db.collection('users').doc(targetUserId),
+        {
+          friends: admin.firestore.FieldValue.arrayRemove(actorId),
+          closeFriends: admin.firestore.FieldValue.arrayRemove(actorId),
+        },
+        { merge: true }
+      );
+      tx.delete(db.collection('friendRequests').doc(`${actorId}_${targetUserId}`));
+      tx.delete(db.collection('friendRequests').doc(`${targetUserId}_${actorId}`));
+    });
+    return { ok: true, status: 'unfriended', targetUserId };
+  }
+
+  if (action === 'block_user') {
+    const targetUserId = asId(data?.targetUserId);
+    if (!targetUserId || targetUserId === actorId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
+    }
+
+    await db.runTransaction(async (tx) => {
+      tx.set(
+        db.collection('users').doc(actorId),
+        {
+          blocked: admin.firestore.FieldValue.arrayUnion(targetUserId),
+          friends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+          closeFriends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+        },
+        { merge: true }
+      );
+      tx.set(
+        db.collection('users').doc(targetUserId),
+        {
+          friends: admin.firestore.FieldValue.arrayRemove(actorId),
+          closeFriends: admin.firestore.FieldValue.arrayRemove(actorId),
+        },
+        { merge: true }
+      );
+      tx.delete(db.collection('friendRequests').doc(`${actorId}_${targetUserId}`));
+      tx.delete(db.collection('friendRequests').doc(`${targetUserId}_${actorId}`));
+    });
+    return { ok: true, status: 'blocked', targetUserId };
+  }
+
+  if (action === 'unblock_user') {
+    const targetUserId = asId(data?.targetUserId);
+    if (!targetUserId || targetUserId === actorId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
+    }
+
+    await db.collection('users').doc(actorId).set(
+      { blocked: admin.firestore.FieldValue.arrayRemove(targetUserId) },
+      { merge: true }
+    );
+    return { ok: true, status: 'unblocked', targetUserId };
+  }
+
+  throw new functions.https.HttpsError('invalid-argument', `Unsupported action: ${action}`);
+});
+
 /**
  * Send notification when a friend request is created
  */
@@ -332,14 +576,24 @@ export const onFriendRequestAccepted = functions.firestore
     }
 
     try {
-      // Get the accepter's info
-      const accepterDoc = await db.collection('users').doc(toId).get();
+      // Get both user docs to verify this delete represents an actual acceptance.
+      const [accepterDoc, senderDoc] = await Promise.all([
+        db.collection('users').doc(toId).get(),
+        db.collection('users').doc(fromId).get(),
+      ]);
       const accepterData = accepterDoc.data() || {};
-      const accepterName = accepterData.name || accepterData.handle || 'Someone';
-
-      // Get the original sender's push token
-      const senderDoc = await db.collection('users').doc(fromId).get();
       const senderData = senderDoc.data() || {};
+
+      // Guard: only notify if friendship is now mutual.
+      const accepterFriends = normalizeIdList(accepterData.friends);
+      const senderFriends = normalizeIdList(senderData.friends);
+      const isMutual = accepterFriends.includes(fromId) && senderFriends.includes(toId);
+      if (!isMutual) {
+        console.log(`Skipping friend accepted notification for ${fromId}<->${toId}; no mutual friendship found`);
+        return null;
+      }
+
+      const accepterName = accepterData.name || accepterData.handle || 'Someone';
       const senderToken = senderData.pushToken;
 
       if (!senderToken) {

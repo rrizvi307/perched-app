@@ -242,6 +242,30 @@ Summary:
   - Removes pending requests in both directions.
 - Added pure local graph utility module + tests to keep friend graph logic deterministic and testable.
 
+### 14) Server-authoritative friend mutations via Cloud Functions
+Commit: _(latest in this handoff window; see commit chain below)_
+Files:
+- `functions/src/index.ts`
+- `services/firebaseClient.ts`
+
+Summary:
+- Added callable function `socialGraphMutation` with authenticated actions:
+  - `send_friend_request`
+  - `accept_friend_request`
+  - `decline_friend_request`
+  - `unfriend`
+  - `block_user`
+  - `unblock_user`
+- Client friend operations now call callable mutations first and only use direct Firestore logic as fallback:
+  - `sendFriendRequest`
+  - `acceptFriendRequest`
+  - `declineFriendRequest`
+  - `unfollowUserRemote`
+  - `blockUserRemote`
+  - `unblockUserRemote`
+- Added guard in `onFriendRequestAccepted` trigger to only notify when friendship is truly mutual, preventing false “accepted” pushes on non-accept delete paths.
+- This removes reliance on client-side cross-user writes in normal operation once callable is deployed.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -333,3 +357,4 @@ These are recommended next backend-only steps that do not require UI churn:
 - `73797a0` Surface intelligence in feed/explore and finalize EAS beta prep
 - _(latest)_ Missing-index fallback for `firebase_get_checkins_for_user` in `schemaHelpers`/`firebaseClient`
 - _(latest)_ Friend graph hardening for reciprocal requests + mutual unfriend/block cleanup
+- _(latest)_ Server-authoritative social graph callable (`socialGraphMutation`) with client-first callable routing
