@@ -193,6 +193,20 @@ Summary:
   - `demoTotal: 25`
   - `demoWithPhoto: 25`
 
+### 11) Reaction + story-card Firebase resilience
+Commit: `a5def45`
+Files:
+- `services/firebaseClient.ts`
+- `services/social.ts`
+
+Summary:
+- Fixed noisy reaction failures in sessions where auth is not fully ready:
+  - Reaction writes/deletes now validate current auth user before mutating.
+  - Firestore reaction read/write failures now degrade safely instead of surfacing noisy hard errors.
+- Fixed story-card generation path to degrade gracefully when remote checkin query fails:
+  - `getCheckinsForUserRemote` now returns empty payload for query failures (permissions/index/network/auth timing), allowing story-card fallback paths to continue.
+- Replaced direct `console.error` noise in social reaction helpers with `devLog` to reduce user-facing error spam while preserving diagnostics.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -263,6 +277,7 @@ These are recommended next backend-only steps that do not require UI churn:
   - `npm run preflight`
 
 ## Commit Chain for This Handoff Window
+- `a5def45` Harden reaction and story-card Firebase fallbacks
 - `e8c73b6` Seed demo checkins with photo URLs
 - `1bd04d1` Fix missing keys in FilterBottomSheet chip lists
 - `e80158f` Boost place intelligence with external source trust scoring
