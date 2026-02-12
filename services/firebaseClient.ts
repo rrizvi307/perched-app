@@ -171,6 +171,255 @@ function hasMetricUpdates(fields: Record<string, any>): boolean {
   return metricFields.some((field) => Object.prototype.hasOwnProperty.call(fields, field));
 }
 
+function hasOutcomeMetricUpdates(fields: Record<string, any>): boolean {
+  const metricFields = ['wifiSpeed', 'noiseLevel', 'busyness', 'laptopFriendly', 'outletAvailability', 'outlets'];
+  return metricFields.some((field) => Object.prototype.hasOwnProperty.call(fields, field));
+}
+
+function normalizeNoiseScore(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(1, Math.min(5, value));
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'silent') return 1;
+  if (normalized === 'quiet') return 2;
+  if (normalized === 'moderate' || normalized === 'average') return 3;
+  if (normalized === 'lively') return 4;
+  if (normalized === 'loud') return 5;
+  return null;
+}
+
+function normalizeScore(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(1, Math.min(5, value));
+}
+
+function normalizeBool(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function round(value: number, digits = 2): number {
+  const factor = Math.pow(10, digits);
+  return Math.round(value * factor) / factor;
+}
+
+function buildObservedWorkScore(checkin: Record<string, any>) {
+  const wifi = normalizeScore(checkin.wifiSpeed);
+  const noise = normalizeNoiseScore(checkin.noiseLevel);
+  const busyness = normalizeScore(checkin.busyness);
+  const laptop = normalizeBool(checkin.laptopFriendly);
+  const outletsBool = normalizeBool(checkin.outletAvailability);
+  const outletsScore = normalizeScore(checkin.outlets);
+
+  let score = 0;
+  let weight = 0;
+  let signalCount = 0;
+
+  if (wifi !== null) {
+    signalCount += 1;
+    weight += 35;
+    score += ((wifi - 1) / 4) * 35;
+  }
+  if (noise !== null) {
+    signalCount += 1;
+    weight += 25;
+    score += ((5 - noise) / 4) * 25;
+  }
+  if (busyness !== null) {
+    signalCount += 1;
+    weight += 20;
+    score += ((5 - busyness) / 4) * 20;
+  }
+  if (laptop !== null) {
+    signalCount += 1;
+    weight += 12;
+    score += laptop ? 12 : 2;
+  }
+  if (outletsBool !== null || outletsScore !== null) {
+    signalCount += 1;
+    weight += 8;
+    if (outletsBool !== null) {
+      score += outletsBool ? 8 : 2;
+    } else if (outletsScore !== null) {
+      score += ((outletsScore - 1) / 4) * 8;
+    }
+  }
+
+  if (signalCount < 2 || weight <= 0) return null;
+
+  const observedWorkScore = Math.max(0, Math.min(100, Math.round((score / weight) * 100)));
+  return {
+    observedWorkScore,
+    signalCount,
+    metrics: {
+      wifiSpeed: wifi,
+      noiseLevel: noise,
+      busyness,
+      laptopFriendly: laptop,
+      outletAvailability: outletsBool,
+      outlets: outletsScore,
+    },
+  };
+}
+
+function toSafeFieldKey(value: string): string {
+  return String(value || 'unknown').replace(/[.#$/\[\]\s]+/g, '_').slice(0, 80) || 'unknown';
+}
+
+async function linkCheckinOutcomeTelemetry(checkinId: string, checkin: Record<string, any>) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return;
+
+  const placeId = typeof checkin.spotPlaceId === 'string' ? checkin.spotPlaceId.trim() : '';
+  const placeName = typeof checkin.spotName === 'string' ? checkin.spotName.trim() : '';
+  const userId = typeof checkin.userId === 'string' ? checkin.userId.trim() : '';
+  if (!placeId && !placeName) return;
+  if (!userId) return;
+
+  const observed = buildObservedWorkScore(checkin);
+  if (!observed) return;
+
+  const startedAt = Date.now();
+  try {
+    const db = fb.firestore();
+    const createdAtMs =
+      toMillisSafe(checkin.createdAt) ||
+      toMillisSafe(checkin.createdAtServer) ||
+      (typeof checkin.createdAtMs === 'number' ? checkin.createdAtMs : 0) ||
+      Date.now();
+
+    const windowStart = fb.firestore.Timestamp.fromMillis(createdAtMs - 6 * 60 * 60 * 1000);
+    const windowEnd = fb.firestore.Timestamp.fromMillis(createdAtMs + 20 * 60 * 1000);
+
+    const snapshot = await db
+      .collection('intelligencePredictions')
+      .where('createdAt', '>=', windowStart)
+      .where('createdAt', '<=', windowEnd)
+      .orderBy('createdAt', 'desc')
+      .limit(60)
+      .get();
+
+    type Candidate = {
+      id: string;
+      data: Record<string, any>;
+      score: number;
+      predictionCreatedAtMs: number;
+    };
+
+    const normalizedPlaceName = placeName.toLowerCase();
+    const candidates: Candidate[] = [];
+
+    snapshot.forEach((doc: any) => {
+      const data = (doc.data() || {}) as Record<string, any>;
+      const predictedScore = typeof data.workScore === 'number' ? data.workScore : null;
+      if (predictedScore === null) return;
+
+      const predictionPlaceId = typeof data.placeId === 'string' ? data.placeId.trim() : '';
+      const predictionPlaceName = typeof data.placeName === 'string' ? data.placeName.trim().toLowerCase() : '';
+      const predictionUserId = typeof data.userId === 'string' ? data.userId.trim() : '';
+      const predictionCreatedAtMs = toMillisSafe(data.createdAt) || toMillisSafe(data.generatedAt);
+
+      let score = 0;
+      if (placeId && predictionPlaceId && placeId === predictionPlaceId) score += 5;
+      if (!placeId && placeName && predictionPlaceName && normalizedPlaceName === predictionPlaceName) score += 4;
+      if (placeId && placeName && predictionPlaceName && normalizedPlaceName === predictionPlaceName) score += 1;
+      if (predictionUserId && userId === predictionUserId) score += 2;
+      if (predictionCreatedAtMs > 0 && predictionCreatedAtMs <= createdAtMs) {
+        const ageHours = (createdAtMs - predictionCreatedAtMs) / (60 * 60 * 1000);
+        score += Math.max(0, 2 - ageHours * 0.4);
+      }
+
+      if (score <= 0) return;
+      candidates.push({ id: doc.id, data, score, predictionCreatedAtMs });
+    });
+
+    if (!candidates.length) {
+      await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, false);
+      return;
+    }
+
+    candidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.predictionCreatedAtMs - a.predictionCreatedAtMs;
+    });
+    const best = candidates[0];
+    const predictedWorkScore = typeof best.data.workScore === 'number' ? best.data.workScore : 0;
+    const predictedConfidence = typeof best.data.confidence === 'number' ? best.data.confidence : 0;
+    const modelVersion = typeof best.data.modelVersion === 'string' ? best.data.modelVersion : 'unknown';
+    const signedError = round(observed.observedWorkScore - predictedWorkScore, 2);
+    const absError = Math.abs(signedError);
+    const squaredError = round(signedError * signedError, 4);
+
+    const confidenceBucket =
+      predictedConfidence >= 0.75 ? 'high' : predictedConfidence >= 0.5 ? 'medium' : 'low';
+    const modelKey = toSafeFieldKey(modelVersion);
+    const outcomeId = toSafeFieldKey(`${checkinId}_${best.id}`);
+    const outcomeRef = db.collection('intelligenceOutcomes').doc(outcomeId);
+    const existingOutcome = await outcomeRef.get();
+    if (existingOutcome.exists) {
+      await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, true);
+      return;
+    }
+
+    const outcomeDoc = {
+      checkinId,
+      predictionId: best.id,
+      userId,
+      placeId: placeId || null,
+      placeName: placeName || null,
+      modelVersion,
+      predictedWorkScore,
+      predictedConfidence,
+      observedWorkScore: observed.observedWorkScore,
+      observedMetrics: observed.metrics,
+      observedSignalCount: observed.signalCount,
+      signedError,
+      absError,
+      squaredError,
+      checkinCreatedAtMs: createdAtMs,
+      linkedAt: fb.firestore.FieldValue.serverTimestamp(),
+      linkedAtMs: Date.now(),
+    };
+
+    await outcomeRef.set(outcomeDoc, { merge: true });
+
+    await db.collection('intelligenceCalibrationMetrics').doc('current').set({
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+      sampleCount: fb.firestore.FieldValue.increment(1),
+      absErrorSum: fb.firestore.FieldValue.increment(absError),
+      squaredErrorSum: fb.firestore.FieldValue.increment(squaredError),
+      [`confidenceBuckets.${confidenceBucket}.count`]: fb.firestore.FieldValue.increment(1),
+      [`confidenceBuckets.${confidenceBucket}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`models.${modelKey}.count`]: fb.firestore.FieldValue.increment(1),
+      [`models.${modelKey}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`models.${modelKey}.squaredErrorSum`]: fb.firestore.FieldValue.increment(squaredError),
+      lastOutcome: {
+        absError,
+        signedError,
+        modelVersion,
+        placeId: placeId || null,
+      },
+    }, { merge: true });
+
+    await db.collection('intelligencePredictions').doc(best.id).set({
+      calibrationMatchedAt: fb.firestore.FieldValue.serverTimestamp(),
+      outcomeCount: fb.firestore.FieldValue.increment(1),
+      outcomeAbsErrorSum: fb.firestore.FieldValue.increment(absError),
+    }, { merge: true });
+
+    await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, true);
+    await recordPerfMetric('place_intelligence_calibration_abs_error', absError, true);
+  } catch {
+    await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, false);
+  }
+}
+
 function normalizeStringArray(value: unknown) {
   if (!Array.isArray(value)) return [] as string[];
   const seen = new Set<string>();
@@ -376,6 +625,7 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
   const ref = await db.collection('checkins').add(doc);
   invalidateCheckinsCache();
   void invalidateCacheOnCheckinCreate(ref.id, resolveSpotId(doc), userId || '');
+  void linkCheckinOutcomeTelemetry(ref.id, doc);
   return { id: ref.id, ...doc };
 }
 
@@ -706,6 +956,9 @@ export async function updateCheckinRemote(checkinId: string, fields: Record<stri
     void invalidateCacheOnCheckinUpdate(checkinId, spotId || undefined, userId);
     if (hasMetricUpdates(fields) && spotId) {
       void invalidateCacheOnMetricUpdate(spotId, userId);
+    }
+    if (hasOutcomeMetricUpdates(fields)) {
+      void linkCheckinOutcomeTelemetry(checkinId, { ...merged, id: checkinId });
     }
   } catch {
     // ignore

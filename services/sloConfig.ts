@@ -125,6 +125,30 @@ export const SLO_DEFINITIONS: Record<string, SLO> = {
     priority: 'medium', // Not blocking user actions
   },
 
+  'place_intelligence_outcome_link': {
+    operation: 'place_intelligence_outcome_link',
+    displayName: 'Intel Outcome Link',
+    description: 'Link check-in outcomes to recent intelligence predictions',
+    p50Target: 250,
+    p95Target: 700,
+    p99Target: 1400,
+    errorRateTarget: 0.05, // 5%
+    errorBudget: 0.025, // 2.5%
+    priority: 'medium',
+  },
+
+  'place_intelligence_calibration_abs_error': {
+    operation: 'place_intelligence_calibration_abs_error',
+    displayName: 'Intel Abs Error',
+    description: 'Absolute prediction error score recorded per linked outcome',
+    p50Target: 10,
+    p95Target: 22,
+    p99Target: 35,
+    errorRateTarget: 0.2, // 20%
+    errorBudget: 0.1, // 10%
+    priority: 'medium',
+  },
+
   'foursquare_api': {
     operation: 'foursquare_api',
     displayName: 'Foursquare API',

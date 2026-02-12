@@ -60,6 +60,17 @@ type CacheStatsState = {
   avgHitRate: number;
 };
 
+type CalibrationSnapshot = {
+  sampleCount: number;
+  mae: number;
+  rmse: number;
+  highMae: number | null;
+  mediumMae: number | null;
+  lowMae: number | null;
+  updatedAt: number;
+  modelName: string;
+};
+
 type ChartPoint = { x: number; y: number };
 
 type ComplianceState = 'green' | 'yellow' | 'red' | 'unknown';
@@ -186,6 +197,38 @@ function parseMetricFromDoc(id: string, data: Record<string, unknown>): MetricPo
   };
 }
 
+function parseCalibrationSnapshot(data: Record<string, unknown>): CalibrationSnapshot | null {
+  const sampleCount = toNumber(data.sampleCount);
+  if (sampleCount <= 0) return null;
+  const absErrorSum = toNumber(data.absErrorSum);
+  const squaredErrorSum = toNumber(data.squaredErrorSum);
+  const buckets = (data.confidenceBuckets as Record<string, any>) || {};
+
+  const bucketMae = (bucketName: 'high' | 'medium' | 'low') => {
+    const bucket = buckets[bucketName] || {};
+    const count = toNumber(bucket.count);
+    const sum = toNumber(bucket.absErrorSum);
+    if (count <= 0) return null;
+    return sum / count;
+  };
+
+  const models = (data.models as Record<string, any>) || {};
+  const topModel = Object.entries(models)
+    .map(([name, raw]) => ({ name, count: toNumber((raw as Record<string, unknown>).count) }))
+    .sort((a, b) => b.count - a.count)[0];
+
+  return {
+    sampleCount,
+    mae: absErrorSum / sampleCount,
+    rmse: Math.sqrt(squaredErrorSum / sampleCount),
+    highMae: bucketMae('high'),
+    mediumMae: bucketMae('medium'),
+    lowMae: bucketMae('low'),
+    updatedAt: toMillis(data.updatedAt) || Date.now(),
+    modelName: topModel?.name || 'unknown',
+  };
+}
+
 function buildHourlyLatencySeries(metrics: MetricPoint[]): {
   p50: ChartPoint[];
   p95: ChartPoint[];
@@ -247,6 +290,7 @@ export default function AdminObservabilityScreen() {
   });
   const [cacheHitRate, setCacheHitRate] = useState(0);
   const [cacheTrend, setCacheTrend] = useState<ChartPoint[]>([]);
+  const [calibrationSnapshot, setCalibrationSnapshot] = useState<CalibrationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState(Date.now());
@@ -313,6 +357,7 @@ export default function AdminObservabilityScreen() {
     let active = true;
     let unsubscribeMetrics: (() => void) | null = null;
     let unsubscribeViolations: (() => void) | null = null;
+    let unsubscribeCalibration: (() => void) | null = null;
 
     const refreshLocalTelemetry = async () => {
       try {
@@ -421,11 +466,31 @@ export default function AdminObservabilityScreen() {
         }
       );
 
+    unsubscribeCalibration = db
+      .collection('intelligenceCalibrationMetrics')
+      .doc('current')
+      .onSnapshot(
+        (doc: any) => {
+          if (!active) return;
+          if (!doc.exists) {
+            setCalibrationSnapshot(null);
+            return;
+          }
+          const parsed = parseCalibrationSnapshot((doc.data() || {}) as Record<string, unknown>);
+          setCalibrationSnapshot(parsed);
+        },
+        () => {
+          if (!active) return;
+          setErrorMessage('Unable to subscribe to intelligenceCalibrationMetrics in Firestore.');
+        }
+      );
+
     return () => {
       active = false;
       clearInterval(interval);
       if (unsubscribeMetrics) unsubscribeMetrics();
       if (unsubscribeViolations) unsubscribeViolations();
+      if (unsubscribeCalibration) unsubscribeCalibration();
     };
   }, [adminStatus]);
 
@@ -663,6 +728,48 @@ export default function AdminObservabilityScreen() {
         ))}
       </View>
 
+      {calibrationSnapshot ? (
+        <View style={[styles.card, { backgroundColor: card, borderColor: border }]}> 
+          <Text style={[styles.cardTitle, { color: text }]}>Intelligence Calibration</Text>
+          <Text style={[styles.complianceMeta, { color: muted }]}>
+            Samples {calibrationSnapshot.sampleCount} • Model {calibrationSnapshot.modelName}
+          </Text>
+          <View style={styles.calibrationRow}>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>MAE</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>{calibrationSnapshot.mae.toFixed(2)}</Text>
+            </View>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>RMSE</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>{calibrationSnapshot.rmse.toFixed(2)}</Text>
+            </View>
+          </View>
+          <View style={styles.calibrationRow}>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>High conf MAE</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>
+                {calibrationSnapshot.highMae === null ? 'N/A' : calibrationSnapshot.highMae.toFixed(2)}
+              </Text>
+            </View>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>Medium conf MAE</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>
+                {calibrationSnapshot.mediumMae === null ? 'N/A' : calibrationSnapshot.mediumMae.toFixed(2)}
+              </Text>
+            </View>
+            <View style={styles.calibrationCell}>
+              <Text style={[styles.calibrationLabel, { color: muted }]}>Low conf MAE</Text>
+              <Text style={[styles.calibrationValue, { color: text }]}>
+                {calibrationSnapshot.lowMae === null ? 'N/A' : calibrationSnapshot.lowMae.toFixed(2)}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.tableSecondary, { color: muted }]}>
+            Updated {formatTimestamp(calibrationSnapshot.updatedAt)}
+          </Text>
+        </View>
+      ) : null}
+
       <View style={[styles.card, { backgroundColor: card, borderColor: border }]}> 
         <Text style={[styles.cardTitle, { color: text }]}>Latency Trends (24h)</Text>
         {loading ? <ActivityIndicator color={primary} style={{ marginVertical: 8 }} /> : null}
@@ -822,6 +929,27 @@ const styles = StyleSheet.create({
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   keyLatency: { fontSize: 13, fontWeight: '700' },
   keyMeta: { marginTop: 2, fontSize: 12 },
+  calibrationRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+    marginBottom: 8,
+    gap: 10,
+  },
+  calibrationCell: {
+    flex: 1,
+    minWidth: 90,
+  },
+  calibrationLabel: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  calibrationValue: {
+    marginTop: 2,
+    fontSize: 16,
+    fontWeight: '700',
+  },
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',

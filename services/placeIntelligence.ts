@@ -37,6 +37,15 @@ export type IntelligenceMomentum = {
   laptopDelta: number;
 };
 
+export type ContextSignal = {
+  source: 'weather';
+  condition: 'clear' | 'cloudy' | 'rain' | 'snow' | 'unknown';
+  impact: 'increase_crowd' | 'decrease_crowd' | 'neutral';
+  confidence: number;
+  temperatureC?: number;
+  precipitationMm?: number;
+};
+
 export type PlaceIntelligence = {
   workScore: number;
   crowdLevel: 'low' | 'moderate' | 'high' | 'unknown';
@@ -46,6 +55,7 @@ export type PlaceIntelligence = {
   momentum: IntelligenceMomentum;
   highlights: string[];
   externalSignals: ExternalPlaceSignal[];
+  contextSignals: ContextSignal[];
   crowdForecast: CrowdForecastPoint[];
   useCases: string[];
   modelVersion: string;
@@ -67,9 +77,12 @@ const MOMENTUM_WINDOW_DAYS = 7;
 const PLACE_INTEL_MODEL_VERSION = '2026-02-11-r2';
 const INTEL_TELEMETRY_SAMPLE_RATE = 0.08;
 const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
+const WEATHER_TTL_MS = 30 * 60 * 1000;
 const intelligenceCache = new Map<string, { ts: number; payload: PlaceIntelligence }>();
 const proxySignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
 const proxyInflight = new Map<string, Promise<ExternalPlaceSignal[]>>();
+const weatherSignalCache = new Map<string, { ts: number; payload: ContextSignal[] }>();
+const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
 const telemetryThrottle = new Map<string, number>();
 
 function getFallbackPlaceIntelligence(): PlaceIntelligence {
@@ -94,6 +107,7 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
     },
     highlights: [],
     externalSignals: [],
+    contextSignals: [],
     crowdForecast: [],
     useCases: ['Quick focus stop'],
     modelVersion: PLACE_INTEL_MODEL_VERSION,
@@ -201,12 +215,38 @@ function isIntelTelemetryEnabled() {
   return readBoolFlag(raw);
 }
 
+function isWeatherSignalEnabled() {
+  const extra = getExpoExtra();
+  const raw =
+    (process.env.EXPO_PUBLIC_PLACE_INTEL_ENABLE_WEATHER as string) ||
+    (process.env.PLACE_INTEL_ENABLE_WEATHER as string) ||
+    (extra?.PLACE_INTEL_ENABLE_WEATHER as string) ||
+    ((global as any)?.PLACE_INTEL_ENABLE_WEATHER as string) ||
+    '';
+  return readBoolFlag(raw);
+}
+
 function stableHash(text: string) {
   let hash = 0;
   for (let i = 0; i < text.length; i += 1) {
     hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
   }
   return Math.abs(hash);
+}
+
+function classifyWeatherCondition(code: number, precipitationMm: number): ContextSignal['condition'] {
+  if (!Number.isFinite(code)) return 'unknown';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return 'snow';
+  if (precipitationMm > 0 || [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return 'rain';
+  if ([0, 1].includes(code)) return 'clear';
+  if ([2, 3, 45, 48].includes(code)) return 'cloudy';
+  return 'unknown';
+}
+
+function toWeatherImpact(condition: ContextSignal['condition']): ContextSignal['impact'] {
+  if (condition === 'rain' || condition === 'snow') return 'increase_crowd';
+  if (condition === 'clear') return 'decrease_crowd';
+  return 'neutral';
 }
 
 async function getProxyAuthHeaders() {
@@ -299,6 +339,53 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ExternalP
     );
     const next = normalizeExternalSignals(payload?.externalSignals);
     proxySignalCache.set(cacheKey, { ts: Date.now(), payload: next });
+    return next;
+  });
+}
+
+async function getWeatherSignals(input: BuildIntelligenceInput): Promise<ContextSignal[]> {
+  if (!isWeatherSignalEnabled()) return [];
+  if (!input.location) return [];
+  const lat = input.location.lat;
+  const lng = input.location.lng;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+
+  const cacheKey = `weather:${lat.toFixed(2)}:${lng.toFixed(2)}`;
+  const cached = weatherSignalCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+    return cached.payload;
+  }
+
+  return withInflight(weatherInflight, cacheKey, async () => {
+    const params = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lng),
+      current: 'temperature_2m,precipitation,weather_code',
+      timezone: 'auto',
+    });
+    const url = `https://api.open-meteo.com/v1/forecast?${params.toString()}`;
+    const payload = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json' } }, 1800);
+
+    const current = (payload as any)?.current || null;
+    const code = typeof current?.weather_code === 'number' ? current.weather_code : NaN;
+    const precipitation = typeof current?.precipitation === 'number' ? current.precipitation : 0;
+    const temperature = typeof current?.temperature_2m === 'number' ? current.temperature_2m : undefined;
+    const condition = classifyWeatherCondition(code, precipitation);
+    const impact = toWeatherImpact(condition);
+    if (condition === 'unknown') {
+      weatherSignalCache.set(cacheKey, { ts: Date.now(), payload: [] });
+      return [];
+    }
+
+    const next: ContextSignal[] = [{
+      source: 'weather',
+      condition,
+      impact,
+      confidence: 0.68,
+      temperatureC: temperature,
+      precipitationMm: precipitation,
+    }];
+    weatherSignalCache.set(cacheKey, { ts: Date.now(), payload: next });
     return next;
   });
 }
@@ -667,8 +754,19 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const rankedTimes = Object.entries(hourBuckets).sort((a, b) => b[1] - a[1]);
   const bestTime = rankedTimes[0]?.[1] ? (rankedTimes[0][0] as PlaceIntelligence['bestTime']) : 'anytime';
 
-  const externalSignals = await getProxySignals(input);
+  const [externalSignals, contextSignals] = await Promise.all([
+    getProxySignals(input),
+    getWeatherSignals(input),
+  ]);
   const externalRatingAvg = avg(externalSignals.map((s) => s.rating).filter((v): v is number => typeof v === 'number'));
+  const weatherSignal = contextSignals.find((s) => s.source === 'weather') || null;
+  const weatherCrowdDelta =
+    weatherSignal?.impact === 'increase_crowd' ? 0.35 :
+      weatherSignal?.impact === 'decrease_crowd' ? -0.2 :
+        0;
+  const adjustedBusynessAvg = busynessAvg === null
+    ? null
+    : clamp(busynessAvg + weatherCrowdDelta, 1, 5);
   const reliability = computeReliability({
     sampleSize: checkins.length,
     wifiValues,
@@ -695,7 +793,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     (wifiAvg || 0) * 10 +
     (laptopPct || 0) * 0.22 +
     (noiseAvg !== null ? (6 - noiseAvg) * 7 : 0) +
-    (busynessAvg !== null ? (6 - busynessAvg) * 6 : 0) +
+    (adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0) +
     Math.log10(1 + Math.max(0, tagBoost)) * 18 +
     (externalRatingAvg || 0) * 6 +
     studyTypeBoost +
@@ -719,7 +817,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const crowdForecast = buildCrowdForecast(checkins, confidence);
   const useCases = deriveUseCases({
     workScore,
-    crowdLevel: deriveCrowdLevel(busynessAvg),
+    crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,
     openNow: input.openNow,
     externalSignals,
@@ -730,24 +828,27 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const highlights: string[] = [];
   if ((wifiAvg || 0) >= 4) highlights.push('Fast WiFi');
   if ((laptopPct || 0) >= 70) highlights.push('Laptop friendly');
-  if ((busynessAvg || 0) <= 2.2) highlights.push('Usually not crowded');
+  if ((adjustedBusynessAvg || 0) <= 2.2) highlights.push('Usually not crowded');
   if ((noiseAvg || 0) <= 2.4) highlights.push('Typically quiet');
   if (crowdForecast[0]?.level === 'low') highlights.push('Low crowd now');
   if (externalSignals.some((s) => (s.reviewCount || 0) >= 100)) highlights.push('Strong external reviews');
   if (input.openNow === true) highlights.push('Open now');
+  if (weatherSignal?.condition === 'rain' && highlights.length < 4) highlights.push('Rain may increase indoor traffic');
+  if (weatherSignal?.condition === 'snow' && highlights.length < 4) highlights.push('Snow likely shifts traffic indoors');
   if (reliability.score >= 0.78 && highlights.length < 4) highlights.push('High confidence model');
   if (momentum.trend === 'improving' && highlights.length < 4) highlights.push('Trending better this week');
   if (momentum.trend === 'declining' && highlights.length < 4) highlights.push('Trend watch: getting busier');
 
   const payload: PlaceIntelligence = {
     workScore,
-    crowdLevel: deriveCrowdLevel(busynessAvg),
+    crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,
     confidence,
     reliability,
     momentum,
     highlights: highlights.slice(0, 4),
     externalSignals,
+    contextSignals,
     crowdForecast,
     useCases,
     modelVersion: PLACE_INTEL_MODEL_VERSION,
@@ -764,6 +865,9 @@ export function invalidatePlaceIntelligenceCache(placeId?: string): void {
     intelligenceCache.clear();
     proxySignalCache.clear();
     proxyInflight.clear();
+    weatherSignalCache.clear();
+    weatherInflight.clear();
+    telemetryThrottle.clear();
     return;
   }
 
@@ -783,6 +887,7 @@ export function invalidatePlaceIntelligenceCache(placeId?: string): void {
       proxyInflight.delete(key);
     }
   }
+  // Weather cache is location-scoped and not place-scoped, keep it hot.
 }
 
 export async function buildPlaceIntelligence(input: BuildIntelligenceInput): Promise<PlaceIntelligence> {

@@ -97,6 +97,29 @@ Summary:
   - `EXPO_PUBLIC_PLACE_INTEL_TELEMETRY` or equivalent runtime flag.
 - Added/updated tests for reliability/momentum/model metadata behavior.
 
+### 6) Prediction→Outcome linkage + calibration observability + external context scaffold
+Commit: _(see latest after this doc update)_
+Files:
+- `services/firebaseClient.ts`
+- `app/admin-observability.tsx`
+- `services/sloConfig.ts`
+- `services/placeIntelligence.ts`
+
+Summary:
+- Added check-in outcome linkage to recent model predictions:
+  - On check-in create/update with enough metrics, app now attempts to match a recent `intelligencePredictions` record.
+  - Writes linked outcomes to `intelligenceOutcomes`.
+- Added rolling calibration aggregates:
+  - Maintained in `intelligenceCalibrationMetrics/current` (sample count, abs/squared error sums, confidence/model buckets).
+- Added observability UI integration:
+  - Admin dashboard now subscribes to calibration metrics and displays MAE/RMSE + confidence-bucket MAE.
+- Added SLO definitions for calibration pipeline operations:
+  - `place_intelligence_outcome_link`
+  - `place_intelligence_calibration_abs_error`
+- Added outside-source intelligence scaffold (flag-gated):
+  - Optional weather context ingestion from Open-Meteo in `placeIntelligence` via `PLACE_INTEL_ENABLE_WEATHER`.
+  - Weather is disabled by default; no runtime behavior change unless enabled.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -137,8 +160,8 @@ Summary:
 These are recommended next backend-only steps that do not require UI churn:
 
 1. Add prediction-outcome telemetry
-- Basic prediction telemetry hook added (opt-in flag).
-- Next: outcome logging (post-check-in/session quality) and model calibration loop.
+- Prediction telemetry + outcome linkage are now implemented.
+- Next: define richer user/session outcome labels (e.g., task completion/focus score) and retraining cadence.
 
 2. Add reliability calibration
 - Confidence calibration by sample size and variance.
