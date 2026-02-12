@@ -169,6 +169,30 @@ Summary:
   - `externalTrustScore`
 - Bumped model version to `2026-02-11-r3`.
 
+### 9) Feed runtime warning fix (list key stability)
+Commit: `1bd04d1`
+Files:
+- `components/ui/FilterBottomSheet.tsx`
+
+Summary:
+- Fixed React warning `Each child in a list should have a unique "key" prop` in filter chip lists.
+- Added explicit stable keys for distance, price, and noise chip maps in `FilterBottomSheet`.
+
+### 10) Demo feed photo backfill + future seed safety
+Commit: `e8c73b6`
+Files:
+- `scripts/seedDemoAccount.ts`
+
+Summary:
+- Root cause for `Photo unavailable` on demo/friend check-ins: script seeded `photoUrl: null`.
+- Added deterministic per-spot photo URL map and now write both:
+  - `photoUrl`
+  - `image`
+- Re-ran seed against Firestore to backfill existing docs.
+- Verification snapshot after reseed:
+  - `demoTotal: 25`
+  - `demoWithPhoto: 25`
+
 ## Production/API Status (Current)
 
 ### Working
@@ -239,6 +263,13 @@ These are recommended next backend-only steps that do not require UI churn:
   - `npm run preflight`
 
 ## Commit Chain for This Handoff Window
+- `e8c73b6` Seed demo checkins with photo URLs
+- `1bd04d1` Fix missing keys in FilterBottomSheet chip lists
+- `e80158f` Boost place intelligence with external source trust scoring
+- `ae79e64` Add outcome quality telemetry and calibration dashboard
+- `db97725` Link intelligence outcomes to checkins and add calibration observability
+- `754b886` Calibrate place intelligence reliability and momentum signals
+- `f88151d` Add Codex backend handoff summary doc
 - `944ea58` Temporarily disable Foursquare provider in placeSignalsProxy
 - `3c73d8d` Fix functions deploy entrypoint and secret-backed placeSignalsProxy
 - `1903bbb` Harden placeSignalsProxy runtime config fallback
