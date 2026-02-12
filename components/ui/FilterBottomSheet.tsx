@@ -64,16 +64,19 @@ export function FilterBottomSheet({
   }
 
   function renderChip({
+    chipKey,
     label,
     selected,
     onPress,
   }: {
+    chipKey: string;
     label: string;
     selected: boolean;
     onPress: () => void;
   }) {
     return (
       <Pressable
+        key={chipKey}
         onPress={onPress}
         style={({ pressed }) => [
           styles.chip,
@@ -104,6 +107,7 @@ export function FilterBottomSheet({
               <View style={styles.chipRow}>
                 {DISTANCE_OPTIONS.map((mile) =>
                   renderChip({
+                    chipKey: `distance-${mile}`,
                     label: `${mile} mi`,
                     selected: local.distance === mile,
                     onPress: () => setLocal((prev) => ({ ...prev, distance: mile })),
@@ -129,6 +133,7 @@ export function FilterBottomSheet({
               <View style={styles.chipRow}>
                 {PRICE_OPTIONS.map((price) =>
                   renderChip({
+                    chipKey: `price-${price}`,
                     label: price,
                     selected: local.priceLevel.includes(price),
                     onPress: () => togglePrice(price),
@@ -144,6 +149,7 @@ export function FilterBottomSheet({
                   <View style={styles.chipRow}>
                     {NOISE_OPTIONS.map((noise) =>
                       renderChip({
+                        chipKey: `noise-${noise}`,
                         label: noise === 'any' ? 'Any' : noise[0].toUpperCase() + noise.slice(1),
                         selected: local.noiseLevel === noise,
                         onPress: () => setLocal((prev) => ({ ...prev, noiseLevel: noise })),
