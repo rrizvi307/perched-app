@@ -14,6 +14,11 @@ service firebase.storage {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
+    function isAdmin() {
+      return request.auth != null &&
+        (request.auth.token.admin == true || request.auth.token.role == "admin");
+    }
+
     function isValidImage() {
       return request.resource.contentType.matches('image/.*');
     }
@@ -41,7 +46,7 @@ service firebase.storage {
                       isValidSize();
 
       // Only owner can delete their photos
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Profile photos
@@ -60,7 +65,7 @@ service firebase.storage {
                       isValidSize();
 
       // Only owner can delete
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Story/share images (temporary exports)
@@ -74,7 +79,7 @@ service firebase.storage {
                       isValidSize();
 
       // Owner can delete
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Default deny all other paths

@@ -89,13 +89,20 @@ service cloud.firestore {
       allow create: if isAuthenticated() &&
                       request.resource.data.fromId == request.auth.uid &&
                       request.resource.data.toId != request.auth.uid &&
-                      request.resource.data.keys().hasAll(['fromId', 'toId', 'status', 'createdAt']);
+                      request.resource.data.status == 'pending' &&
+                      request.resource.data.keys().hasAll(['fromId', 'toId', 'status', 'createdAt']) &&
+                      request.resource.data.keys().hasOnly(['fromId', 'toId', 'status', 'createdAt', 'respondedAt']);
 
       // Users can update requests they're involved in (to accept/reject)
       allow update: if isAuthenticated() && (
         resource.data.fromId == request.auth.uid ||
         resource.data.toId == request.auth.uid
-      );
+      ) &&
+      request.resource.data.fromId == resource.data.fromId &&
+      request.resource.data.toId == resource.data.toId &&
+      request.resource.data.createdAt == resource.data.createdAt &&
+      request.resource.data.status in ['pending', 'accepted', 'declined'] &&
+      request.resource.data.keys().hasOnly(['fromId', 'toId', 'status', 'createdAt', 'respondedAt']);
 
       // Users can delete their own requests
       allow delete: if isAuthenticated() && (

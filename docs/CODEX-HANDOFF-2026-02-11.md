@@ -320,16 +320,18 @@ Summary:
 Validated:
 - `app.json` includes required iOS submission fields:
   - `expo.version`, `expo.ios.bundleIdentifier`, `expo.ios.buildNumber`
-  - icon path: `./assets/brand/Perched App Logo.png`
+  - icon path: `./assets/brand/perched-icon-purple.png`
   - user-facing permission strings in `expo.ios.infoPlist` for camera, photos, location, contacts.
 - Icon file checks:
-  - `assets/brand/Perched App Logo.png` is `1024x1024`
+  - `assets/brand/perched-icon-purple.png` is `1024x1024`
   - no alpha channel (`alphaInfo: <nil>`)
 
 Cross-reference findings (docs gap list):
 - `docs/app-review-notes.md` still states older demo account snapshot (`15 check-ins`) while current reseed/verification is `25/25` with photos.
 - `docs/app-review-notes.md` third-party API list includes OpenStreetMap; current intelligence stack in codepaths is Firebase + Yelp (+ optional Foursquare) and OpenAI.
-- Privacy/terms URLs are documented as `perched.app/privacy` and `perched.app/terms`; hosting/reachability still needs Claude’s C4 completion.
+- `docs/app-store-description.md` and `docs/app-review-notes.md` still reference `perched.app/privacy` and `perched.app/terms`; hosted legal URLs are now:
+  - `https://spot-app-ce2d8.web.app/privacy-policy.html`
+  - `https://spot-app-ce2d8.web.app/terms-of-service.html`
 
 ### X5b) Firestore rules + index checklist pass
 Rules audit against `docs/firebase-rules-checklist.md`:
@@ -337,25 +339,23 @@ Rules audit against `docs/firebase-rules-checklist.md`:
 - Admin-only collections are blocked for client writes.
 - Event log collection remains write-only for clients.
 
-Remaining rules/risk gaps (for follow-up hardening):
-- `users` reads are broad (`allow read: if isAuthenticated();`) rather than field-scoped public profile reads.
-- `withinRateLimit()` currently always returns `true` (placeholder, no effective rate limiting).
-- `storage.rules` delete path for check-in photos is owner-only; checklist notes owner/admin target policy.
+Implemented hardening (latest Codex patch):
+- Added missing composite indexes in `firestore.indexes.json` for:
+  - `reports` (`status`, `priority`, `createdAt`)
+  - `partnerEvents` (`status`, `date`)
+  - `loyaltyCards` (`userId`, `lastCheckinAt`)
+  - `flaggedContent` (`status`, `createdAt`)
+  - `campusChallenges` (`campusId`, `endDate`)
+  - legacy `checkins` query path (`spotPlaceId`, `timestamp`)
+- Tightened `friendRequests` rules in `firestore.rules`:
+  - create requires `status == 'pending'`
+  - create/update key allowlist enforced
+  - immutable identity fields (`fromId`, `toId`, `createdAt`) enforced on update
+- Updated `storage.rules` to allow owner-or-admin delete on `checkins`, `profiles`, and `stories` image paths.
 
-Composite index audit (high-confidence missing candidates vs active queries):
-- `reports`: `status ==`, `orderBy priority desc`, `orderBy createdAt asc`
-  - query at `services/trustSafety.ts:374`
-- `partnerEvents`: `status ==`, `date >`, `orderBy date asc`
-  - query at `services/partnerProgram.ts:501`
-- `loyaltyCards`: `userId ==`, `orderBy lastCheckinAt desc`
-  - query at `services/partnerProgram.ts:581`
-- `flaggedContent`: `status ==`, `orderBy createdAt desc`
-  - query at `services/contentModeration.ts:299`
-- `campusChallenges`: `campusId ==`, `endDate >=`, `orderBy endDate asc`
-  - query at `services/campus.ts:424`
-- legacy check-ins path still queried in functions:
-  - `checkins`: `spotPlaceId ==`, `timestamp >`, `orderBy timestamp desc` at `functions/src/index.ts:1867`
-  - index may be needed if this branch is exercised in production.
+Remaining rules/risk gaps:
+- `users` reads are broad (`allow read: if isAuthenticated();`) rather than field-scoped public profile reads.
+- `withinRateLimit()` currently always returns `true` (placeholder; no effective rate limiting).
 
 ### X6) Node runtime deprecation fix
 Completed:
