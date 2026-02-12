@@ -54,6 +54,29 @@ interface SeedCheckinPlan {
   caption: string;
 }
 
+const SPOT_PHOTO_URLS: Record<string, string[]> = {
+  'demo-blacksmith': [
+    'https://images.unsplash.com/photo-1559305616-3bed4d52be3a?auto=format&fit=crop&w=1400&q=80',
+    'https://images.unsplash.com/photo-1497515114629-f71d768fd07c?auto=format&fit=crop&w=1400&q=80',
+  ],
+  'demo-catalina': [
+    'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=1400&q=80',
+    'https://images.unsplash.com/photo-1442512595331-e89e73853f31?auto=format&fit=crop&w=1400&q=80',
+  ],
+  'demo-boomtown': [
+    'https://images.unsplash.com/photo-1511920170033-f8396924c348?auto=format&fit=crop&w=1400&q=80',
+    'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=1400&q=80',
+  ],
+  'demo-coffeebar': [
+    'https://images.unsplash.com/photo-1517502884422-41eaead166d4?auto=format&fit=crop&w=1400&q=80',
+    'https://images.unsplash.com/photo-1484480974693-6ca0a78fb36b?auto=format&fit=crop&w=1400&q=80',
+  ],
+  'demo-honeymoon': [
+    'https://images.unsplash.com/photo-1522992319-0365e5f11656?auto=format&fit=crop&w=1400&q=80',
+    'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=1400&q=80',
+  ],
+};
+
 const DEMO_USER: SeedUser = {
   email: 'demo@perched.app',
   password: 'TestPassword123',
@@ -304,6 +327,13 @@ function tagsForPlan(plan: SeedCheckinPlan): string[] {
   return tags.slice(0, 3);
 }
 
+function pickPhotoUrl(plan: SeedCheckinPlan): string | null {
+  const options = SPOT_PHOTO_URLS[plan.spotId] || [];
+  if (!options.length) return null;
+  const index = Math.abs(plan.daysAgo + plan.docId.length) % options.length;
+  return options[index] || null;
+}
+
 async function upsertCheckin(
   db: admin.firestore.Firestore,
   userMap: Record<string, { uid: string; profile: SeedUser }>,
@@ -317,6 +347,7 @@ async function upsertCheckin(
 
   const timestampMs = Date.now() - plan.daysAgo * 24 * 60 * 60 * 1000;
   const createdAt = admin.firestore.Timestamp.fromMillis(timestampMs);
+  const photoUrl = pickPhotoUrl(plan);
 
   await db.collection('checkins').doc(plan.docId).set(
     {
@@ -333,7 +364,8 @@ async function upsertCheckin(
       location: new admin.firestore.GeoPoint(spot.lat, spot.lng),
       caption: plan.caption,
       tags: tagsForPlan(plan),
-      photoUrl: null,
+      photoUrl,
+      image: photoUrl,
       photoPending: false,
       campusOrCity: 'Houston',
       city: 'Houston',
