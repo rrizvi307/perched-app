@@ -303,15 +303,71 @@ Summary:
 
 ## Known Follow-ups (Important)
 1. Migrate off `functions.config()`/Cloud Runtime Config before March 2026 deprecation.
-2. Upgrade Functions runtime/dependencies path (Node 20 deprecation warning in deploy output).
+2. Upgrade `firebase-functions` dependency to latest supported major (deploy still warns package is outdated).
 3. Open/continue Foursquare support case with failing request IDs and project details.
 
 ## Status vs Claude TestFlight Plan (Codex-owned track)
 - `X1` Premium graceful-degradation: previously hardened via beta-safe premium gating and no hard dependency path.
+- `X2` App Store metadata validation: completed audit with findings noted below.
 - `X3` Demo account/data validation: completed (demo reseed with photos and verification snapshot).
 - `X4` CI + quality gates: completed repeatedly; currently green (`typecheck`, `lint` warnings-only, app tests, functions build/tests).
-- `X5` Firestore/security hardening: partial + targeted improvements completed (reaction integrity, friend graph callable path); full checklist pass still pending if needed.
-- `X6` Node runtime deprecation: pending (Node 20 warning still present).
+- `X5` Firestore/security hardening: targeted fixes complete; full checklist pass now audited with remaining gaps listed below.
+- `X6` Node runtime deprecation: completed (`functions/package.json` Node 22 + `firebase.json` runtime `nodejs22` in commit `dd6a918`).
+
+## 2026-02-12 Addendum (Codex X2/X5b/X6)
+
+### X2) App Store metadata validation
+Validated:
+- `app.json` includes required iOS submission fields:
+  - `expo.version`, `expo.ios.bundleIdentifier`, `expo.ios.buildNumber`
+  - icon path: `./assets/brand/Perched App Logo.png`
+  - user-facing permission strings in `expo.ios.infoPlist` for camera, photos, location, contacts.
+- Icon file checks:
+  - `assets/brand/Perched App Logo.png` is `1024x1024`
+  - no alpha channel (`alphaInfo: <nil>`)
+
+Cross-reference findings (docs gap list):
+- `docs/app-review-notes.md` still states older demo account snapshot (`15 check-ins`) while current reseed/verification is `25/25` with photos.
+- `docs/app-review-notes.md` third-party API list includes OpenStreetMap; current intelligence stack in codepaths is Firebase + Yelp (+ optional Foursquare) and OpenAI.
+- Privacy/terms URLs are documented as `perched.app/privacy` and `perched.app/terms`; hosting/reachability still needs Claude’s C4 completion.
+
+### X5b) Firestore rules + index checklist pass
+Rules audit against `docs/firebase-rules-checklist.md`:
+- Firestore writes are auth-gated for core collections; check-in ownership checks are in place.
+- Admin-only collections are blocked for client writes.
+- Event log collection remains write-only for clients.
+
+Remaining rules/risk gaps (for follow-up hardening):
+- `users` reads are broad (`allow read: if isAuthenticated();`) rather than field-scoped public profile reads.
+- `withinRateLimit()` currently always returns `true` (placeholder, no effective rate limiting).
+- `storage.rules` delete path for check-in photos is owner-only; checklist notes owner/admin target policy.
+
+Composite index audit (high-confidence missing candidates vs active queries):
+- `reports`: `status ==`, `orderBy priority desc`, `orderBy createdAt asc`
+  - query at `services/trustSafety.ts:374`
+- `partnerEvents`: `status ==`, `date >`, `orderBy date asc`
+  - query at `services/partnerProgram.ts:501`
+- `loyaltyCards`: `userId ==`, `orderBy lastCheckinAt desc`
+  - query at `services/partnerProgram.ts:581`
+- `flaggedContent`: `status ==`, `orderBy createdAt desc`
+  - query at `services/contentModeration.ts:299`
+- `campusChallenges`: `campusId ==`, `endDate >=`, `orderBy endDate asc`
+  - query at `services/campus.ts:424`
+- legacy check-ins path still queried in functions:
+  - `checkins`: `spotPlaceId ==`, `timestamp >`, `orderBy timestamp desc` at `functions/src/index.ts:1867`
+  - index may be needed if this branch is exercised in production.
+
+### X6) Node runtime deprecation fix
+Completed:
+- `functions/package.json`: `engines.node` set to `22`
+- `firebase.json`: functions runtime set to `nodejs22`
+
+Validation run:
+- `npm --prefix functions run build` passed.
+- `npm --prefix functions test -- --runInBand` passed.
+- `npm run typecheck` passed.
+- `npm run lint` passed (warnings only).
+- `npm test -- --runInBand` passed.
 
 ## ML/Intelligence Optimization Plan (Not Yet Implemented)
 These are recommended next backend-only steps that do not require UI churn:
@@ -369,3 +425,5 @@ These are recommended next backend-only steps that do not require UI churn:
 - `4fb5b23` Handle missing checkins index with safe query fallback
 - `0041a29` Harden friend graph flows for requests, unfriend, and block
 - `5546ee9` Add server-authoritative social graph mutation callable
+- `e5ed760` Refresh Codex handoff with latest social graph deployment status
+- `dd6a918` Upgrade Cloud Functions runtime to Node.js 22
