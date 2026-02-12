@@ -60,6 +60,17 @@ describe('buildPlaceIntelligence', () => {
     expect(result.bestTime).toBe('anytime');
     expect(result.crowdForecast).toHaveLength(6);
     expect(result.useCases.length).toBeGreaterThan(0);
+    expect(result.reliability).toEqual(
+      expect.objectContaining({
+        sampleSize: 0,
+        dataCoverage: 0,
+        variancePenalty: 1,
+      })
+    );
+    expect(result.momentum.trend).toBe('insufficient_data');
+    expect(typeof result.modelVersion).toBe('string');
+    expect(typeof result.generatedAt).toBe('number');
+    expect(result.generatedAt).toBeGreaterThan(0);
   });
 
   it('clamps workScore at upper bound for strong signals', async () => {
@@ -457,5 +468,45 @@ describe('buildPlaceIntelligence', () => {
     });
 
     expect(open.workScore).toBeGreaterThanOrEqual(closed.workScore);
+  });
+
+  it('detects improving momentum with stronger recent check-ins', async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const previousWindow = [
+      mkCheckin({ createdAt: now - 13 * dayMs, wifiSpeed: 2.2, busyness: 4.6, noiseLevel: 'lively', laptopFriendly: false }),
+      mkCheckin({ createdAt: now - 12 * dayMs, wifiSpeed: 2.4, busyness: 4.2, noiseLevel: 'lively', laptopFriendly: false }),
+      mkCheckin({ createdAt: now - 11 * dayMs, wifiSpeed: 2.6, busyness: 4.0, noiseLevel: 'moderate', laptopFriendly: false }),
+    ];
+    const recentWindow = [
+      mkCheckin({ createdAt: now - 3 * dayMs, wifiSpeed: 4.6, busyness: 1.9, noiseLevel: 'quiet', laptopFriendly: true }),
+      mkCheckin({ createdAt: now - 2 * dayMs, wifiSpeed: 4.7, busyness: 2.0, noiseLevel: 'quiet', laptopFriendly: true }),
+      mkCheckin({ createdAt: now - 1 * dayMs, wifiSpeed: 4.8, busyness: 1.8, noiseLevel: 'quiet', laptopFriendly: true }),
+    ];
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Momentum Spot',
+      placeId: 'momentum-1',
+      checkins: [...previousWindow, ...recentWindow],
+    });
+
+    expect(result.momentum.trend).toBe('improving');
+    expect(result.momentum.deltaWorkScore).toBeGreaterThan(0);
+  });
+
+  it('marks momentum as insufficient when each comparison window lacks enough samples', async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const result = await buildPlaceIntelligence({
+      placeName: 'Momentum Sparse Spot',
+      placeId: 'momentum-2',
+      checkins: [
+        mkCheckin({ createdAt: now - 10 * dayMs, wifiSpeed: 2.5, busyness: 4.2, noiseLevel: 'lively', laptopFriendly: false }),
+        mkCheckin({ createdAt: now - 2 * dayMs, wifiSpeed: 4.8, busyness: 1.9, noiseLevel: 'quiet', laptopFriendly: true }),
+      ],
+    });
+
+    expect(result.momentum.trend).toBe('insufficient_data');
+    expect(result.momentum.deltaWorkScore).toBe(0);
   });
 });

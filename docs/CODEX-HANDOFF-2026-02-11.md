@@ -74,6 +74,29 @@ Summary:
 - Foursquare provider path is intentionally disabled by default due repeated provider token rejection.
 - Re-enable control added via `PLACE_INTEL_ENABLE_FOURSQUARE` (truthy values enable it).
 
+### 5) Place intelligence model calibration phase 1 (backend service)
+Commit: _(see latest after this doc update; `services/placeIntelligence.ts` + tests)_
+Files:
+- `services/placeIntelligence.ts`
+- `services/__tests__/placeIntelligence.test.ts`
+
+Summary:
+- Added calibrated reliability output:
+  - `reliability.sampleSize`
+  - `reliability.dataCoverage`
+  - `reliability.variancePenalty`
+  - `reliability.score`
+- Added momentum output from recent-vs-previous 7-day windows:
+  - `momentum.trend` (`improving|declining|stable|insufficient_data`)
+  - `momentum.deltaWorkScore` and component deltas.
+- Updated confidence formula to use reliability + external review support (instead of simple count-only confidence).
+- Added model metadata fields:
+  - `modelVersion`
+  - `generatedAt`
+- Added opt-in telemetry hook for prediction records (`intelligencePredictions` collection), gated by:
+  - `EXPO_PUBLIC_PLACE_INTEL_TELEMETRY` or equivalent runtime flag.
+- Added/updated tests for reliability/momentum/model metadata behavior.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -114,7 +137,8 @@ Summary:
 These are recommended next backend-only steps that do not require UI churn:
 
 1. Add prediction-outcome telemetry
-- Log predicted work score/confidence + eventual user outcome signal.
+- Basic prediction telemetry hook added (opt-in flag).
+- Next: outcome logging (post-check-in/session quality) and model calibration loop.
 
 2. Add reliability calibration
 - Confidence calibration by sample size and variance.
