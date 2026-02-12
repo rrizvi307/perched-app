@@ -207,6 +207,20 @@ Summary:
   - `getCheckinsForUserRemote` now returns empty payload for query failures (permissions/index/network/auth timing), allowing story-card fallback paths to continue.
 - Replaced direct `console.error` noise in social reaction helpers with `devLog` to reduce user-facing error spam while preserving diagnostics.
 
+### 12) Missing-index fallback for user checkins query
+Commit: _(latest in this handoff window; see commit chain below)_
+Files:
+- `services/schemaHelpers.ts`
+- `services/firebaseClient.ts`
+
+Summary:
+- Fixed the `firebase_get_checkins_for_user` failure path when legacy composite index (`userId + timestamp`) is missing.
+- `queryCheckinsByUser` now:
+  - Tries primary schema query (`userId + createdAt`) first.
+  - Falls back to legacy ordered query (`userId + timestamp`) in a guarded `try`.
+  - If that throws (missing index), degrades to safe query (`where(userId).limit(...)`) so story-card generation does not hard-fail.
+- `getCheckinsForUserRemote` now sorts fallback results in memory by `createdAt || timestamp` to preserve stable newest-first behavior when the no-order fallback path is used.
+
 ## Production/API Status (Current)
 
 ### Working
@@ -296,3 +310,4 @@ These are recommended next backend-only steps that do not require UI churn:
 - `8610a3b` Harden CI install step for npm peer resolution
 - `25a06c8` Add release preflight script and CI test job
 - `73797a0` Surface intelligence in feed/explore and finalize EAS beta prep
+- _(latest)_ Missing-index fallback for `firebase_get_checkins_for_user` in `schemaHelpers`/`firebaseClient`

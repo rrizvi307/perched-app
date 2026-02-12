@@ -900,6 +900,7 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     }
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
     const lastCursor = items.length ? items[items.length - 1].createdAt : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);

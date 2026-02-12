@@ -150,16 +150,25 @@ export async function queryCheckinsByUser(
   const primary = await query.get();
   if (!primary.empty) return primary;
 
-  // Fallback to legacy schema: timestamp
-  let legacyQuery: firebase.firestore.Query = db
-    .collection('checkins')
-    .where('userId', '==', userId)
-    .orderBy('timestamp', 'desc');
+  // Fallback to legacy schema: timestamp.
+  // Some projects may not have the composite index (userId + timestamp).
+  // If that query fails, gracefully degrade to a basic where(userId) query.
+  try {
+    let legacyQuery: firebase.firestore.Query = db
+      .collection('checkins')
+      .where('userId', '==', userId)
+      .orderBy('timestamp', 'desc');
 
-  if (startAfter) legacyQuery = legacyQuery.startAfter(startAfter);
-  legacyQuery = legacyQuery.limit(limit);
-
-  return legacyQuery.get();
+    if (startAfter) legacyQuery = legacyQuery.startAfter(startAfter);
+    legacyQuery = legacyQuery.limit(limit);
+    return legacyQuery.get();
+  } catch {
+    return db
+      .collection('checkins')
+      .where('userId', '==', userId)
+      .limit(limit)
+      .get();
+  }
 }
 
 /**
