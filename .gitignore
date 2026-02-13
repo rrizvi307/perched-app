@@ -9,6 +9,7 @@ spot-checkin-app
 
 # Expo
 .expo/
+.firebase/
 dist/
 web-build/
 expo-env.d.ts

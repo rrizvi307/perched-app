@@ -36,7 +36,8 @@ service firebase.storage {
 
       // Only the owner can upload to their folder
       allow create: if isOwner(userId) &&
-                      isVerified() &&
+                      // TODO(beta->GA): re-enable verification gate (or 7-day grace window)
+                      // before public launch. Matches current Firestore beta policy.
                       isValidImage() &&
                       isValidSize();
 
