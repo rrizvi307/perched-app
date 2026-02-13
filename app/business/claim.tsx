@@ -35,7 +35,6 @@ export default function BusinessClaimScreen() {
 
   const [spotId, setSpotId] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
-  const [businessName, setBusinessName] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
   const [submitting, setSubmitting] = useState(false);

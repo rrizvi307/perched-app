@@ -86,3 +86,50 @@ Tasks 1-2 are operational blockers. Task 3 informs what Claude and I build next.
 - `npm test -- --runInBand` ✅ (243/243)
 - `npm --prefix functions run build` ✅
 - `npm --prefix functions test -- --runInBand` ✅ (40/40)
+
+---
+
+## Codex Update — 2026-02-13 (Runtime Stability + Lint Burn-Down)
+
+### D) Runtime permission/noise fixes
+- Fixed analytics write path mismatch:
+  - `services/logEvent.ts` now writes `eventLogs` (matches Firestore rules) instead of `event_logs`.
+  - Added auth guard so analytics writes only occur when `userId === auth.uid`.
+- Fixed feed permission-denied spam:
+  - `services/firebaseClient.ts` `getCheckinsRemote()` now queries public feed (`visibility == "public"`).
+  - Added auth-readiness guard in `getCheckinsRemote()` and `subscribeCheckins()` to avoid startup rule failures before auth settles.
+- Fixed recommendations permission errors:
+  - `services/recommendations.ts` candidate spot query now reads only public check-ins.
+  - Added auth guard + graceful permission-denied fallback.
+- Fixed repeated demo seeding spam:
+  - `storage/seed-comprehensive-demo.ts` now uses both TTL idempotency and an in-flight lock per user.
+
+### E) Collection consistency cleanup
+- Aligned admin analytics readers with rules/data path:
+  - `services/admin.ts` now reads from `eventLogs`.
+  - `services/firebase-setup.md` schema docs updated from `event_logs` to `eventLogs`.
+
+### F) Lint/dead-code sweep
+- Removed unused imports/state/variables and resolved exhaustive-deps warnings across:
+  - `app/ambassador-program.tsx`
+  - `app/business/claim.tsx`
+  - `app/business/competitive.tsx`
+  - `app/business/index.tsx`
+  - `app/campus-analytics.tsx`
+  - `app/campus-challenges.tsx`
+  - `app/campus-discovery.tsx`
+  - `app/campus-leaderboard.tsx`
+  - `app/campus-settings.tsx`
+  - `app/loyalty.tsx`
+  - `app/referral-enhanced.tsx`
+  - `app/subscription.tsx`
+  - `components/logo.tsx`
+  - `components/ui/campus-ambassador-badge.tsx`
+  - `components/ui/recommendations-card.tsx`
+  - `components/ui/share-card.tsx`
+- Result: lint warnings reduced from **41** to **0**.
+
+### G) Validation run after this pass
+- `npx tsc --noEmit` ✅
+- `npm run lint` ✅ (0 warnings, 0 errors)
+- `npm test -- --runInBand` ✅ (243/243)

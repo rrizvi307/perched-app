@@ -25,7 +25,6 @@ export function CampusAmbassadorBadge({
   onPress,
 }: CampusAmbassadorBadgeProps) {
   const primary = useThemeColor({}, 'primary');
-  const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
 
   const handlePress = async () => {

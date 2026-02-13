@@ -4,7 +4,7 @@
  * Double-sided incentives, leaderboard, and social sharing
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,23 +33,17 @@ export default function EnhancedReferralScreen() {
   const [referralCode, setReferralCode] = useState<string>('');
   const [stats, setStats] = useState<ReferralStats | null>(null);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showShareCard, setShowShareCard] = useState(false);
+  const userHandle = (user as any)?.handle;
 
-  useEffect(() => {
-    loadData();
-  }, [user?.id]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id) return;
 
     try {
-      setLoading(true);
-
       // Load referral code and stats
       const [code, userStats, leaderboardData] = await Promise.all([
-        Promise.resolve(generateReferralCode(user.id, (user as any)?.handle)),
+        Promise.resolve(generateReferralCode(user.id, userHandle)),
         getReferralStats(user.id),
         getReferralLeaderboard(10),
       ]);
@@ -59,10 +53,12 @@ export default function EnhancedReferralScreen() {
       setLeaderboard(leaderboardData);
     } catch (error) {
       console.error('Failed to load referral data:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.id, userHandle]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

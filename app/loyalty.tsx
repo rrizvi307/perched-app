@@ -4,7 +4,7 @@
  * Shows user's loyalty cards from partner spots
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -44,11 +44,7 @@ export default function LoyaltyScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [redeeming, setRedeeming] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadLoyaltyCards();
-  }, [user?.id]);
-
-  const loadLoyaltyCards = async () => {
+  const loadLoyaltyCards = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -60,7 +56,11 @@ export default function LoyaltyScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    void loadLoyaltyCards();
+  }, [loadLoyaltyCards]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -100,7 +100,7 @@ export default function LoyaltyScreen() {
               } else {
                 Alert.alert('Error', result.error || 'Failed to redeem reward');
               }
-            } catch (error) {
+            } catch {
               Alert.alert('Error', 'An unexpected error occurred');
             } finally {
               setRedeeming(null);

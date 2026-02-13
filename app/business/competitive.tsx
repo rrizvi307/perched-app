@@ -4,7 +4,7 @@
  * Shows how your spot compares to nearby competitors
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -46,17 +46,7 @@ export default function CompetitiveIntelligenceScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [radius, setRadius] = useState<number>(2);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (selectedSpot) {
-      loadIntelligence();
-    }
-  }, [selectedSpot, radius]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -72,9 +62,9 @@ export default function CompetitiveIntelligenceScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id, selectedSpot]);
 
-  const loadIntelligence = async () => {
+  const loadIntelligence = useCallback(async () => {
     if (!selectedSpot) return;
 
     try {
@@ -86,7 +76,17 @@ export default function CompetitiveIntelligenceScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedSpot, radius]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    if (selectedSpot) {
+      void loadIntelligence();
+    }
+  }, [selectedSpot, loadIntelligence]);
 
   const onRefresh = async () => {
     setRefreshing(true);

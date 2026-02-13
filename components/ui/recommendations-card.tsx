@@ -4,7 +4,7 @@
  * Displays personalized spot recommendations with AI-powered insights
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -50,11 +50,7 @@ export function RecommendationsCard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadRecommendations();
-  }, [user?.id, userLocation, variant, currentSpotId]);
-
-  const loadRecommendations = async () => {
+  const loadRecommendations = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -76,7 +72,11 @@ export function RecommendationsCard({
     } finally {
       setLoading(false);
     }
-  };
+  }, [context, currentSpotId, user?.id, userLocation, variant]);
+
+  useEffect(() => {
+    void loadRecommendations();
+  }, [loadRecommendations]);
 
   const handleSpotPress = async (rec: SpotRecommendation) => {
     try {

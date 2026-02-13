@@ -4,8 +4,8 @@
  * Shows campus trends, insights, and activity patterns
  */
 
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Dimensions } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -15,13 +15,11 @@ import { getCampusById, getCampusStats, type Campus, type CampusStats } from '@/
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-
 interface CampusAnalytics {
   growthRate: number; // Weekly growth percentage
-  peakHours: Array<{ hour: number; count: number }>;
-  topCategories: Array<{ category: string; count: number; percentage: number }>;
-  weeklyTrend: Array<{ day: string; count: number }>;
+  peakHours: { hour: number; count: number }[];
+  topCategories: { category: string; count: number; percentage: number }[];
+  weeklyTrend: { day: string; count: number }[];
   userEngagement: {
     avgCheckinsPerUser: number;
     avgSessionTime: number;
@@ -44,19 +42,12 @@ export default function CampusAnalyticsScreen() {
   const [campus, setCampus] = useState<Campus | null>(null);
   const [stats, setStats] = useState<CampusStats | null>(null);
   const [analytics, setAnalytics] = useState<CampusAnalytics | null>(null);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.campus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.campus) return;
 
     try {
-      setLoading(true);
-
       // Get campus info
       const campusData = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
       if (!campusData) return;
@@ -101,10 +92,12 @@ export default function CampusAnalyticsScreen() {
       setAnalytics(mockAnalytics);
     } catch (error) {
       console.error('Failed to load campus analytics:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.campus]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

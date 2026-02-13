@@ -4,7 +4,7 @@
  * Main dashboard for coffee shop owners and coworking spaces
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -50,17 +50,7 @@ export default function BusinessDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<'week' | 'month' | 'quarter'>('month');
 
-  useEffect(() => {
-    loadData();
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (selectedSpot) {
-      loadSpotData();
-    }
-  }, [selectedSpot, period]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -76,9 +66,9 @@ export default function BusinessDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id, selectedSpot]);
 
-  const loadSpotData = async () => {
+  const loadSpotData = useCallback(async () => {
     if (!selectedSpot) return;
 
     try {
@@ -92,7 +82,17 @@ export default function BusinessDashboard() {
     } catch (error) {
       console.error('Failed to load spot data:', error);
     }
-  };
+  }, [selectedSpot, period]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    if (selectedSpot) {
+      void loadSpotData();
+    }
+  }, [selectedSpot, loadSpotData]);
 
   const onRefresh = async () => {
     setRefreshing(true);

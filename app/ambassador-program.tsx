@@ -4,7 +4,7 @@
  * Shows program benefits, requirements, and application
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,7 +40,6 @@ export default function AmbassadorProgramScreen() {
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
 
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [eligible, setEligible] = useState(false);
   const [requirements, setRequirements] = useState<any>(null);
@@ -50,16 +49,10 @@ export default function AmbassadorProgramScreen() {
   const [motivationStatement, setMotivationStatement] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.id, user?.campus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id || !user?.campus) return;
 
     try {
-      setLoading(true);
-
       const campus = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
       if (!campus) return;
 
@@ -83,10 +76,12 @@ export default function AmbassadorProgramScreen() {
       setTopAmbassadors(ambassadors);
     } catch (error) {
       console.error('Failed to load ambassador data:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.id, user?.campus]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -128,7 +123,7 @@ export default function AmbassadorProgramScreen() {
       } else {
         showToast(result.error || 'Failed to submit application', 'error');
       }
-    } catch (error) {
+    } catch {
       showToast('Failed to submit application', 'error');
     } finally {
       setSubmitting(false);

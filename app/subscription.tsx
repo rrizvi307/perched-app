@@ -71,7 +71,7 @@ export default function SubscriptionScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       await cancelPremiumSubscription(user.id);
       showToast('Subscription cancelled. Access until ' + expirationDate, 'success');
-    } catch (error) {
+    } catch {
       showToast('Failed to cancel subscription', 'error');
     } finally {
       setCancelling(false);

@@ -4,14 +4,13 @@
  * Shows per-campus rankings, challenges, and top spots
  */
 
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Image } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useAuth } from '@/contexts/AuthContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { PremiumButton } from '@/components/ui/premium-button';
 import {
   getCampusById,
   getCampusLeaderboard,
@@ -43,19 +42,12 @@ export default function CampusLeaderboardScreen() {
   const [challenges, setChallenges] = useState<CampusChallenge[]>([]);
   const [period, setPeriod] = useState<'week' | 'month' | 'all'>('month');
   const [isAmbassador, setIsAmbassador] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.campus, period]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.campus) return;
 
     try {
-      setLoading(true);
-
       // Get campus info by name (need to match)
       const campusData = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
       if (!campusData) return;
@@ -76,10 +68,12 @@ export default function CampusLeaderboardScreen() {
       setIsAmbassador(ambassadorStatus);
     } catch (error) {
       console.error('Failed to load campus data:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.campus, period, user?.id]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

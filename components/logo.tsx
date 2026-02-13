@@ -3,7 +3,7 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
 import { StyleSheet, Text, View, useColorScheme } from 'react-native';
-import Svg, { Path, Defs, LinearGradient, Stop, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Stop, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
 
@@ -26,7 +26,6 @@ export default function Logo({
   const theme = preference === 'system' ? (colorScheme ?? 'light') : preference;
 
   // Brand colors - purple palette
-  const gradientStart = '#8B5CF6'; // Vibrant purple
   const gradientEnd = '#EC4899';   // Hot pink
 
   // Bird SVG Logo Mark Component

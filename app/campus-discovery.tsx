@@ -4,8 +4,8 @@
  * Shows top spots, popular places, and trending locations for a campus
  */
 
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, Image } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -35,19 +35,12 @@ export default function CampusDiscoveryScreen() {
 
   const [campus, setCampus] = useState<Campus | null>(null);
   const [stats, setStats] = useState<CampusStats | null>(null);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.campus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.campus) return;
 
     try {
-      setLoading(true);
-
       // Get campus info by name
       const campusData = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
       if (!campusData) return;
@@ -59,10 +52,12 @@ export default function CampusDiscoveryScreen() {
       setStats(statsData);
     } catch (error) {
       console.error('Failed to load campus discovery data:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.campus]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

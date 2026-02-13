@@ -4,7 +4,7 @@
  * Creates beautiful cards optimized for Instagram Stories, Twitter, etc.
  */
 
-import React, { useRef } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, Share, Platform } from 'react-native';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { PremiumButton } from './premium-button';

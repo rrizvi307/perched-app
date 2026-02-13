@@ -4,7 +4,7 @@
  * Manage campus preferences, notifications, and privacy
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Switch, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,17 +58,10 @@ export default function CampusSettingsScreen() {
   });
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [showCampusPicker, setShowCampusPicker] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.campus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
-      setLoading(true);
-
       // Load all campuses
       const campuses = getAllPilotCampuses();
       setAllCampuses(campuses);
@@ -86,10 +79,12 @@ export default function CampusSettingsScreen() {
       }
     } catch (error) {
       console.error('Failed to load campus settings:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.campus, user?.id]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -144,7 +139,7 @@ export default function CampusSettingsScreen() {
       } else {
         showToast('No campus detected at your location', 'warning');
       }
-    } catch (error) {
+    } catch {
       showToast('Failed to detect campus', 'error');
     } finally {
       setDetectingLocation(false);
@@ -158,7 +153,7 @@ export default function CampusSettingsScreen() {
       setShowCampusPicker(false);
       showToast(`Switched to ${selectedCampus.name}`, 'success');
       // TODO: Update user.campus in Firestore
-    } catch (error) {
+    } catch {
       showToast('Failed to update campus', 'error');
     }
   };
@@ -169,7 +164,7 @@ export default function CampusSettingsScreen() {
       setCampus(null);
       showToast('Campus removed', 'success');
       // TODO: Update user.campus in Firestore
-    } catch (error) {
+    } catch {
       showToast('Failed to remove campus', 'error');
     }
   };

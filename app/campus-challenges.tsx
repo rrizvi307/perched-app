@@ -4,7 +4,7 @@
  * Shows active campus challenges, user progress, and rewards
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,7 +12,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { useAuth } from '@/contexts/AuthContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { PremiumButton } from '@/components/ui/premium-button';
-import { getCampusById, getCampusChallenges, type Campus, type CampusChallenge } from '@/services/campus';
+import { getCampusById, type Campus, type CampusChallenge } from '@/services/campus';
 import {
   getUserChallengeProgress,
   getChallengeRewards,
@@ -35,21 +35,14 @@ export default function CampusChallengesScreen() {
   const border = useThemeColor({}, 'border');
 
   const [campus, setCampus] = useState<Campus | null>(null);
-  const [challenges, setChallenges] = useState<Array<{ challenge: CampusChallenge; progress: ChallengeProgress | null }>>([]);
+  const [challenges, setChallenges] = useState<{ challenge: CampusChallenge; progress: ChallengeProgress | null }[]>([]);
   const [rewards, setRewards] = useState<ChallengeReward[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [user?.id, user?.campus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user?.id || !user?.campus) return;
 
     try {
-      setLoading(true);
-
       // Get campus info
       const campusData = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
       if (!campusData) return;
@@ -65,10 +58,12 @@ export default function CampusChallengesScreen() {
       setRewards(rewardsData);
     } catch (error) {
       console.error('Failed to load campus challenges:', error);
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [user?.id, user?.campus]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
