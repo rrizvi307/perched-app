@@ -66,6 +66,6 @@ service firebase.storage {
 
 - `users/{userId}`: { name, campusOrCity, createdAt }
 - `checkins/{checkinId}`: { userId, spotName, caption, photoUrl, createdAt, campusOrCity }
-- `event_logs/{id}`: { eventName, userId?, eventTime, metadata }
+- `eventLogs/{id}`: { eventName, userId?, eventTime, metadata }
 
 9) After setup, update `services/firebaseClient.ts` with your config values or load from env.
