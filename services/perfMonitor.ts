@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
 
 const PERF_METRICS_KEY = '@perched_perf_metrics_v1';
@@ -7,6 +8,14 @@ const MAX_METRIC_COUNT = 80;
 const FLUSH_DEBOUNCE_MS = 1500;
 const FIRESTORE_PERSIST_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const FIRESTORE_BATCH_SIZE = 20; // Max metrics to persist per batch
+let perfFirestorePermissionWarned = false;
+
+function isPerfFirestorePersistenceEnabled() {
+  const expoFlag = (Constants.expoConfig as any)?.extra?.PERF_FIRESTORE_ENABLED;
+  const globalFlag = (global as any)?.PERF_FIRESTORE_ENABLED;
+  const envFlag = process.env.EXPO_PUBLIC_ENABLE_PERF_FIRESTORE;
+  return expoFlag === true || globalFlag === true || envFlag === '1';
+}
 
 type PerfMetricStoreEntry = {
   count: number;
@@ -193,11 +202,18 @@ export async function getPerfMetricsSnapshot(): Promise<PerfMetricPublicEntry[]>
  */
 async function persistMetricsToFirestore(): Promise<void> {
   try {
+    // Disabled by default. Client-side telemetry persistence can generate noisy permission errors
+    // unless rules explicitly allow this collection (recommended only for controlled diagnostics).
+    if (!isPerfFirestorePersistenceEnabled()) return;
+
     const fb = await ensureFirebase();
     if (!fb) {
       console.warn('Firebase not available, skipping metrics persistence');
       return;
     }
+
+    const authUid = fb.auth?.()?.currentUser?.uid;
+    if (!authUid) return;
 
     const db = fb.firestore();
     const now = Date.now();
@@ -244,7 +260,15 @@ async function persistMetricsToFirestore(): Promise<void> {
 
     lastFirestorePersist = now;
     console.log(`Persisted ${entries.length} performance metrics to Firestore`);
-  } catch (error) {
+  } catch (error: any) {
+    const code = String(error?.code || '');
+    if (code === 'permission-denied') {
+      if (!perfFirestorePermissionWarned) {
+        perfFirestorePermissionWarned = true;
+        console.warn('Skipping performanceMetrics Firestore persistence: permission denied');
+      }
+      return;
+    }
     console.error('Error persisting metrics to Firestore:', error);
     // Don't throw - telemetry failures should not break the app
   }
