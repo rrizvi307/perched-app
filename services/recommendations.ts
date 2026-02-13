@@ -10,6 +10,7 @@ import { ensureFirebase } from './firebaseClient';
 import { recordPerfMetric } from './perfMonitor';
 import { parseCheckinTimestamp } from './schemaHelpers';
 import { withErrorBoundary } from './errorBoundary';
+import { devLog } from './logger';
 
 export interface SpotRecommendation {
   placeId: string;
@@ -611,13 +612,14 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
 
     const fb = ensureFirebase();
     if (!fb) return [];
+    if (!fb.auth()?.currentUser?.uid) return [];
 
     const db = fb.firestore();
 
-    // Get recent check-ins within radius (simplified - in production use geohash queries)
+    // Query only public check-ins so reads satisfy Firestore query rules.
     const checkinsSnapshot = await db
       .collection('checkins')
-      .orderBy('createdAt', 'desc')
+      .where('visibility', '==', 'public')
       .limit(200)
       .get();
 
@@ -664,7 +666,12 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
       candidateSpotsMemoryCache.delete(oldestKey);
     }
     return spots;
-  } catch (error) {
+  } catch (error: any) {
+    const code = String(error?.code || '');
+    if (code === 'permission-denied') {
+      devLog('getCandidateSpots permission-denied; returning empty list');
+      return [];
+    }
     console.error('Failed to get candidate spots:', error);
     return [];
   }

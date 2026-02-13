@@ -864,6 +864,9 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
     const startedAt = Date.now();
     const fb = ensureFirebase();
     if (!fb) throw new Error('Firebase not initialized.');
+    if (!fb.auth()?.currentUser?.uid) {
+      return { items: [], lastCursor: null };
+    }
     const cacheKey = `${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
@@ -873,8 +876,26 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
 
     const db = fb.firestore();
 
-    // Use schema helper with automatic fallback for legacy data
-    const snapshot = await queryAllCheckins(db, { limit, startAfter });
+    // Query public feed only so collection reads satisfy Firestore query rules.
+    let snapshot: any;
+    try {
+      let q: any = db
+        .collection('checkins')
+        .where('visibility', '==', 'public')
+        .orderBy('createdAt', 'desc')
+        .limit(limit);
+      if (startAfter) q = q.startAfter(startAfter);
+      snapshot = await q.get();
+    } catch {
+      // Legacy timestamp fallback
+      let legacyQ: any = db
+        .collection('checkins')
+        .where('visibility', '==', 'public')
+        .orderBy('timestamp', 'desc')
+        .limit(limit);
+      if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
+      snapshot = await legacyQ.get();
+    }
     const items: any[] = [];
     snapshot.forEach((doc: any) => {
       items.push({ id: doc.id, ...(doc.data() || {}) });
@@ -1000,6 +1021,7 @@ async function callSocialGraphMutation(action: string, payload: Record<string, a
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
+  if (!fb.auth()?.currentUser?.uid) return () => {};
 
   const db = fb.firestore();
 
@@ -1007,7 +1029,11 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
   let primaryUnsub: (() => void) | null = null;
   let legacyUnsub: (() => void) | null = null;
 
-  const primaryQuery = db.collection('checkins').orderBy('createdAt', 'desc').limit(limit);
+  const primaryQuery = db
+    .collection('checkins')
+    .where('visibility', '==', 'public')
+    .orderBy('createdAt', 'desc')
+    .limit(limit);
   primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
     if (!snapshot.empty) {
       const items: any[] = [];
@@ -1021,7 +1047,11 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
       }
     } else {
       // No results, try legacy schema (timestamp)
-      const legacyQuery = db.collection('checkins').orderBy('timestamp', 'desc').limit(limit);
+      const legacyQuery = db
+        .collection('checkins')
+        .where('visibility', '==', 'public')
+        .orderBy('timestamp', 'desc')
+        .limit(limit);
       legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
         const items: any[] = [];
         legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
