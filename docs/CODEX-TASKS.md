@@ -50,3 +50,39 @@ After any changes:
 
 ## Priority
 Tasks 1-2 are operational blockers. Task 3 informs what Claude and I build next. Task 4 after any changes.
+
+---
+
+## Codex Update — 2026-02-13 (Security + Check-in Signals)
+
+### A) Drink price/quality implementation verification (`app/checkin.tsx`)
+- Verified `drinkPrice` (1-3) and `drinkQuality` (1-5) are wired in state, edit-mode load, draft save/restore, local payload, pending payload, and edit update payload.
+- Tightened payload consistency by writing metrics explicitly as nullable fields (`noiseLevel`, `busyness`, `drinkPrice`, `drinkQuality`) so edits can clear prior values.
+- Confirmed Spot Intel progress counter now tracks `X/4`.
+- Confirmed `TAG_OPTIONS` and `MAX_TAGS=4` are updated.
+- Added feed visibility for new signals in `app/(tabs)/feed.tsx` (Noise/Crowd/Price/Quality chips on check-in cards).
+
+### B) Security hardening applied
+- Removed client-exposed third-party secret placeholders from `app.json` (`OPENAI_API_KEY`, `YELP_API_KEY`, `FOURSQUARE_API_KEY`).
+- Blocked direct client-side provider key usage by default in:
+  - `services/externalDataAPI.ts`
+  - `services/nlpReviews.ts`
+  - `services/spotIntelligence.ts`
+  Client provider calls now require explicit dev-only opt-in (`EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS=1`).
+- Hardened push token privacy path:
+  - `services/firebaseClient.ts` now writes tokens to `pushTokens/{userId}` (and removes legacy `users.pushToken`).
+  - `functions/src/index.ts` now reads tokens from `pushTokens` with legacy fallback.
+  - `firestore.rules` tightened `pushTokens` create/update/delete constraints.
+- Hardened API surface:
+  - `functions/src/index.ts` `placeSignalsProxy` now uses origin allowlist CORS behavior (not wildcard).
+  - `functions/src/index.ts` `placeSignalsProxy` `runWith` now includes both `YELP_API_KEY` and `FOURSQUARE_API_KEY`.
+  - `functions/src/index.ts` `b2bGetSpotData` no longer accepts API key via query param (header only).
+- Hardened CI security gate:
+  - `.github/workflows/ci.yml` now fails job on `npm audit --audit-level=high`.
+
+### C) Validation run after changes
+- `npx tsc --noEmit` ✅
+- `npm run lint` ✅ (warnings only, no errors)
+- `npm test -- --runInBand` ✅ (243/243)
+- `npm --prefix functions run build` ✅
+- `npm --prefix functions test -- --runInBand` ✅ (40/40)

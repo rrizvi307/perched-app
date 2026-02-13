@@ -199,10 +199,16 @@ service cloud.firestore {
 
       // Users can create/update their own tokens
       allow create, update: if isAuthenticated() &&
-                              request.resource.data.userId == request.auth.uid;
+                              tokenId == request.auth.uid &&
+                              request.resource.data.userId == request.auth.uid &&
+                              request.resource.data.keys().hasOnly(['userId', 'token', 'updatedAt']) &&
+                              request.resource.data.token is string &&
+                              request.resource.data.token.size() > 0 &&
+                              request.resource.data.token.size() < 512;
 
       // Users can delete their own tokens
       allow delete: if isAuthenticated() &&
+                      tokenId == request.auth.uid &&
                       resource.data.userId == request.auth.uid;
     }
 

@@ -1791,7 +1791,19 @@ export async function savePushToken(userId: string, token: string) {
     return;
   }
   const db = fb.firestore();
-  await db.collection('users').doc(userId).set({ pushToken: token, updatedAt: fb.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await db.collection('pushTokens').doc(userId).set(
+    {
+      userId,
+      token,
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  // Legacy compatibility cleanup: remove token from public user profile doc.
+  await db.collection('users').doc(userId).set(
+    { pushToken: fb.firestore.FieldValue.delete(), updatedAt: fb.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
 }
 
 export async function clearPushToken(userId: string) {
@@ -1803,6 +1815,8 @@ export async function clearPushToken(userId: string) {
     return;
   }
   const db = fb.firestore();
+  await db.collection('pushTokens').doc(userId).delete().catch(() => {});
+  // Legacy compatibility cleanup: remove token from public user profile doc.
   await db.collection('users').doc(userId).set({ pushToken: fb.firestore.FieldValue.delete() }, { merge: true });
 }
 

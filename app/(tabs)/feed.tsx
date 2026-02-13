@@ -47,6 +47,10 @@ type Checkin = {
 	city?: string;
 	campusOrCity?: string;
 	expiresAt?: string;
+	noiseLevel?: number | string | null;
+	busyness?: number | string | null;
+	drinkPrice?: number | null;
+	drinkQuality?: number | null;
 };
 
 type ReactionSummary = {
@@ -92,6 +96,59 @@ function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems 
 	return Array.from(map.values())
 		.sort((a, b) => (toMillis((b as any)?.createdAt) || 0) - (toMillis((a as any)?.createdAt) || 0))
 		.slice(0, maxItems);
+}
+
+function toNoiseLabel(value: unknown): string | null {
+	if (typeof value === 'number') {
+		if (value <= 1) return 'Very quiet';
+		if (value <= 2) return 'Quiet';
+		if (value <= 3) return 'Moderate';
+		if (value <= 4) return 'Lively';
+		return 'Loud';
+	}
+	if (typeof value === 'string') {
+		const next = value.trim().toLowerCase();
+		if (!next) return null;
+		if (next === 'quiet') return 'Quiet';
+		if (next === 'moderate') return 'Moderate';
+		if (next === 'lively' || next === 'loud') return 'Loud';
+		return null;
+	}
+	return null;
+}
+
+function toBusynessLabel(value: unknown): string | null {
+	if (typeof value === 'number') {
+		if (value <= 2) return 'Not crowded';
+		if (value <= 3) return 'Some people';
+		if (value <= 4) return 'Busy';
+		return 'Packed';
+	}
+	if (typeof value === 'string') {
+		const next = value.trim().toLowerCase();
+		if (!next) return null;
+		if (next === 'empty') return 'Not crowded';
+		if (next === 'some') return 'Some people';
+		if (next === 'packed') return 'Packed';
+		return null;
+	}
+	return null;
+}
+
+function toDrinkPriceLabel(value: unknown): string | null {
+	if (value === 1) return '$';
+	if (value === 2) return '$$';
+	if (value === 3) return '$$$';
+	return null;
+}
+
+function toDrinkQualityLabel(value: unknown): string | null {
+	if (value === 1) return '😐 Poor';
+	if (value === 2) return '🙂 Below avg';
+	if (value === 3) return '😊 Decent';
+	if (value === 4) return '😋 Great';
+	if (value === 5) return '🤩 Exceptional';
+	return null;
 }
 
 function FeedPhoto({
@@ -1001,9 +1058,19 @@ function FeedPhoto({
 								? null
 								: rawUserName;
 						const effectiveHandle = item.userHandle || (user && item.userId === user.id ? user.handle : null);
-						const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
-						const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
-						return (
+							const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
+							const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
+							const noiseLabel = toNoiseLabel((item as any).noiseLevel);
+							const crowdLabel = toBusynessLabel((item as any).busyness);
+							const drinkPriceLabel = toDrinkPriceLabel((item as any).drinkPrice);
+							const drinkQualityLabel = toDrinkQualityLabel((item as any).drinkQuality);
+							const metricChips = [
+								noiseLabel ? `Noise: ${noiseLabel}` : null,
+								crowdLabel ? `Crowd: ${crowdLabel}` : null,
+								drinkPriceLabel ? `Price: ${drinkPriceLabel}` : null,
+								drinkQualityLabel ? `Quality: ${drinkQualityLabel}` : null,
+							].filter(Boolean) as string[];
+							return (
 							<PolishedCard
 								variant="elevated"
 								animated
@@ -1116,11 +1183,20 @@ function FeedPhoto({
 								{groupCount > 1 ? (
 									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here in the last 24h</Text>
 								) : null}
-								{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
-									<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
-								)}
-								{user?.id && reactionCheckinId ? (
-									<ReactionBar
+									{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
+										<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
+									)}
+									{metricChips.length ? (
+										<View style={styles.metricChipRow}>
+											{metricChips.map((chip) => (
+												<View key={`${reactionCheckinId}-${chip}`} style={[styles.metricChip, { borderColor: border, backgroundColor: badgeFill }]}>
+													<Text style={{ color: text, fontSize: 11, fontWeight: '600' }}>{chip}</Text>
+												</View>
+											))}
+										</View>
+									) : null}
+									{user?.id && reactionCheckinId ? (
+										<ReactionBar
 										checkinId={reactionCheckinId}
 										userId={user.id}
 										userName={user.name || user.handle || user.email || 'Someone'}
@@ -1325,6 +1401,13 @@ const styles = StyleSheet.create({
 	},
 	closeButton: { padding: tokens.space.s8 },
 	spot: { fontSize: tokens.type.body.fontSize, fontWeight: '700' as any },
+	metricChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+	metricChip: {
+		borderWidth: 1,
+		borderRadius: 999,
+		paddingHorizontal: tokens.space.s8,
+		paddingVertical: 4,
+	},
 	date: { fontSize: tokens.type.small.fontSize, opacity: 0.6, marginTop: 8 },
 	cardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
 	footerButton: { marginLeft: tokens.space.s12 },

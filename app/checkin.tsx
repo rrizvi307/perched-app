@@ -57,8 +57,8 @@ function exifToLocation(exif: any) {
 	return null;
 }
 
-const TAG_OPTIONS = ['Quiet', 'Study', 'Social', 'Coworking', 'Bright', 'Spacious', 'Seating', 'Late-night'];
-const MAX_TAGS = 3;
+const TAG_OPTIONS = ['Quiet', 'Study', 'Social', 'Good Coffee', 'Cozy', 'Spacious', 'Late-night', 'Outdoor Seating'];
+const MAX_TAGS = 4;
 
 export default function CheckinScreen() {
 	const insets = useSafeAreaInsets();
@@ -72,6 +72,8 @@ export default function CheckinScreen() {
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
 	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [drinkPrice, setDrinkPrice] = useState<1 | 2 | 3 | null>(null); // 1=$, 2=$$, 3=$$$
+	const [drinkQuality, setDrinkQuality] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -161,13 +163,13 @@ export default function CheckinScreen() {
 	// Celebrate when all metrics are completed
 	const prevMetricsCompleteRef = useRef(false);
 	useEffect(() => {
-		const allComplete = noiseLevel !== null && busyness !== null;
+		const allComplete = noiseLevel !== null && busyness !== null && drinkPrice !== null && drinkQuality !== null;
 		if (allComplete && !prevMetricsCompleteRef.current) {
 			// Just completed all metrics - celebrate!
 			Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 		}
 		prevMetricsCompleteRef.current = allComplete;
-	}, [noiseLevel, busyness]);
+	}, [noiseLevel, busyness, drinkPrice, drinkQuality]);
 
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
@@ -207,6 +209,8 @@ export default function CheckinScreen() {
 						setNoiseLevel(convertedNoise);
 					}
 					if (check.busyness) setBusyness(check.busyness);
+					if (check.drinkPrice) setDrinkPrice(check.drinkPrice);
+					if (check.drinkQuality) setDrinkQuality(check.drinkQuality);
 					}
 				} catch {
 					try {
@@ -329,6 +333,8 @@ export default function CheckinScreen() {
 						setNoiseLevel(convertedNoise);
 					}
 					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
+					if (typeof draft.drinkPrice === 'number') setDrinkPrice(draft.drinkPrice);
+					if (typeof draft.drinkQuality === 'number') setDrinkQuality(draft.drinkQuality);
 				}
 			} catch {}
 			const seen = await getPermissionPrimerSeen('camera');
@@ -379,10 +385,12 @@ export default function CheckinScreen() {
 					location: placeInfo?.location || detectedPlace?.location,
 					noiseLevel,
 					busyness,
+					drinkPrice,
+					drinkQuality,
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -550,7 +558,7 @@ export default function CheckinScreen() {
 				return;
 			}
 		// Gentle encouragement for metrics (non-blocking)
-		const metricsProvided = [noiseLevel, busyness].filter(Boolean).length;
+		const metricsProvided = [noiseLevel, busyness, drinkPrice, drinkQuality].filter(Boolean).length;
 		if (metricsProvided === 0) {
 			showToast('💡 Consider adding Spot Intel to help others!', 'info');
 			// Still allow posting - don't block
@@ -572,19 +580,21 @@ export default function CheckinScreen() {
 				const clientId = `client-${Date.now()}`;
 				// If editing, perform an update flow
 				if (isEditMode && editId) {
-					try {
-						const fb = await import('@/services/firebaseClient');
-						const updates: any = {
-							spotName: spot,
-							spotPlaceId: activePlace?.placeId,
-							spotLatLng: activePlace?.location,
-							caption,
-							tags: selectedTags,
-							visibility,
-							// Utility metrics
-							...(noiseLevel && { noiseLevel }),
-							...(busyness && { busyness }),
-						};
+						try {
+							const fb = await import('@/services/firebaseClient');
+							const updates: any = {
+								spotName: spot,
+								spotPlaceId: activePlace?.placeId,
+								spotLatLng: activePlace?.location,
+								caption,
+								tags: selectedTags,
+								visibility,
+								// Utility metrics
+								noiseLevel: noiseLevel ?? null,
+								busyness: busyness ?? null,
+								drinkPrice: drinkPrice ?? null,
+								drinkQuality: drinkQuality ?? null,
+							};
 						await fb.updateCheckinRemote(editId, updates);
 						// update local copy
 						const local = await import('@/storage/local');
@@ -624,7 +634,7 @@ export default function CheckinScreen() {
 				}
 			} catch {}
 			const displayName = user?.name || user?.handle || (user?.email ? user.email.split('@')[0] : null) || 'Someone';
-			const localPayload = {
+				const localPayload = {
 				spot,
 				spotName: spot,
 				spotPlaceId: activePlace?.placeId,
@@ -639,12 +649,14 @@ export default function CheckinScreen() {
 				userPhotoUrl: user?.photoUrl,
 				city: user?.city,
 				campus: user?.campus,
-				visibility,
-				clientId,
-				// Utility metrics
-				...(noiseLevel && { noiseLevel }),
-				...(busyness && { busyness }),
-			} as any;
+					visibility,
+					clientId,
+					// Utility metrics
+					noiseLevel: noiseLevel ?? null,
+					busyness: busyness ?? null,
+					drinkPrice: drinkPrice ?? null,
+					drinkQuality: drinkQuality ?? null,
+				} as any;
 			const pendingPayload = {
 				userId: uid,
 				userName: displayName,
@@ -659,12 +671,14 @@ export default function CheckinScreen() {
 				campusOrCity: user?.campusOrCity || user?.city,
 				city: user?.city,
 				campus: user?.campus,
-				visibility,
-				clientId,
-				// Utility metrics
-				...(noiseLevel && { noiseLevel }),
-				...(busyness && { busyness }),
-			};
+					visibility,
+					clientId,
+					// Utility metrics
+					noiseLevel: noiseLevel ?? null,
+					busyness: busyness ?? null,
+					drinkPrice: drinkPrice ?? null,
+					drinkQuality: drinkQuality ?? null,
+				};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
 				publishCheckin(savedLocal);
@@ -954,8 +968,8 @@ export default function CheckinScreen() {
 						{/* Spot Intel Section - Utility Metrics */}
 						<View style={{ marginTop: 16, marginBottom: 8 }}>
 							{(() => {
-								const metricsCompleted = [noiseLevel !== null, busyness !== null].filter(Boolean).length;
-								const metricsTotal = 2;
+								const metricsCompleted = [noiseLevel !== null, busyness !== null, drinkPrice !== null, drinkQuality !== null].filter(Boolean).length;
+								const metricsTotal = 4;
 								const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
 								return (
 									<>
@@ -991,7 +1005,7 @@ export default function CheckinScreen() {
 												? 'Help others find the perfect spot by sharing quick metrics'
 												: metricsPercentage === 100
 												? 'Thanks for helping the community!'
-												: 'One more metric to go'}
+												: metricsCompleted === 3 ? 'One more metric to go' : `${metricsTotal - metricsCompleted} more to go`}
 										</Text>
 									</>
 								);
@@ -1086,6 +1100,94 @@ export default function CheckinScreen() {
 										: busyness === 5
 										? 'Packed!'
 										: 'Tap to rate how crowded'}
+								</Text>
+							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Drink Price</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3] as const).map((level) => (
+										<Pressable
+											key={`price-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setDrinkPrice(drinkPrice === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: drinkPrice === level ? primary : 'transparent',
+													minWidth: 60,
+												},
+											]}
+										>
+											<Text
+												style={{
+													color: drinkPrice === level ? '#FFFFFF' : text,
+													fontWeight: '600',
+													textAlign: 'center',
+												}}
+											>
+												{level === 1 ? '$' : level === 2 ? '$$' : '$$$'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{drinkPrice === 1
+										? 'Budget-friendly'
+										: drinkPrice === 2
+										? 'Mid-range'
+										: drinkPrice === 3
+										? 'Pricey'
+										: 'Tap to rate drink prices'}
+								</Text>
+							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Drink Quality</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`quality-${level}`}
+											onPress={() => {
+												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												setDrinkQuality(drinkQuality === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: drinkQuality === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text
+												style={{
+													color: drinkQuality === level ? '#FFFFFF' : text,
+													fontWeight: '600',
+													textAlign: 'center',
+												}}
+											>
+												{level === 1 ? '😐' : level === 2 ? '🙂' : level === 3 ? '😊' : level === 4 ? '😋' : '🤩'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{drinkQuality === 1
+										? 'Poor'
+										: drinkQuality === 2
+										? 'Below average'
+										: drinkQuality === 3
+										? 'Decent'
+										: drinkQuality === 4
+										? 'Great'
+										: drinkQuality === 5
+										? 'Exceptional!'
+										: 'Tap to rate drink quality'}
 								</Text>
 							</View>
 						</View>

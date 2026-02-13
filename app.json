@@ -17,7 +17,8 @@
         "NSPhotoLibraryUsageDescription": "Perched uses your photo library to attach a check-in photo.",
         "NSPhotoLibraryAddUsageDescription": "Perched can save your check-in photos to your library.",
         "NSLocationWhenInUseUsageDescription": "Perched uses your location to show nearby third places and friend hotspots.",
-        "NSContactsUsageDescription": "Perched uses your contacts to help you find friends."
+        "NSContactsUsageDescription": "Perched uses your contacts to help you find friends.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "config": {
         "googleMapsApiKey": ""
@@ -61,9 +62,6 @@
       "INSTAGRAM_URL": "https://instagram.com/perchedapp",
       "REVENUECAT_PUBLIC_KEY": "",
       "TIKTOK_URL": "https://tiktok.com/@perchedapp",
-      "OPENAI_API_KEY": "",
-      "YELP_API_KEY": "",
-      "FOURSQUARE_API_KEY": "",
       "INTEL_V1_ENABLED": false,
       "eas": {
         "projectId": "8413644e-43e4-4409-8302-9454707c4f42"

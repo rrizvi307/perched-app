@@ -107,6 +107,57 @@ function setCorsHeaders(req: any, res: any) {
   res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Trace-Id, Authorization, X-Firebase-AppCheck');
 }
 
+function normalizePushToken(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function getPushTokenForUser(userId: string): Promise<string | null> {
+  if (!userId) return null;
+  try {
+    const pushTokenDoc = await db.collection('pushTokens').doc(userId).get();
+    const scopedToken = normalizePushToken(pushTokenDoc.data()?.token);
+    if (scopedToken) return scopedToken;
+  } catch {}
+
+  // Legacy fallback during migration period.
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+    return normalizePushToken(userDoc.data()?.pushToken);
+  } catch {
+    return null;
+  }
+}
+
+async function getPushTokensForUsers(userIds: string[]): Promise<string[]> {
+  const ids = normalizeIdList(userIds).slice(0, 100);
+  if (!ids.length) return [];
+  const tokens: string[] = [];
+
+  const scopedDocs = await Promise.all(ids.map((userId) => db.collection('pushTokens').doc(userId).get()));
+  const unresolved: string[] = [];
+
+  scopedDocs.forEach((doc, index) => {
+    const token = normalizePushToken(doc.data()?.token);
+    if (token) {
+      tokens.push(token);
+      return;
+    }
+    unresolved.push(ids[index]);
+  });
+
+  if (unresolved.length) {
+    const legacyDocs = await Promise.all(unresolved.map((userId) => db.collection('users').doc(userId).get()));
+    legacyDocs.forEach((doc) => {
+      const token = normalizePushToken(doc.data()?.pushToken);
+      if (token) tokens.push(token);
+    });
+  }
+
+  return Array.from(new Set(tokens));
+}
+
 /**
  * Joi validation schemas for B2B API endpoints
  */
@@ -266,7 +317,7 @@ export const processReferral = functions.firestore
       });
 
       // Send notification to referrer
-      const referrerPushToken = referrerData.pushToken;
+      const referrerPushToken = await getPushTokenForUser(referrerId);
       if (referrerPushToken) {
         await sendPushNotification(
           referrerPushToken,
@@ -535,9 +586,7 @@ export const onFriendRequestCreated = functions.firestore
       const senderName = senderData.name || senderData.handle || 'Someone';
 
       // Get the recipient's push token
-      const recipientDoc = await db.collection('users').doc(toId).get();
-      const recipientData = recipientDoc.data() || {};
-      const recipientToken = recipientData.pushToken;
+      const recipientToken = await getPushTokenForUser(toId);
 
       if (!recipientToken) {
         console.log(`No push token for user ${toId}`);
@@ -594,7 +643,7 @@ export const onFriendRequestAccepted = functions.firestore
       }
 
       const accepterName = accepterData.name || accepterData.handle || 'Someone';
-      const senderToken = senderData.pushToken;
+      const senderToken = await getPushTokenForUser(fromId);
 
       if (!senderToken) {
         console.log(`No push token for user ${fromId}`);
@@ -652,20 +701,7 @@ export const onCheckinCreated = functions.firestore
         targetFriends = posterData.closeFriends || [];
       }
 
-      // Batch get friend documents to get their push tokens
-      const friendDocs = await Promise.all(
-        targetFriends.slice(0, 50).map((friendId: string) =>
-          db.collection('users').doc(friendId).get()
-        )
-      );
-
-      const tokens: string[] = [];
-      friendDocs.forEach((doc) => {
-        const friendData = doc.data();
-        if (friendData?.pushToken) {
-          tokens.push(friendData.pushToken);
-        }
-      });
+      const tokens = await getPushTokensForUsers(targetFriends.slice(0, 50));
 
       if (tokens.length === 0) {
         return null;
@@ -740,8 +776,13 @@ function parsePriceLevel(value?: string) {
   return next ? next : undefined;
 }
 
-function withCors(res: any) {
-  res.set('Access-Control-Allow-Origin', '*');
+function withCors(req: any, res: any) {
+  const origin = req.headers.origin || '';
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Access-Control-Allow-Credentials', 'true');
+    res.set('Vary', 'Origin');
+  }
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Firebase-AppCheck, X-Place-Intel-Secret');
 }
@@ -875,9 +916,9 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
 }
 
 export const placeSignalsProxy = functions
-  .runWith({ secrets: ['YELP_API_KEY'] })
+  .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY'] })
   .https.onRequest(async (req, res) => {
-  withCors(res);
+  withCors(req, res);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -1076,7 +1117,7 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
   }
 
   // Validate API key
-  const apiKey = req.get('X-API-Key') || (req.query.apiKey as string) || '';
+  const apiKey = req.get('X-API-Key') || '';
   if (!apiKey) {
     res.status(401).json({ error: 'Missing API key', traceId });
     return;
@@ -1580,18 +1621,26 @@ export const sendWeeklyRecap = functions.pubsub
   .timeZone('America/Chicago')
   .onRun(async (_context) => {
     try {
-      // Get all users with push tokens
-      const usersSnapshot = await db.collection('users')
-        .where('pushToken', '!=', null)
-        .get();
-
-      const tokens: string[] = [];
-      usersSnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (typeof data.pushToken === 'string' && data.pushToken.trim().length > 0) {
-          tokens.push(data.pushToken.trim());
-        }
+      // Primary source: scoped push tokens collection.
+      const pushTokensSnapshot = await db.collection('pushTokens').get();
+      const tokenDocs: Array<{ ref: FirebaseFirestore.DocumentReference; token: string }> = [];
+      pushTokensSnapshot.forEach((doc) => {
+        const token = normalizePushToken(doc.data()?.token);
+        if (token) tokenDocs.push({ ref: doc.ref, token });
       });
+
+      // Legacy fallback while migrating from users.pushToken.
+      const usersSnapshot = await db.collection('users').where('pushToken', '!=', null).get();
+      const legacyTokenDocs: Array<{ ref: FirebaseFirestore.DocumentReference; token: string }> = [];
+      usersSnapshot.forEach((doc) => {
+        const token = normalizePushToken(doc.data()?.pushToken);
+        if (token) legacyTokenDocs.push({ ref: doc.ref, token });
+      });
+
+      const tokens = [
+        ...tokenDocs.map((entry) => entry.token),
+        ...legacyTokenDocs.map((entry) => entry.token),
+      ];
 
       if (tokens.length === 0) {
         console.log('No users with push tokens');
@@ -1635,9 +1684,18 @@ export const sendWeeklyRecap = functions.pubsub
       if (invalidTokens.size > 0) {
         let batch = db.batch();
         let pendingOps = 0;
-        for (const userDoc of usersSnapshot.docs) {
-          const token = userDoc.data()?.pushToken;
-          if (typeof token !== 'string' || !invalidTokens.has(token.trim())) continue;
+        for (const tokenDoc of tokenDocs) {
+          if (!invalidTokens.has(tokenDoc.token)) continue;
+          batch.delete(tokenDoc.ref);
+          pendingOps += 1;
+          if (pendingOps >= 400) {
+            await batch.commit();
+            batch = db.batch();
+            pendingOps = 0;
+          }
+        }
+        for (const userDoc of legacyTokenDocs) {
+          if (!invalidTokens.has(userDoc.token)) continue;
           batch.update(userDoc.ref, {
             pushToken: admin.firestore.FieldValue.delete(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),

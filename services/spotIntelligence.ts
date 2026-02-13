@@ -288,6 +288,13 @@ function collectReviewSamples(
  * Get Google Maps API key
  */
 function getGoogleMapsKey(): string | null {
+  const raw =
+    (process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    (process.env.ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    '';
+  const allowClientProviderCalls = !!__DEV__ && ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+  if (!allowClientProviderCalls) return null;
+
   const expoKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY;
   const globalKey = (global as any)?.GOOGLE_MAPS_API_KEY;
   return expoKey || globalKey || null;
@@ -297,6 +304,13 @@ function getGoogleMapsKey(): string | null {
  * Get Yelp API key
  */
 function getYelpAPIKey(): string | null {
+  const raw =
+    (process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    (process.env.ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    '';
+  const allowClientProviderCalls = !!__DEV__ && ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+  if (!allowClientProviderCalls) return null;
+
   const expoKey = (Constants.expoConfig as any)?.extra?.YELP_API_KEY;
   const globalKey = (global as any)?.YELP_API_KEY;
   return expoKey || globalKey || null;

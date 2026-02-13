@@ -186,6 +186,13 @@ function clamp(value: number, min: number, max: number): number {
  * Get OpenAI API key from config
  */
 function getOpenAIKey(): string | null {
+  const raw =
+    (process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    (process.env.ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    '';
+  const allowClientProviderCalls = !!__DEV__ && ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+  if (!allowClientProviderCalls) return null;
+
   const expoKey = (Constants.expoConfig as any)?.extra?.OPENAI_API_KEY;
   const globalKey = (global as any)?.OPENAI_API_KEY;
   return expoKey || globalKey || null;
