@@ -40,7 +40,6 @@ import { syncPendingCheckins } from '@/services/syncPending';
 import {
   getCheckins,
   getLocationEnabled,
-  getPermissionPrimerSeen,
   seedDemoNetwork,
   setPermissionPrimerSeen,
 } from '@/storage/local';
@@ -60,7 +59,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
@@ -452,20 +450,6 @@ export default function Explore() {
   }, [user, demoMode]);
 
   useEffect(() => {
-    void (async () => {
-      const enabled = await getLocationEnabled().catch(() => true);
-      if (!enabled) return;
-      const seen = await getPermissionPrimerSeen('location').catch(() => true);
-      if (!seen) return;
-      const current = await requestForegroundLocation();
-      if (current) {
-        setLoc(current);
-        setMapFocus(current);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
     let active = true;
 
     void (async () => {
@@ -477,6 +461,7 @@ export default function Explore() {
           await seedDemoNetwork(user?.id);
           const local = await getCheckins();
           const scoped = (local || []).filter((item: any) => {
+            if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
             if (user && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
             if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
@@ -485,7 +470,7 @@ export default function Explore() {
           });
 
           if (!active) return;
-          setSpots(buildSpotsFromCheckins(scoped, loc || mapFocus || null));
+          setSpots(buildSpotsFromCheckins(scoped, loc || mapFocus || mapCenter));
           setStatus(null);
           setLoading(false);
           return;
@@ -493,6 +478,7 @@ export default function Explore() {
 
         const remote = await getCheckinsRemote(260);
         const items = (remote.items || []).filter((item: any) => {
+          if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
@@ -500,28 +486,50 @@ export default function Explore() {
           return true;
         });
 
+        const focus = loc || mapFocus || mapCenter;
+        const nearbyThresholdKm = 40;
+        const remoteSpots = buildSpotsFromCheckins(items, focus);
+        const hasNearbyRemote = remoteSpots.some(
+          (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
+        );
+
         if (!active) return;
-        setSpots(buildSpotsFromCheckins(items, loc || mapFocus || null));
-        // If remote returned nothing but local has data, use local as fallback
-        if (items.length === 0) {
+        setSpots(remoteSpots);
+        setStatus(null);
+        // If remote is empty or only far-away data, try local + nearby spots fallback
+        if (items.length === 0 || !hasNearbyRemote) {
           const local = await getCheckins();
           const localScoped = (local || []).filter((item: any) => {
+            if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
             if (user && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
             if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
             if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
             return true;
           });
-          if (localScoped.length > 0 && active) {
-            setSpots(buildSpotsFromCheckins(localScoped, loc || mapFocus || null));
+          const localSpots = buildSpotsFromCheckins(localScoped, focus);
+          const hasNearbyLocal = localSpots.some(
+            (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
+          );
+          if (localScoped.length > 0 && hasNearbyLocal && active) {
+            setSpots(localSpots);
+            setStatus(null);
+          } else {
+            const nearby = await fetchNearbySpots(focus.lat, focus.lng, 2, DEFAULT_FILTERS).catch(() => []);
+            if (active && nearby.length > 0) {
+              setSpots(nearby);
+              setStatus({ message: 'No recent check-ins yet. Showing nearby spots.', tone: 'info' });
+            } else if (active && items.length > 0) {
+              setStatus({ message: 'Most recent check-ins are outside your area. Tap location to recenter.', tone: 'info' });
+            }
           }
         }
-        setStatus(null);
         setLoading(false);
         void syncPendingCheckins(1);
       } catch {
         const local = await getCheckins();
         const fallback = (local || []).filter((item: any) => {
+          if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
@@ -530,7 +538,7 @@ export default function Explore() {
         });
 
         if (!active) return;
-        setSpots(buildSpotsFromCheckins(fallback, loc || mapFocus || null));
+        setSpots(buildSpotsFromCheckins(fallback, loc || mapFocus || mapCenter));
         setStatus({ message: 'Offline. Showing saved data.', tone: 'warning' });
       } finally {
         setRefreshing(false);
@@ -547,9 +555,11 @@ export default function Explore() {
     user,
     loc,
     mapFocus,
+    mapCenter,
     passesScope,
     friendIdSet,
     blockedIdSet,
+    fetchNearbySpots,
   ]);
 
   useEffect(() => {
@@ -666,7 +676,7 @@ export default function Explore() {
       }
 
       await setPermissionPrimerSeen('location', true).catch(() => {});
-      const current = await requestForegroundLocation({ ignoreCache: true });
+      const current = await requestForegroundLocation({ ignoreCache: true, preferFresh: true });
       if (!current) {
         showToast('Location unavailable. Check Settings permissions.', 'warning');
         await Linking.openSettings().catch(() => {});
@@ -996,15 +1006,6 @@ export default function Explore() {
         }
       />
 
-      <TouchableOpacity
-        onPress={() => router.push('/checkin')}
-        accessibilityLabel="New check-in"
-        style={[styles.fab, { backgroundColor: primary, borderColor: border }]}
-        activeOpacity={0.85}
-      >
-        <IconSymbol name="plus" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-
       {selectedSpot ? (
         <Pressable style={styles.sheetBackdrop} onPress={closeSpotSheet}>
           <Pressable
@@ -1252,22 +1253,6 @@ const styles = StyleSheet.create({
   ctaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 28,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
   },
   sheetBackdrop: {
     position: 'absolute',

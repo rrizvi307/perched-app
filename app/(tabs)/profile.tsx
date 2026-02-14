@@ -788,8 +788,6 @@ export default function ProfileScreen() {
             <PolishedLargeHeader
               title={user?.name || 'Profile'}
               subtitle={user?.handle ? `@${user.handle}` : 'Add a username'}
-              rightIcon="gearshape.fill"
-              onRightPress={() => router.push('/settings')}
             />
             {status ? (
               <StatusBanner

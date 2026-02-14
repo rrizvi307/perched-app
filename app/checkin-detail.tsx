@@ -50,7 +50,11 @@ export default function CheckinDetailScreen() {
   const danger = useThemeColor({}, 'danger');
   const highlight = withAlpha(primary, 0.12);
 
-  const cid = typeof params.cid === 'string' ? params.cid : '';
+  const cid = typeof params.cid === 'string'
+    ? params.cid
+    : typeof params.id === 'string'
+      ? params.id
+      : '';
   const [item, setItem] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);

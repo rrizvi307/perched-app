@@ -138,12 +138,12 @@ export async function getForegroundLocationIfPermitted(): Promise<SimpleLocation
   return browser;
 }
 
-export async function requestForegroundLocation(options?: { ignoreCache?: boolean }): Promise<SimpleLocation | null> {
+export async function requestForegroundLocation(options?: { ignoreCache?: boolean; preferFresh?: boolean }): Promise<SimpleLocation | null> {
   const res = await requestForegroundLocationWithStatus(options);
   return res.coords;
 }
 
-export async function requestForegroundLocationWithStatus(options?: { ignoreCache?: boolean }): Promise<{ coords: SimpleLocation | null; state: LocationPermissionState }> {
+export async function requestForegroundLocationWithStatus(options?: { ignoreCache?: boolean; preferFresh?: boolean }): Promise<{ coords: SimpleLocation | null; state: LocationPermissionState }> {
   // Skip cache if explicitly requested
   if (!options?.ignoreCache && cached && isFresh(cached.ts, 90_000)) {
     return { coords: cached.coords, state: { status: 'granted', granted: true, canAskAgain: true, servicesEnabled: true, error: null } };
@@ -162,11 +162,13 @@ export async function requestForegroundLocationWithStatus(options?: { ignoreCach
       return { coords: null, state: { ...perm, servicesEnabled, error: getLastLocationError() } };
     }
     try {
-      const lastKnown = await getLastKnownLocation(ExpoLocation);
-      if (lastKnown) {
-        cached = { coords: lastKnown, ts: Date.now() };
-        setLastError(null);
-        return { coords: lastKnown, state: { ...perm, servicesEnabled, error: null } };
+      if (!options?.preferFresh) {
+        const lastKnown = await getLastKnownLocation(ExpoLocation);
+        if (lastKnown) {
+          cached = { coords: lastKnown, ts: Date.now() };
+          setLastError(null);
+          return { coords: lastKnown, state: { ...perm, servicesEnabled, error: null } };
+        }
       }
       const pos = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy?.Balanced ?? undefined,

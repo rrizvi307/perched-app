@@ -55,6 +55,7 @@ export type DeepLinkRoute =
   | 'spot'
   | 'explore'
   | 'feed'
+  | 'settings'
   | 'friend-request';
 
 export interface DeepLinkParams {
@@ -99,17 +100,30 @@ export function parseDeepLink(url: string): {
       return value;
     };
 
+    const hostPathSegment = path?.replace(/^\/+/, '') || undefined;
+
     if (hostname === 'profile' || path?.startsWith('/profile')) {
       route = 'profile';
-      const userId = path?.split('/profile/')[1] || getParam(queryParams?.userId);
+      const userId =
+        path?.split('/profile/')[1] ||
+        (hostname === 'profile' ? hostPathSegment : undefined) ||
+        getParam(queryParams?.userId);
       if (userId) params.userId = userId;
     } else if (hostname === 'checkin' || path?.startsWith('/checkin') || path?.startsWith('/c/')) {
       route = 'checkin';
-      const checkinId = path?.split('/checkin/')[1] || path?.split('/c/')[1] || getParam(queryParams?.checkinId);
+      const checkinId =
+        path?.split('/checkin/')[1] ||
+        path?.split('/c/')[1] ||
+        (hostname === 'checkin' ? hostPathSegment : undefined) ||
+        getParam(queryParams?.checkinId);
       if (checkinId) params.checkinId = checkinId;
     } else if (hostname === 'spot' || path?.startsWith('/spot') || path?.startsWith('/s/')) {
       route = 'spot';
-      const spotId = path?.split('/spot/')[1] || path?.split('/s/')[1] || getParam(queryParams?.spotId);
+      const spotId =
+        path?.split('/spot/')[1] ||
+        path?.split('/s/')[1] ||
+        (hostname === 'spot' ? hostPathSegment : undefined) ||
+        getParam(queryParams?.spotId);
       if (spotId) {
         params.spotId = spotId;
         const placeId = getParam(queryParams?.placeId);
@@ -119,9 +133,15 @@ export function parseDeepLink(url: string): {
       route = 'explore';
     } else if (hostname === 'feed' || path?.startsWith('/feed')) {
       route = 'feed';
+    } else if (hostname === 'settings' || path?.startsWith('/settings')) {
+      route = 'settings';
     } else if (hostname === 'friend-request' || path?.startsWith('/friend-request') || path?.startsWith('/fr/')) {
       route = 'friend-request';
-      const requestId = path?.split('/friend-request/')[1] || path?.split('/fr/')[1] || getParam(queryParams?.requestId);
+      const requestId =
+        path?.split('/friend-request/')[1] ||
+        path?.split('/fr/')[1] ||
+        (hostname === 'friend-request' ? hostPathSegment : undefined) ||
+        getParam(queryParams?.requestId);
       if (requestId) params.requestId = requestId;
     }
 
@@ -168,7 +188,7 @@ export function handleDeepLink(url: string) {
 
       case 'checkin':
         if (params.checkinId) {
-          router.push(`/checkin-detail?id=${params.checkinId}`);
+          router.push(`/checkin-detail?cid=${params.checkinId}`);
         }
         break;
 
@@ -187,6 +207,10 @@ export function handleDeepLink(url: string) {
 
       case 'feed':
         router.push('/(tabs)/feed');
+        break;
+
+      case 'settings':
+        router.push('/settings');
         break;
 
       case 'friend-request':
@@ -259,6 +283,10 @@ export function createDeepLink(
 
     case 'feed':
       path = '/feed';
+      break;
+
+    case 'settings':
+      path = '/settings';
       break;
 
     case 'friend-request':

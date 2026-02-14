@@ -1309,19 +1309,9 @@ function FeedPhoto({
 				onEndReachedThreshold={0.5}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadLatest} />}
 			/>
-			<Pressable
-				onPress={() => router.push('/checkin')}
-				accessibilityLabel="New check-in"
-				style={({ pressed }) => [
-					styles.fab,
-					{ backgroundColor: pressed ? muted : primary, borderColor: border },
-				]}
-			>
-				<IconSymbol name="plus" size={24} color="#FFFFFF" />
-			</Pressable>
-		</ThemedView>
-	);
-}
+			</ThemedView>
+		);
+	}
 
 const styles = StyleSheet.create({
 	container: { flex: 1, position: 'relative' },
@@ -1446,22 +1436,6 @@ const styles = StyleSheet.create({
 		opacity: 0.35,
 	},
 	debugCard: {},
-	fab: {
-		position: 'absolute',
-		right: tokens.space.s20,
-		bottom: 90,
-		width: 56,
-		height: 56,
-		borderRadius: 28,
-		alignItems: 'center',
-		justifyContent: 'center',
-		borderWidth: 1,
-		shadowColor: '#000',
-		shadowOffset: { width: 0, height: 10 },
-		shadowOpacity: 0.2,
-		shadowRadius: 16,
-		elevation: 6,
-	},
 });
 
  

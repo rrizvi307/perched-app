@@ -4,7 +4,7 @@
     "slug": "perched",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/brand/perched-icon-purple.png",
+    "icon": "./assets/brand/perched-icon-slim-white.png",
     "scheme": "perched",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -35,8 +35,8 @@
         "READ_MEDIA_IMAGES"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#7C3AED",
-        "foregroundImage": "./assets/brand/perched-icon-purple.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/brand/perched-mark-slim.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -72,20 +72,20 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/brand/perched-icon-purple.png"
+      "favicon": "./assets/brand/perched-icon-slim-white.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/brand/perched-icon-purple.png",
+          "image": "./assets/brand/perched-mark-slim.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#7C3AED",
+          "backgroundColor": "#FFFFFF",
           "dark": {
-            "image": "./assets/brand/perched-icon-purple.png",
-            "backgroundColor": "#6D28D9"
+            "image": "./assets/brand/perched-mark-slim.png",
+            "backgroundColor": "#FFFFFF"
           }
         }
       ]

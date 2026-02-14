@@ -28,7 +28,7 @@ export default function Logo({
   // Brand colors - purple palette
   const gradientEnd = '#EC4899';   // Hot pink
 
-  // Bird SVG Logo Mark Component
+  // Original slim bird mark (no background tile)
   const LogoMarkSVG = ({ size: s }: { size: number }) => (
     <Svg width={s} height={s} viewBox="0 0 100 100">
       <Defs>
@@ -42,29 +42,14 @@ export default function Logo({
         </LinearGradient>
       </Defs>
 
-      {/* Branch */}
       <Line x1="15" y1="72" x2="85" y2="62" stroke="#4C1D95" strokeWidth="3" strokeLinecap="round" />
       <Line x1="68" y1="65" x2="78" y2="56" stroke="#4C1D95" strokeWidth="2.2" strokeLinecap="round" />
-
-      {/* Bird body */}
       <Ellipse cx="45" cy="48" rx="17" ry="14" fill="url(#bodyGrad)" rotation={-8} origin="45,48" />
-
-      {/* Bird head */}
       <Circle cx="55" cy="34" r="10" fill="url(#bodyGrad)" />
-
-      {/* Wing */}
       <Ellipse cx="37" cy="50" rx="13" ry="9" fill="url(#wingGrad)" rotation={-15} origin="37,50" />
-
-      {/* Tail */}
       <Polygon points="22,52 13,44 16,56" fill={gradientEnd} />
-
-      {/* Beak */}
       <Polygon points="67,32 73,34 67,36" fill={gradientEnd} />
-
-      {/* Eye */}
       <Circle cx="59" cy="32" r="2" fill="#FFFFFF" />
-
-      {/* Legs */}
       <Line x1="45" y1="64" x2="42" y2="70" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
       <Line x1="51" y1="63" x2="49" y2="69" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
     </Svg>
