@@ -461,7 +461,7 @@ function FeedPhoto({
 				}
 				const cleaned = filterExpired(res.items as any);
 				let merged = await mergeRemoteWithLocal(cleaned);
-				if (merged.length < 2 && process.env.NODE_ENV !== 'production') {
+				if (merged.length < 2 && process.env.NODE_ENV !== 'production' && isDemoMode()) {
 					try {
 						await seedDemoNetwork(user?.id);
 					merged = await mergeRemoteWithLocal(cleaned);

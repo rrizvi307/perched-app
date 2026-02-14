@@ -1089,9 +1089,9 @@ export async function seedDemoNetwork(currentUserId?: string) {
           'demo-u15': ['demo-u9', 'demo-u10', 'demo-u11'],
           'demo-u16': ['demo-u1', 'demo-u6', 'demo-u12'],
         };
-        // If current user is not a demo account, connect them to demo users for demo purposes.
+        // Only connect demo accounts to each other — skip real user IDs.
         const demoIds = Object.keys(friendsMap);
-        if (currentUserId && !friendsMap[currentUserId]) {
+        if (currentUserId && currentUserId.startsWith('demo-') && !friendsMap[currentUserId]) {
           friendsMap[currentUserId] = demoIds.slice();
           demoIds.forEach((d) => {
             friendsMap[d] = Array.from(new Set([...(friendsMap[d] || []), currentUserId]));
@@ -1132,7 +1132,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
               'demo-u16': ['demo-u1', 'demo-u6', 'demo-u12'],
             };
             const demoIds = Object.keys(friendsMap);
-            if (currentUserId && !friendsMap[currentUserId]) {
+            if (currentUserId && currentUserId.startsWith('demo-') && !friendsMap[currentUserId]) {
               friendsMap[currentUserId] = demoIds.slice();
               demoIds.forEach((d) => {
                 friendsMap[d] = Array.from(new Set([...(friendsMap[d] || []), currentUserId]));
@@ -1150,7 +1150,8 @@ export async function seedDemoNetwork(currentUserId?: string) {
           }
         } catch {}
         // Seed comprehensive demo data (stats, achievements, saved spots, friend requests, impact)
-        if (currentUserId) {
+        // Only seed for demo user IDs — never pollute real user accounts.
+        if (currentUserId && currentUserId.startsWith('demo-')) {
           try {
             const { seedComprehensiveDemoData } = await import('./seed-comprehensive-demo');
             await seedComprehensiveDemoData(currentUserId);
@@ -1199,6 +1200,105 @@ export async function resetDemoNetwork() {
     });
   } catch {
     // ignore
+  }
+}
+
+const DEMO_CLEANUP_KEY = 'spot_demo_cleaned_v1';
+
+/**
+ * One-time cleanup: remove all demo-seeded data from local storage for a real user.
+ * Called once per real user on app launch; idempotent via a "cleaned" flag.
+ */
+export async function cleanupDemoDataForRealUser(userId: string) {
+  try {
+    const store = await getAsyncStorage();
+    const getItem = (key: string) => {
+      if (isWeb()) return window.localStorage.getItem(key);
+      return store ? store.getItem(key) : null;
+    };
+    const setItem = async (key: string, value: string) => {
+      if (isWeb()) { window.localStorage.setItem(key, value); return; }
+      if (store) await store.setItem(key, value);
+    };
+    const removeItem = async (key: string) => {
+      if (isWeb()) { window.localStorage.removeItem(key); return; }
+      if (store) await store.removeItem(key);
+    };
+
+    // Check if already cleaned
+    const cleaned = await getItem(DEMO_CLEANUP_KEY);
+    if (cleaned === userId) return;
+
+    // Check if demo data exists
+    const seeded = await getItem(DEMO_SEED_KEY);
+    if (!seeded) {
+      // Mark as cleaned even if nothing to clean, so we don't check every launch
+      await setItem(DEMO_CLEANUP_KEY, userId);
+      return;
+    }
+
+    // Remove demo checkins from checkins array (keep real ones)
+    const rawCheckins = await getItem(KEY);
+    if (rawCheckins) {
+      const arr = JSON.parse(rawCheckins);
+      const filtered = arr.filter((c: any) => {
+        const id = String(c?.id || '');
+        return !id.startsWith('demo-c') && !id.startsWith('demo-self-');
+      });
+      await setItem(KEY, JSON.stringify(filtered));
+      memory = filtered.slice();
+    }
+
+    // Remove demo keys
+    await removeItem(DEMO_SEED_KEY);
+    await removeItem('spot_users_v1');
+
+    // Clean demo friends from friends graph
+    const rawFriends = await getItem('spot_friends_v1');
+    if (rawFriends) {
+      const friendsMap = JSON.parse(rawFriends);
+      // Remove all demo-* keys and remove demo IDs from any user's friend list
+      const cleanedMap: Record<string, string[]> = {};
+      for (const [key, value] of Object.entries(friendsMap)) {
+        if (key.startsWith('demo-')) continue;
+        cleanedMap[key] = (value as string[]).filter((id: string) => !id.startsWith('demo-'));
+      }
+      await setItem('spot_friends_v1', JSON.stringify(cleanedMap));
+    }
+
+    // Remove demo-seeded stats/metrics keys
+    const demoKeys = [
+      '@perched_user_stats',
+      '@perched_saved_spots',
+      '@perched_achievements',
+    ];
+    for (const key of demoKeys) {
+      await removeItem(key);
+    }
+
+    // Remove pattern-matched keys (metrics, friend requests, comprehensive demo)
+    const prefixes = [
+      '@perched_metrics_impact_',
+      '@perched_friend_requests_',
+      '@perched_demo_comprehensive_last_seeded_at_',
+    ];
+    if (isWeb() && typeof window !== 'undefined') {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && prefixes.some((p) => k.startsWith(p))) keysToRemove.push(k);
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    } else if (store && typeof store.getAllKeys === 'function') {
+      const allKeys: string[] = await store.getAllKeys();
+      const toRemove = allKeys.filter((k: string) => prefixes.some((p) => k.startsWith(p)));
+      if (toRemove.length) await store.multiRemove(toRemove);
+    }
+
+    // Mark cleanup complete
+    await setItem(DEMO_CLEANUP_KEY, userId);
+  } catch {
+    // ignore — best effort
   }
 }
 

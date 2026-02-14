@@ -93,26 +93,36 @@ export async function queryCheckinsBySpot(
     query = query.limit(limit);
   }
 
-  const primary = await query.get();
-  if (!primary.empty) return primary;
+  try {
+    const primary = await query.get();
+    if (!primary.empty) return primary;
+  } catch (e: any) {
+    // Missing composite index — fall through to legacy
+    if (!String(e?.message || '').includes('index')) throw e;
+  }
 
   // Fallback to legacy schema: spotId + timestamp
-  let legacyQuery: firebase.firestore.Query = db
-    .collection('checkins')
-    .where('spotId', '==', spotId)
-    .orderBy('timestamp', orderBy);
+  try {
+    let legacyQuery: firebase.firestore.Query = db
+      .collection('checkins')
+      .where('spotId', '==', spotId)
+      .orderBy('timestamp', orderBy);
 
-  if (startDate) {
-    legacyQuery = legacyQuery.where('timestamp', '>=', fb.firestore.Timestamp.fromDate(startDate));
-  }
-  if (endDate) {
-    legacyQuery = legacyQuery.where('timestamp', '<', fb.firestore.Timestamp.fromDate(endDate));
-  }
-  if (limit > 0) {
-    legacyQuery = legacyQuery.limit(limit);
-  }
+    if (startDate) {
+      legacyQuery = legacyQuery.where('timestamp', '>=', fb.firestore.Timestamp.fromDate(startDate));
+    }
+    if (endDate) {
+      legacyQuery = legacyQuery.where('timestamp', '<', fb.firestore.Timestamp.fromDate(endDate));
+    }
+    if (limit > 0) {
+      legacyQuery = legacyQuery.limit(limit);
+    }
 
-  return legacyQuery.get();
+    return legacyQuery.get();
+  } catch {
+    // Missing index — return empty result
+    return db.collection('checkins').where('spotPlaceId', '==', spotId).limit(limit).get();
+  }
 }
 
 /**
@@ -198,19 +208,28 @@ export async function queryAllCheckins(
   }
 
   // Try primary schema: createdAt
-  let primaryQuery = query.orderBy('createdAt', 'desc');
-  if (startAfter) primaryQuery = primaryQuery.startAfter(startAfter);
-  primaryQuery = primaryQuery.limit(limit);
+  try {
+    let primaryQuery = query.orderBy('createdAt', 'desc');
+    if (startAfter) primaryQuery = primaryQuery.startAfter(startAfter);
+    primaryQuery = primaryQuery.limit(limit);
 
-  const primary = await primaryQuery.get();
-  if (!primary.empty) return primary;
+    const primary = await primaryQuery.get();
+    if (!primary.empty) return primary;
+  } catch (e: any) {
+    if (!String(e?.message || '').includes('index')) throw e;
+  }
 
   // Fallback to legacy schema: timestamp
-  let legacyQuery = query.orderBy('timestamp', 'desc');
-  if (startAfter) legacyQuery = legacyQuery.startAfter(startAfter);
-  legacyQuery = legacyQuery.limit(limit);
+  try {
+    let legacyQuery = query.orderBy('timestamp', 'desc');
+    if (startAfter) legacyQuery = legacyQuery.startAfter(startAfter);
+    legacyQuery = legacyQuery.limit(limit);
 
-  return legacyQuery.get();
+    return legacyQuery.get();
+  } catch {
+    // Missing index — return unordered results
+    return query.limit(limit).get();
+  }
 }
 
 /**
@@ -268,6 +287,11 @@ export function subscribeApprovedCheckins(
       }
     },
     (error: Error) => {
+      // Gracefully handle missing index errors — just return empty
+      if (String(error?.message || '').includes('index')) {
+        onUpdate([]);
+        return;
+      }
       console.error('subscribeApprovedCheckins error:', error);
     }
   );

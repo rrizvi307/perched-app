@@ -415,6 +415,20 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Performance metrics (write-only from clients, read by admins)
+    match /performanceMetrics/{metricId} {
+      allow create: if isAuthenticated();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Gamification profiles
+    match /gamification/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
     // B2B keys/logs must be server-managed
     match /apiKeys/{apiKeyId} {
       allow read: if isAdmin();
