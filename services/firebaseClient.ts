@@ -897,12 +897,17 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
         if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
         snapshot = await legacyQ.get();
       } catch {
-        // Both indexes missing — fall back to unordered query
+        // Both indexes missing — fall back to unordered query (can't paginate)
         snapshot = await db
           .collection('checkins')
           .where('visibility', '==', 'public')
           .limit(limit)
           .get();
+        const items: any[] = [];
+        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        const payload = { items, lastCursor: null };
+        setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
+        return payload;
       }
     }
     const items: any[] = [];
@@ -1037,6 +1042,7 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
   // Try primary schema first (createdAt)
   let primaryUnsub: (() => void) | null = null;
   let legacyUnsub: (() => void) | null = null;
+  let settled = false;
 
   const primaryQuery = db
     .collection('checkins')
@@ -1044,6 +1050,7 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
     .orderBy('createdAt', 'desc')
     .limit(limit);
   primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+    if (settled) return;
     if (!snapshot.empty) {
       const items: any[] = [];
       snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
@@ -1080,6 +1087,8 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
       }));
     }
   }, () => {
+    if (settled) return;
+    settled = true;
     // Index missing — try legacy
     const legacyQuery = db
       .collection('checkins')
@@ -1247,8 +1256,34 @@ export function subscribeCheckinsForUsers(userIds: string[], onUpdate: (items: a
           legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
           snapshotsByBatch.set(batchIndex, items);
           scheduleFlush();
+        }, () => {
+          // Index error on legacy — one-time unordered get
+          db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
+            .then((snap: any) => {
+              const items: any[] = [];
+              snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+              snapshotsByBatch.set(batchIndex, items);
+              scheduleFlush();
+            })
+            .catch(() => {
+              snapshotsByBatch.set(batchIndex, []);
+              scheduleFlush();
+            });
         }));
       }
+    }, () => {
+      // Index error on primary — one-time unordered get
+      db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
+        .then((snap: any) => {
+          const items: any[] = [];
+          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        })
+        .catch(() => {
+          snapshotsByBatch.set(batchIndex, []);
+          scheduleFlush();
+        });
     }));
 
     unsubs.push(() => {

@@ -1,7 +1,6 @@
 import { createAccountWithEmail, deleteCurrentUser, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
 import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
-import { isDemoMode } from '@/services/demoMode';
 import { logEvent } from '@/services/logEvent';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import React, { createContext, useContext, useState } from 'react';
@@ -98,15 +97,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             phone: data?.phone || u.phoneNumber || cached?.phone || null,
             photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || null,
           };
+          // One-time cleanup: purge any demo data before rendering real user's feed
+          if (!u.uid.startsWith('demo-')) {
+            await cleanupDemoDataForRealUser(u.uid);
+          }
+
           setUser(merged);
           void saveUserProfile(merged);
           void syncPendingCheckins(2);
           void syncPendingProfileUpdates(2);
-
-          // One-time cleanup: purge any demo data that leaked into this real user's local storage
-          if (!isDemoMode() && !u.uid.startsWith('demo-')) {
-            void cleanupDemoDataForRealUser(u.uid);
-          }
 
           if (cached) {
             const backfill: Record<string, any> = {};

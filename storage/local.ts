@@ -1211,6 +1211,10 @@ const CLEANUP_VERSION = '2';
  * Called once per real user on app launch; idempotent via a "cleaned" flag.
  */
 export async function cleanupDemoDataForRealUser(userId: string) {
+  // Always clear the demo flag first, regardless of storage state (BUG A fix)
+  try { (global as any).__PERCHED_DEMO = false; } catch {}
+  try { if (typeof window !== 'undefined') (window as any).__PERCHED_DEMO = false; } catch {}
+
   try {
     const store = await getAsyncStorage();
     const getItem = (key: string) => {
@@ -1230,14 +1234,6 @@ export async function cleanupDemoDataForRealUser(userId: string) {
     const cleaned = await getItem(DEMO_CLEANUP_KEY);
     if (cleaned === `${userId}:${CLEANUP_VERSION}`) return;
 
-    // Check if demo data exists
-    const seeded = await getItem(DEMO_SEED_KEY);
-    if (!seeded) {
-      // Mark as cleaned even if nothing to clean, so we don't check every launch
-      await setItem(DEMO_CLEANUP_KEY, `${userId}:${CLEANUP_VERSION}`);
-      return;
-    }
-
     // Remove demo checkins from checkins array (keep real ones)
     const rawCheckins = await getItem(KEY);
     if (rawCheckins) {
@@ -1247,8 +1243,13 @@ export async function cleanupDemoDataForRealUser(userId: string) {
         return !id.startsWith('demo-c') && !id.startsWith('demo-self-');
       });
       await setItem(KEY, JSON.stringify(filtered));
-      memory = filtered.slice();
     }
+
+    // Always purge demo entries from in-memory array (BUG D fix)
+    memory = memory.filter((c: any) => {
+      const id = String(c?.id || '');
+      return !id.startsWith('demo-c') && !id.startsWith('demo-self-');
+    });
 
     // Remove demo keys
     await removeItem(DEMO_SEED_KEY);
