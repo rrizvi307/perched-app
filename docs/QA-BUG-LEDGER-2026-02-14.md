@@ -101,8 +101,8 @@
 ### Android emulator
 - Command: `npm run android`
 - Result:
-  - Blocked in this environment due missing local Android SDK/ADB (`ANDROID_HOME` unset, `adb ENOENT`).
-  - This is an environment prerequisite issue, not an app code regression.
+  - **NOT VERIFIED** in this environment due missing local Android SDK/ADB (`ANDROID_HOME` unset, `adb ENOENT`).
+  - No Android UI/flow assertions are claimed in this report.
 
 ### Additional defects found during simulator run
 
