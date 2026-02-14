@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
+import { isPermissionDeniedError } from './permissionErrors';
 
 const PERF_METRICS_KEY = '@perched_perf_metrics_v1';
 const MAX_SAMPLE_COUNT = 80;
@@ -261,8 +262,7 @@ async function persistMetricsToFirestore(): Promise<void> {
     lastFirestorePersist = now;
     console.log(`Persisted ${entries.length} performance metrics to Firestore`);
   } catch (error: any) {
-    const code = String(error?.code || '');
-    if (code === 'permission-denied') {
+    if (isPermissionDeniedError(error)) {
       if (!perfFirestorePermissionWarned) {
         perfFirestorePermissionWarned = true;
         console.warn('Skipping performanceMetrics Firestore persistence: permission denied');

@@ -48,3 +48,17 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Contributing
+
+Before opening a PR or pushing release-critical changes, run:
+
+```bash
+npm run check:all
+```
+
+If you only changed app client code (no Cloud Functions), run:
+
+```bash
+npm run check:app
+```

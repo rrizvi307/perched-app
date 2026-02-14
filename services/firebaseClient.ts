@@ -905,6 +905,7 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
           .get();
         const items: any[] = [];
         snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
         const payload = { items, lastCursor: null };
         setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
         return payload;
@@ -915,8 +916,9 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
       items.push({ id: doc.id, ...(doc.data() || {}) });
     });
 
-    // lastCursor is the createdAt value of the last item (useful as a startAfter cursor)
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const lastCursor = items.length
+      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+      : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
@@ -950,7 +952,9 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
     items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const lastCursor = items.length
+      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+      : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
@@ -975,7 +979,9 @@ export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
     const snapshot = await queryAllCheckins(db, { limit, startAfter, approvedOnly: true });
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const lastCursor = items.length
+      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+      : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
@@ -1044,6 +1050,34 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
   let legacyUnsub: (() => void) | null = null;
   let settled = false;
 
+  const runUnorderedFallback = () => {
+    db.collection('checkins')
+      .where('visibility', '==', 'public')
+      .limit(limit)
+      .get()
+      .then((snap: any) => {
+        const items: any[] = [];
+        snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+        onUpdate(items);
+      })
+      .catch(() => onUpdate([]));
+  };
+
+  const startLegacySubscription = () => {
+    if (legacyUnsub) return;
+    const legacyQuery = db
+      .collection('checkins')
+      .where('visibility', '==', 'public')
+      .orderBy('timestamp', 'desc')
+      .limit(limit);
+    legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+      const items: any[] = [];
+      legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+      onUpdate(items);
+    }, runUnorderedFallback));
+  };
+
   const primaryQuery = db
     .collection('checkins')
     .where('visibility', '==', 'public')
@@ -1063,55 +1097,13 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
       }
     } else {
       // No results, try legacy schema (timestamp)
-      const legacyQuery = db
-        .collection('checkins')
-        .where('visibility', '==', 'public')
-        .orderBy('timestamp', 'desc')
-        .limit(limit);
-      legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
-        const items: any[] = [];
-        legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-        onUpdate(items);
-      }, () => {
-        // Both indexes missing — unordered fallback
-        db.collection('checkins')
-          .where('visibility', '==', 'public')
-          .limit(limit)
-          .get()
-          .then((snap: any) => {
-            const items: any[] = [];
-            snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-            onUpdate(items);
-          })
-          .catch(() => onUpdate([]));
-      }));
+      startLegacySubscription();
     }
   }, () => {
     if (settled) return;
     settled = true;
     // Index missing — try legacy
-    const legacyQuery = db
-      .collection('checkins')
-      .where('visibility', '==', 'public')
-      .orderBy('timestamp', 'desc')
-      .limit(limit);
-    legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
-      const items: any[] = [];
-      legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-      onUpdate(items);
-    }, () => {
-      // Both indexes missing — unordered fallback
-      db.collection('checkins')
-        .where('visibility', '==', 'public')
-        .limit(limit)
-        .get()
-        .then((snap: any) => {
-          const items: any[] = [];
-          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-          onUpdate(items);
-        })
-        .catch(() => onUpdate([]));
-    }));
+    startLegacySubscription();
   }));
 
   // Return combined unsubscribe function
@@ -1235,6 +1227,32 @@ export function subscribeCheckinsForUsers(userIds: string[], onUpdate: (items: a
     const primaryQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('createdAt', 'desc').limit(limit);
     let legacyUnsub: (() => void) | null = null;
 
+    const runUnorderedFallback = () => {
+      db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
+        .then((snap: any) => {
+          const items: any[] = [];
+          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        })
+        .catch(() => {
+          snapshotsByBatch.set(batchIndex, []);
+          scheduleFlush();
+        });
+    };
+
+    const startLegacySubscription = () => {
+      if (legacyUnsub) return;
+      const legacyQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('timestamp', 'desc').limit(limit);
+      legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+        const items: any[] = [];
+        legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+      }, runUnorderedFallback));
+    };
+
     const primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
       if (!snapshot.empty) {
         // Primary schema has data, use it
@@ -1250,40 +1268,11 @@ export function subscribeCheckinsForUsers(userIds: string[], onUpdate: (items: a
         }
       } else {
         // No results from primary, try legacy schema (timestamp)
-        const legacyQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('timestamp', 'desc').limit(limit);
-        legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
-          const items: any[] = [];
-          legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-          snapshotsByBatch.set(batchIndex, items);
-          scheduleFlush();
-        }, () => {
-          // Index error on legacy — one-time unordered get
-          db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
-            .then((snap: any) => {
-              const items: any[] = [];
-              snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-              snapshotsByBatch.set(batchIndex, items);
-              scheduleFlush();
-            })
-            .catch(() => {
-              snapshotsByBatch.set(batchIndex, []);
-              scheduleFlush();
-            });
-        }));
+        startLegacySubscription();
       }
     }, () => {
-      // Index error on primary — one-time unordered get
-      db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
-        .then((snap: any) => {
-          const items: any[] = [];
-          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-          snapshotsByBatch.set(batchIndex, items);
-          scheduleFlush();
-        })
-        .catch(() => {
-          snapshotsByBatch.set(batchIndex, []);
-          scheduleFlush();
-        });
+      // Index error on primary — fall back to legacy subscription
+      startLegacySubscription();
     }));
 
     unsubs.push(() => {
