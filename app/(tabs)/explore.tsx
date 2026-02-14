@@ -502,6 +502,20 @@ export default function Explore() {
 
         if (!active) return;
         setSpots(buildSpotsFromCheckins(items, loc || mapFocus || null));
+        // If remote returned nothing but local has data, use local as fallback
+        if (items.length === 0) {
+          const local = await getCheckins();
+          const localScoped = (local || []).filter((item: any) => {
+            if (user && blockedIdSet.has(item.userId)) return false;
+            if (!passesScope(item)) return false;
+            if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
+            if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
+            return true;
+          });
+          if (localScoped.length > 0 && active) {
+            setSpots(buildSpotsFromCheckins(localScoped, loc || mapFocus || null));
+          }
+        }
         setStatus(null);
         setLoading(false);
         void syncPendingCheckins(1);

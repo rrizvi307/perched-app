@@ -888,13 +888,22 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
       snapshot = await q.get();
     } catch {
       // Legacy timestamp fallback
-      let legacyQ: any = db
-        .collection('checkins')
-        .where('visibility', '==', 'public')
-        .orderBy('timestamp', 'desc')
-        .limit(limit);
-      if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
-      snapshot = await legacyQ.get();
+      try {
+        let legacyQ: any = db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .orderBy('timestamp', 'desc')
+          .limit(limit);
+        if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
+        snapshot = await legacyQ.get();
+      } catch {
+        // Both indexes missing — fall back to unordered query
+        snapshot = await db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .limit(limit)
+          .get();
+      }
     }
     const items: any[] = [];
     snapshot.forEach((doc: any) => {
@@ -1056,8 +1065,44 @@ export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) 
         const items: any[] = [];
         legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
         onUpdate(items);
+      }, () => {
+        // Both indexes missing — unordered fallback
+        db.collection('checkins')
+          .where('visibility', '==', 'public')
+          .limit(limit)
+          .get()
+          .then((snap: any) => {
+            const items: any[] = [];
+            snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+            onUpdate(items);
+          })
+          .catch(() => onUpdate([]));
       }));
     }
+  }, () => {
+    // Index missing — try legacy
+    const legacyQuery = db
+      .collection('checkins')
+      .where('visibility', '==', 'public')
+      .orderBy('timestamp', 'desc')
+      .limit(limit);
+    legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+      const items: any[] = [];
+      legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+      onUpdate(items);
+    }, () => {
+      // Both indexes missing — unordered fallback
+      db.collection('checkins')
+        .where('visibility', '==', 'public')
+        .limit(limit)
+        .get()
+        .then((snap: any) => {
+          const items: any[] = [];
+          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          onUpdate(items);
+        })
+        .catch(() => onUpdate([]));
+    }));
   }));
 
   // Return combined unsubscribe function

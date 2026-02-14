@@ -1204,6 +1204,7 @@ export async function resetDemoNetwork() {
 }
 
 const DEMO_CLEANUP_KEY = 'spot_demo_cleaned_v1';
+const CLEANUP_VERSION = '2';
 
 /**
  * One-time cleanup: remove all demo-seeded data from local storage for a real user.
@@ -1227,13 +1228,13 @@ export async function cleanupDemoDataForRealUser(userId: string) {
 
     // Check if already cleaned
     const cleaned = await getItem(DEMO_CLEANUP_KEY);
-    if (cleaned === userId) return;
+    if (cleaned === `${userId}:${CLEANUP_VERSION}`) return;
 
     // Check if demo data exists
     const seeded = await getItem(DEMO_SEED_KEY);
     if (!seeded) {
       // Mark as cleaned even if nothing to clean, so we don't check every launch
-      await setItem(DEMO_CLEANUP_KEY, userId);
+      await setItem(DEMO_CLEANUP_KEY, `${userId}:${CLEANUP_VERSION}`);
       return;
     }
 
@@ -1296,7 +1297,7 @@ export async function cleanupDemoDataForRealUser(userId: string) {
     }
 
     // Mark cleanup complete
-    await setItem(DEMO_CLEANUP_KEY, userId);
+    await setItem(DEMO_CLEANUP_KEY, `${userId}:${CLEANUP_VERSION}`);
   } catch {
     // ignore — best effort
   }
