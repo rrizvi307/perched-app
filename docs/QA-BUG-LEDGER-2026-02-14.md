@@ -89,12 +89,95 @@
 - Added contributing guidance to run pre-commit checks.
   - File: `README.md`
 
+## Emulator QA rerun (2026-02-14)
+
+### iOS simulator
+- Command: `npm run ios`
+- Result:
+  - First attempt failed due CocoaPods CDN/source setup.
+  - Fixed by configuring CocoaPods CDN repo, then reran with elevated permissions (required for `~/.cocoapods` writes in this environment).
+  - Build + install succeeded on simulator (`iPhone 16e`), app launched.
+
+### Android emulator
+- Command: `npm run android`
+- Result:
+  - Blocked in this environment due missing local Android SDK/ADB (`ANDROID_HOME` unset, `adb ENOENT`).
+  - This is an environment prerequisite issue, not an app code regression.
+
+### Additional defects found during simulator run
+
+### 4) Dev client deep-link noise (`Invalid deep link`)
+- Steps to reproduce:
+  1. Launch iOS dev client via `npm run ios`.
+  2. Observe incoming URL `app.perched://expo-development-client/?url=...`.
+- Expected:
+  - Dev client bootstrap URLs should be ignored silently.
+- Actual:
+  - App logged `Invalid deep link` warning.
+- Root cause:
+  - Deep link handler attempted to parse Expo dev-client bootstrap URLs as app routes.
+- Fix implemented:
+  - Added dev-link guard and short-circuit handling.
+  - Files: `services/deepLinkGuards.ts`, `services/deepLinking.ts`
+- Regression test:
+  - Added: `services/__tests__/deepLinkGuards.test.ts`
+
+### 5) Runtime require cycle warning (`firebaseClient -> perfMonitor -> firebaseClient`)
+- Steps to reproduce:
+  1. Launch iOS dev client.
+  2. Observe metro warning about require cycle.
+- Expected:
+  - No top-level circular import between telemetry and firebase client modules.
+- Actual:
+  - Cycle warning shown in runtime logs.
+- Root cause:
+  - `perfMonitor` imported `ensureFirebase` at module load, while `firebaseClient` imports telemetry.
+- Fix implemented:
+  - Replaced top-level import with lazy dynamic import inside `persistMetricsToFirestore`.
+  - File: `services/perfMonitor.ts`
+- Regression test:
+  - Not added for this runtime module-load warning (integration-level behavior); smoke-verified via simulator relaunch logs.
+
+### 6) Duplicate notification setup side effects on app boot
+- Steps to reproduce:
+  1. Launch iOS dev client.
+  2. Observe repeated analytics events for `push_notification_enabled` / `notification_scheduled`.
+- Expected:
+  - Notification setup should run once per authenticated user session.
+- Actual:
+  - Setup side effects could re-run as `user` object identity changed, producing duplicate calls/logs.
+- Root cause:
+  - `_layout` notification effect depended on full `user` object and lacked idempotence guard.
+- Fix implemented:
+  - Scoped effect dependency to `user?.id`.
+  - Added `notificationsInitializedForUser` guard to prevent duplicate setup per user id.
+  - File: `app/_layout.tsx`
+- Regression test:
+  - Not added (behavior depends on app lifecycle/auth object churn); smoke-verified via simulator relaunch.
+
+### 7) User checkins path returned empty on missing composite index
+- Steps to reproduce:
+  1. Launch iOS simulator and sign in.
+  2. Observe log: `getCheckinsForUserRemote query fallback to empty` with Firestore index error.
+- Expected:
+  - Missing user-checkins index should degrade to unordered user query, not empty response.
+- Actual:
+  - Catch block returned `{ items: [], lastCursor: null }` immediately.
+- Root cause:
+  - `getCheckinsForUserRemote` catch path treated index failures as hard empty fallback.
+- Fix implemented:
+  - Added unordered fallback query (`where('userId','==', userId).limit(limit)`), then local sort + cursor derivation.
+  - File: `services/firebaseClient.ts`
+- Regression test:
+  - Not added (requires firebase client mocking harness); covered by simulator smoke run and existing schema fallback tests.
+
 ## Verification (post-fix)
 
 Passed:
 - `npx tsc --noEmit`
 - `npm run lint`
-- `npm test -- --runInBand` (246/246)
+- `npm test -- --runInBand` (248/248)
 - `npx expo export --platform ios --clear --output-dir .expo-export`
 - `npm --prefix functions run build`
 - `npm --prefix functions test -- --runInBand` (40/40)
+- `npm run check:all`

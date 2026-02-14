@@ -62,3 +62,15 @@ If you only changed app client code (no Cloud Functions), run:
 ```bash
 npm run check:app
 ```
+
+## How To Verify
+
+1. Run the full gate:
+
+```bash
+npm run check:all
+```
+
+2. Review the captured verification transcript:
+
+- `docs/CI-VERIFY-2026-02-14.txt`

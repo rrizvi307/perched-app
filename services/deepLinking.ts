@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { track } from './analytics';
 import { captureException } from './sentry';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isExpoDevClientLink } from './deepLinkGuards';
 
 const APP_SCHEME = 'perched://';
 const UNIVERSAL_LINK_PREFIX = 'https://perched.app';
@@ -145,6 +146,10 @@ export function parseDeepLink(url: string): {
  */
 export function handleDeepLink(url: string) {
   try {
+    if (isExpoDevClientLink(url)) {
+      return true;
+    }
+
     const result = parseDeepLink(url);
     if (!result || !result.route) {
       console.warn('Invalid deep link:', url);

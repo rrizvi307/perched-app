@@ -1,0 +1,140 @@
+# CI Verification Log (2026-02-14)
+
+$ CI=1 npm run start -- --clear
+
+> perched-app@1.0.0 start
+> expo start --clear
+
+env: load .env.local
+env: export GOOGLE_MAPS_API_KEY FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET FIREBASE_MESSAGING_SENDER_ID FIREBASE_APP_ID FIREBASE_MEASUREMENT_ID OPENAI_API_KEY YELP_API_KEY FOURSQUARE_API_KEY INTEL_V1_ENABLED
+Starting project at /Users/rehanrizvi/perched-app
+
+$ npx tsc --noEmit
+
+$ npm run lint
+
+> perched-app@1.0.0 lint
+> expo lint
+
+env: load .env.local
+env: export GOOGLE_MAPS_API_KEY FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET FIREBASE_MESSAGING_SENDER_ID FIREBASE_APP_ID FIREBASE_MEASUREMENT_ID OPENAI_API_KEY YELP_API_KEY FOURSQUARE_API_KEY INTEL_V1_ENABLED
+
+$ npm test -- --runInBand
+
+> perched-app@1.0.0 test
+> jest --runInBand
+
+
+$ npx expo export --platform ios --clear --output-dir .expo-export
+env: load .env.local
+env: export GOOGLE_MAPS_API_KEY FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET FIREBASE_MESSAGING_SENDER_ID FIREBASE_APP_ID FIREBASE_MEASUREMENT_ID OPENAI_API_KEY YELP_API_KEY FOURSQUARE_API_KEY INTEL_V1_ENABLED
+Starting Metro Bundler
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓░░░░░░░ 58.5% ( 819/1071)
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (3165/3165)
+iOS Bundled 5724ms node_modules/expo-router/entry.js (3165 modules)
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (3165/3165)
+
+› Assets (26):
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Brands.ttf (134 kB)
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Regular.ttf (33.7 kB)
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Solid.ttf (203 kB)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon-mask.png (653 B)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon.png (4 variations | 566 B)
+node_modules/@react-navigation/elements/lib/module/assets/clear-icon.png (4 variations | 425 B)
+node_modules/@react-navigation/elements/lib/module/assets/close-icon.png (4 variations | 235 B)
+node_modules/@react-navigation/elements/lib/module/assets/search-icon.png (3 variations | 582 B)
+node_modules/expo-router/assets/arrow_down.png (9.46 kB)
+node_modules/expo-router/assets/error.png (469 B)
+node_modules/expo-router/assets/file.png (138 B)
+node_modules/expo-router/assets/forward.png (188 B)
+node_modules/expo-router/assets/pkg.png (364 B)
+node_modules/expo-router/assets/sitemap.png (465 B)
+node_modules/expo-router/assets/unmatched.png (4.75 kB)
+
+› ios bundles (1):
+_expo/static/js/ios/entry-7cd5292acb9fb5c5df1eb20c39011fa6.hbc (10.7 MB)
+
+› Files (1):
+metadata.json (1.97 kB)
+
+Exported: .expo-export
+
+$ npm --prefix functions run build
+
+> build
+> tsc
+
+
+$ npm --prefix functions test -- --runInBand
+
+> test
+> jest --runInBand --runInBand
+
+
+$ npm run check:all
+
+> perched-app@1.0.0 check:all
+> npm run check:app && npm --prefix functions run build && npm --prefix functions test -- --runInBand
+
+
+> perched-app@1.0.0 check:app
+> npm run typecheck && npm run lint && npm test -- --runInBand && npm run build:ios:export
+
+
+> perched-app@1.0.0 typecheck
+> tsc --noEmit
+
+
+> perched-app@1.0.0 lint
+> expo lint
+
+env: load .env.local
+env: export GOOGLE_MAPS_API_KEY FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET FIREBASE_MESSAGING_SENDER_ID FIREBASE_APP_ID FIREBASE_MEASUREMENT_ID OPENAI_API_KEY YELP_API_KEY FOURSQUARE_API_KEY INTEL_V1_ENABLED
+
+> perched-app@1.0.0 test
+> jest --runInBand
+
+
+> perched-app@1.0.0 build:ios:export
+> expo export --platform ios --clear --output-dir .expo-export
+
+env: load .env.local
+env: export GOOGLE_MAPS_API_KEY FIREBASE_API_KEY FIREBASE_AUTH_DOMAIN FIREBASE_PROJECT_ID FIREBASE_STORAGE_BUCKET FIREBASE_MESSAGING_SENDER_ID FIREBASE_APP_ID FIREBASE_MEASUREMENT_ID OPENAI_API_KEY YELP_API_KEY FOURSQUARE_API_KEY INTEL_V1_ENABLED
+Starting Metro Bundler
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 78.7% (2290/2590)
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (3165/3165)
+iOS Bundled 5920ms node_modules/expo-router/entry.js (3165 modules)
+iOS node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (3165/3165)
+
+› Assets (26):
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Brands.ttf (134 kB)
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Regular.ttf (33.7 kB)
+node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/FontAwesome5_Solid.ttf (203 kB)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon-mask.png (653 B)
+node_modules/@react-navigation/elements/lib/module/assets/back-icon.png (4 variations | 566 B)
+node_modules/@react-navigation/elements/lib/module/assets/clear-icon.png (4 variations | 425 B)
+node_modules/@react-navigation/elements/lib/module/assets/close-icon.png (4 variations | 235 B)
+node_modules/@react-navigation/elements/lib/module/assets/search-icon.png (3 variations | 582 B)
+node_modules/expo-router/assets/arrow_down.png (9.46 kB)
+node_modules/expo-router/assets/error.png (469 B)
+node_modules/expo-router/assets/file.png (138 B)
+node_modules/expo-router/assets/forward.png (188 B)
+node_modules/expo-router/assets/pkg.png (364 B)
+node_modules/expo-router/assets/sitemap.png (465 B)
+node_modules/expo-router/assets/unmatched.png (4.75 kB)
+
+› ios bundles (1):
+_expo/static/js/ios/entry-7cd5292acb9fb5c5df1eb20c39011fa6.hbc (10.7 MB)
+
+› Files (1):
+metadata.json (1.97 kB)
+
+Exported: .expo-export
+
+> build
+> tsc
+
+
+> test
+> jest --runInBand --runInBand
+

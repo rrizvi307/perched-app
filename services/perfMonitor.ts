@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { ensureFirebase } from './firebaseClient';
 import { isPermissionDeniedError } from './permissionErrors';
 
 const PERF_METRICS_KEY = '@perched_perf_metrics_v1';
@@ -207,6 +206,7 @@ async function persistMetricsToFirestore(): Promise<void> {
     // unless rules explicitly allow this collection (recommended only for controlled diagnostics).
     if (!isPerfFirestorePersistenceEnabled()) return;
 
+    const { ensureFirebase } = await import('./firebaseClient');
     const fb = await ensureFirebase();
     if (!fb) {
       console.warn('Firebase not available, skipping metrics persistence');

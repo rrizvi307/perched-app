@@ -946,8 +946,26 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     try {
       snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
     } catch (error) {
-      devLog('getCheckinsForUserRemote query fallback to empty', error);
-      return { items: [], lastCursor: null };
+      devLog('getCheckinsForUserRemote index fallback to unordered query', error);
+      try {
+        const fallbackSnapshot = await db
+          .collection('checkins')
+          .where('userId', '==', userId)
+          .limit(limit)
+          .get();
+        const fallbackItems: any[] = [];
+        fallbackSnapshot.forEach((doc: any) => fallbackItems.push({ id: doc.id, ...(doc.data() || {}) }));
+        fallbackItems.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+        const fallbackCursor = fallbackItems.length
+          ? (fallbackItems[fallbackItems.length - 1].createdAt ?? fallbackItems[fallbackItems.length - 1].timestamp ?? null)
+          : null;
+        const fallbackPayload = { items: fallbackItems, lastCursor: fallbackCursor };
+        setCachedValue(checkinsCache, cacheKey, fallbackPayload, CHECKINS_CACHE_MAX);
+        return fallbackPayload;
+      } catch (unorderedError) {
+        devLog('getCheckinsForUserRemote unordered fallback to empty', unorderedError);
+        return { items: [], lastCursor: null };
+      }
     }
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));

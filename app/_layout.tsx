@@ -55,6 +55,7 @@ function InnerApp() {
   const mapsKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY;
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
+  const notificationsInitializedForUser = useRef<string | null>(null);
   const { showToast } = useToast();
   const lightNavTheme = {
     ...DefaultTheme,
@@ -141,7 +142,8 @@ function InnerApp() {
   }, [colorScheme]);
 
   useEffect(() => {
-    if (!user || isDemoMode()) return;
+    const userId = user?.id;
+    if (!userId || isDemoMode()) return;
     const runSync = async () => {
       try {
         const res = await syncPendingCheckins(5);
@@ -155,14 +157,18 @@ function InnerApp() {
     // Initialize push notifications
     const setupNotifications = async () => {
       try {
+        if (notificationsInitializedForUser.current === userId) return;
+        notificationsInitializedForUser.current = userId;
+
         const token = await initPushNotifications();
-        if (token && user?.id) {
+        if (token) {
           // Save token to Firebase for Cloud Function notifications
-          await savePushToken(user.id, token);
+          await savePushToken(userId, token);
         }
         // Schedule weekly recap
         await scheduleWeeklyRecap();
       } catch (error) {
+        notificationsInitializedForUser.current = null;
         console.error('Failed to setup notifications:', error);
       }
     };
@@ -204,7 +210,7 @@ function InnerApp() {
         notificationSubscription.remove();
       };
     }
-  }, [showToast, user]);
+  }, [showToast, user?.id]);
 
   return (
     <ThemeProvider key={`${colorScheme}-${preference}`} value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
