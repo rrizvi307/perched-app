@@ -75,9 +75,58 @@ describe('buildPlaceIntelligence', () => {
       ratingConsensus: 0,
       trustScore: 0,
     });
+    expect(result.scoreBreakdown.wifi.source).toBe('none');
+    expect(result.scoreBreakdown.noise.source).toBe('none');
     expect(typeof result.modelVersion).toBe('string');
     expect(typeof result.generatedAt).toBe('number');
     expect(result.generatedAt).toBeGreaterThan(0);
+  });
+
+  it('applies inferred fallbacks and marks inferred sources when checkin data is missing', async () => {
+    const result = await buildPlaceIntelligence({
+      placeName: 'Inferred Signals Spot',
+      placeId: 'inferred-signals-1',
+      inferred: {
+        noise: 'loud',
+        noiseConfidence: 0.9,
+        hasWifi: true,
+        wifiConfidence: 0.8,
+        goodForStudying: true,
+      },
+    });
+
+    expect(result.scoreBreakdown.wifi.source).toBe('inferred');
+    expect(result.scoreBreakdown.noise.source).toBe('inferred');
+    expect(result.scoreBreakdown.laptop.source).toBe('inferred');
+    expect(result.scoreBreakdown.wifi.value).toBeGreaterThan(0);
+    expect(result.scoreBreakdown.noise.value).toBeGreaterThan(0);
+    expect(result.scoreBreakdown.laptop.value).toBeGreaterThan(0);
+  });
+
+  it('caps confidence for inferred-only spots with no checkins', async () => {
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        externalSignals: [
+          { source: 'yelp', rating: 4.7, reviewCount: 1200 },
+          { source: 'foursquare', rating: 4.7, reviewCount: 1200 },
+        ],
+      })
+    );
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Inferred Confidence Cap Spot',
+      placeId: 'inferred-cap-1',
+      location: { lat: 29.76, lng: -95.37 },
+      inferred: {
+        noise: 'moderate',
+        noiseConfidence: 1,
+        hasWifi: true,
+        wifiConfidence: 1,
+      },
+    });
+
+    expect(result.scoreBreakdown.wifi.source).toBe('inferred');
+    expect(result.confidence).toBeLessThanOrEqual(0.35);
   });
 
   it('clamps workScore at upper bound for strong signals', async () => {

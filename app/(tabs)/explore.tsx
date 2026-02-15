@@ -6,6 +6,7 @@ import {
   isIntelV1Enabled,
 } from '@/components/ui/FilterBottomSheet';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
 import SpotListItem from '@/components/ui/spot-list-item';
 import { SpotIntelligence } from '@/components/ui/SpotIntelligence';
 import { RecommendationsCard } from '@/components/ui/recommendations-card';
@@ -256,6 +257,7 @@ export default function Explore() {
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
 
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
+  const [breakdownSpotKey, setBreakdownSpotKey] = useState<string | null>(null);
 
   const slowQueryNoticeRef = useRef(false);
   const mapViewRef = useRef<any>(null);
@@ -739,6 +741,15 @@ export default function Explore() {
             openNow: spot?.openNow,
             types: spot?.types,
             checkins: spot?._checkins || [],
+            inferred: spot?.intel
+              ? {
+                  noise: spot.intel.inferredNoise ?? null,
+                  noiseConfidence: spot.intel.inferredNoiseConfidence,
+                  hasWifi: spot.intel.hasWifi,
+                  wifiConfidence: spot.intel.wifiConfidence,
+                  goodForStudying: spot.intel.goodForStudying,
+                }
+              : null,
           });
           if (active) {
             setIntelligenceMap((prev) => {
@@ -770,6 +781,18 @@ export default function Explore() {
     if (!selectedSpotKey) return null;
     return intelligenceMap.get(selectedSpotKey) || null;
   }, [selectedSpotKey, intelligenceMap]);
+  const breakdownIntelligence = useMemo(
+    () => (breakdownSpotKey ? intelligenceMap.get(breakdownSpotKey) || null : null),
+    [breakdownSpotKey, intelligenceMap],
+  );
+  const breakdownCheckinCount = useMemo(() => {
+    if (!breakdownSpotKey) return 0;
+    const target = listData.find((spot) => {
+      const key = spotKey(spot?.example?.spotPlaceId || spot?.placeId || '', spot?.name || '');
+      return key === breakdownSpotKey;
+    });
+    return target?._checkins?.length ?? 0;
+  }, [breakdownSpotKey, listData]);
 
   useEffect(() => {
     if (!selectedSpot || !selectedSpotKey || selectedSpotIntelligence) return;
@@ -788,6 +811,15 @@ export default function Explore() {
             openNow: selectedSpot?.openNow,
             types: selectedSpot?.types,
             checkins: selectedSpot?._checkins || [],
+            inferred: selectedSpot?.intel
+              ? {
+                  noise: selectedSpot.intel.inferredNoise ?? null,
+                  noiseConfidence: selectedSpot.intel.inferredNoiseConfidence,
+                  hasWifi: selectedSpot.intel.hasWifi,
+                  wifiConfidence: selectedSpot.intel.wifiConfidence,
+                  goodForStudying: selectedSpot.intel.goodForStudying,
+                }
+              : null,
           });
           if (!active) return;
           setIntelligenceMap((prev) => {
@@ -985,6 +1017,10 @@ export default function Explore() {
               showRanks={!deferredQuery.trim()}
               intelligence={intelligence}
               onPress={() => openSpotSheet(item)}
+              onScorePress={() => {
+                const scoreKey = spotKey(item?.example?.spotPlaceId || item?.placeId || '', item?.name || '');
+                setBreakdownSpotKey(scoreKey);
+              }}
               describeSpot={describeSpot}
               formatDistance={formatDistance}
             />
@@ -1138,6 +1174,15 @@ export default function Explore() {
             </Pressable>
           </Pressable>
         </Pressable>
+      ) : null}
+
+      {breakdownIntelligence ? (
+        <ScoreBreakdownSheet
+          visible={!!breakdownSpotKey}
+          intelligence={breakdownIntelligence}
+          checkinCount={breakdownCheckinCount}
+          onDismiss={() => setBreakdownSpotKey(null)}
+        />
       ) : null}
 
       <FilterBottomSheet

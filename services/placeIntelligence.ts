@@ -54,8 +54,23 @@ export type ContextSignal = {
   precipitationMm?: number;
 };
 
+export type ScoreFactorSource = 'checkin' | 'inferred' | 'api' | 'none';
+
+export type ScoreBreakdown = {
+  wifi: { value: number; source: ScoreFactorSource };
+  noise: { value: number; source: ScoreFactorSource };
+  busyness: { value: number; source: ScoreFactorSource };
+  laptop: { value: number; source: ScoreFactorSource };
+  tags: { value: number; source: ScoreFactorSource };
+  externalRating: { value: number; source: ScoreFactorSource };
+  venueType: { value: number };
+  openStatus: { value: number };
+  momentum: { value: number };
+};
+
 export type PlaceIntelligence = {
   workScore: number;
+  scoreBreakdown: ScoreBreakdown;
   crowdLevel: 'low' | 'moderate' | 'high' | 'unknown';
   bestTime: 'morning' | 'afternoon' | 'evening' | 'late' | 'anytime';
   confidence: number;
@@ -79,6 +94,13 @@ type BuildIntelligenceInput = {
   types?: string[];
   checkins?: any[];
   tagScores?: Record<string, number>;
+  inferred?: {
+    noise?: 'quiet' | 'moderate' | 'loud' | null;
+    noiseConfidence?: number;
+    hasWifi?: boolean;
+    wifiConfidence?: number;
+    goodForStudying?: boolean;
+  } | null;
 };
 
 const INTELLIGENCE_TTL_MS = 15 * 60 * 1000;
@@ -97,6 +119,17 @@ const telemetryThrottle = new Map<string, number>();
 function getFallbackPlaceIntelligence(): PlaceIntelligence {
   return {
     workScore: 50,
+    scoreBreakdown: {
+      wifi: { value: 0, source: 'none' },
+      noise: { value: 0, source: 'none' },
+      busyness: { value: 0, source: 'none' },
+      laptop: { value: 0, source: 'none' },
+      tags: { value: 0, source: 'none' },
+      externalRating: { value: 0, source: 'none' },
+      venueType: { value: 0 },
+      openStatus: { value: 0 },
+      momentum: { value: 0 },
+    },
     crowdLevel: 'unknown',
     bestTime: 'anytime',
     confidence: 0.1,
@@ -158,6 +191,7 @@ function toNoiseLevel(value: unknown) {
   if (value === 'quiet') return 2;
   if (value === 'moderate') return 3;
   if (value === 'lively') return 4;
+  if (value === 'loud') return 4;
   return null;
 }
 
@@ -784,15 +818,45 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const busynessValues = checkins.map((c: any) => c?.busyness).filter((v: any) => typeof v === 'number') as number[];
   const noiseValues = checkins.map((c: any) => toNoiseLevel(c?.noiseLevel)).filter((v: any) => typeof v === 'number') as number[];
 
-  const wifiAvg = avg(wifiValues);
-  const busynessAvg = avg(busynessValues);
-  const noiseAvg = avg(noiseValues);
+  let wifiAvg = avg(wifiValues);
+  let noiseAvg = avg(noiseValues);
   const laptopVotes = checkins
     .map((c: any) => c?.laptopFriendly)
     .filter((v: any) => typeof v === 'boolean') as boolean[];
-  const laptopPct = laptopVotes.length
+  let laptopPct = laptopVotes.length
     ? (laptopVotes.filter(Boolean).length / laptopVotes.length) * 100
     : null;
+
+  let wifiSource: ScoreFactorSource = wifiAvg !== null ? 'checkin' : 'none';
+  let noiseSource: ScoreFactorSource = noiseAvg !== null ? 'checkin' : 'none';
+  let laptopSource: ScoreFactorSource = laptopPct !== null ? 'checkin' : 'none';
+  let usedInferred = false;
+
+  const inf = input.inferred;
+  if (inf) {
+    if (wifiAvg === null && inf.hasWifi === true) {
+      const conf = typeof inf.wifiConfidence === 'number' ? inf.wifiConfidence : 0.5;
+      wifiAvg = 3.5 * 0.6 * conf;
+      wifiSource = 'inferred';
+      usedInferred = true;
+    }
+    if (noiseAvg === null && inf.noise) {
+      const mapped = toNoiseLevel(inf.noise);
+      if (mapped !== null) {
+        const conf = typeof inf.noiseConfidence === 'number' ? inf.noiseConfidence : 0.5;
+        noiseAvg = mapped * 0.6 * conf;
+        noiseSource = 'inferred';
+        usedInferred = true;
+      }
+    }
+    if (laptopPct === null && inf.goodForStudying === true) {
+      laptopPct = 60 * 0.6;
+      laptopSource = 'inferred';
+      usedInferred = true;
+    }
+  }
+
+  const busynessAvg = avg(busynessValues);
 
   const hourBuckets = { morning: 0, afternoon: 0, evening: 0, late: 0 } as Record<
     'morning' | 'afternoon' | 'evening' | 'late',
@@ -855,6 +919,17 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     cafePenalty +
     momentumBoost;
   const workScore = clamp(Math.round(score), 0, 100);
+  const scoreBreakdown: ScoreBreakdown = {
+    wifi: { value: round((wifiAvg || 0) * 10, 1), source: wifiSource },
+    noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 7 : 0, 1), source: noiseSource },
+    busyness: { value: round(adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0, 1), source: adjustedBusynessAvg !== null ? 'checkin' : 'none' },
+    laptop: { value: round((laptopPct || 0) * 0.22, 1), source: laptopSource },
+    tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 18, 1), source: tagBoost > 0 ? 'checkin' : 'none' },
+    externalRating: { value: round((externalRatingAvg || 0) * 6, 1), source: externalRatingAvg ? 'api' : 'none' },
+    venueType: { value: round(studyTypeBoost - cafePenalty, 1) },
+    openStatus: { value: round(openBoost, 1) },
+    momentum: { value: round(momentumBoost, 1) },
+  };
 
   const avgExternalReviewCount = avg(
     externalSignals
@@ -863,10 +938,11 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   );
   const reviewSupport = clamp((avgExternalReviewCount || 0) / 500, 0, 0.12);
   const externalTrustSupport = externalSignalMeta.trustScore * 0.16;
+  const maxConfidence = usedInferred && checkins.length === 0 ? 0.35 : 0.97;
   const confidence = clamp(
     round(reliability.score * 0.72 + externalTrustSupport + reviewSupport, 2),
     0.1,
-    0.97
+    maxConfidence
   );
 
   const crowdForecast = buildCrowdForecast(checkins, confidence);
@@ -899,6 +975,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
 
   const payload: PlaceIntelligence = {
     workScore,
+    scoreBreakdown,
     crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,
     confidence,

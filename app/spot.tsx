@@ -5,6 +5,7 @@ import { Body, H1, Label } from '@/components/ui/typography';
 import { PolishedHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
 import { PolishedCard } from '@/components/ui/polished-card';
+import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
@@ -54,6 +55,7 @@ export default function SpotDetail() {
   const [tagVotes, setTagVotes] = useState<Record<string, boolean>>({});
   const [tagVariant, setTagVariant] = useState<keyof typeof TAG_VARIANTS>('core5');
   const [intelligence, setIntelligence] = useState<PlaceIntelligence | null>(null);
+  const [showBreakdown, setShowBreakdown] = useState(false);
   const displayName = place?.name || nameParam || 'Spot';
   const coords = place?.location || checkins.find((c) => c.spotLatLng)?.spotLatLng || checkins.find((c) => c.location)?.location;
   const category = classifySpotCategory(displayName, place?.types);
@@ -277,6 +279,15 @@ export default function SpotDetail() {
           types: place?.types,
           checkins: visibleCheckins,
           tagScores: aggregatedTagScores,
+          inferred: place?.intel
+            ? {
+                noise: place.intel.inferredNoise ?? null,
+                noiseConfidence: place.intel.inferredNoiseConfidence,
+                hasWifi: place.intel.hasWifi,
+                wifiConfidence: place.intel.wifiConfidence,
+                goodForStudying: place.intel.goodForStudying,
+              }
+            : null,
         });
         if (active) setIntelligence(payload);
       } catch {
@@ -286,7 +297,7 @@ export default function SpotDetail() {
     return () => {
       active = false;
     };
-  }, [displayName, placeId, coords, place?.openNow, place?.types, visibleCheckins, aggregatedTagScores]);
+  }, [displayName, placeId, coords, place?.openNow, place?.types, place?.intel, visibleCheckins, aggregatedTagScores]);
 
   const mapUrl = useMemo(() => {
     if (!coords) return null;
@@ -339,10 +350,10 @@ export default function SpotDetail() {
         <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
           <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
           <View style={styles.intelRow}>
-            <View style={styles.intelItem}>
+            <Pressable onPress={() => setShowBreakdown(true)} style={styles.intelItem}>
               <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{intelligence.workScore}</Text>
               <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
-            </View>
+            </Pressable>
             <View style={styles.intelItem}>
               <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
               <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
@@ -601,6 +612,15 @@ export default function SpotDetail() {
       ) : (
         <Body style={{ color: muted, marginTop: 12 }}>No recent check-ins yet.</Body>
       )}
+
+      {intelligence ? (
+        <ScoreBreakdownSheet
+          visible={showBreakdown}
+          intelligence={intelligence}
+          checkinCount={visibleCheckins.length}
+          onDismiss={() => setShowBreakdown(false)}
+        />
+      ) : null}
     </ThemedView>
   );
 }

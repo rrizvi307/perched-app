@@ -16,6 +16,7 @@ type SpotListItemProps = {
   maxSpotCount: number;
   showRanks: boolean;
   intelligence?: PlaceIntelligence | null;
+  onScorePress?: () => void;
   onPress: () => void;
   describeSpot: (name?: string, address?: string) => string;
   formatDistance: (distanceKm?: number) => string;
@@ -32,6 +33,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   maxSpotCount,
   showRanks,
   intelligence,
+  onScorePress,
   onPress,
   describeSpot,
   formatDistance,
@@ -86,7 +88,9 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
         {intelligence ? (
           <View style={styles.smartRow}>
-            <View
+            <Pressable
+              onPress={onScorePress}
+              disabled={!onScorePress}
               style={[
                 styles.workScoreBadge,
                 {
@@ -99,7 +103,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
               <Text style={{ color: workScoreTone, fontSize: 11, fontWeight: '800' }}>
                 {Math.round(intelligence.workScore)} Work Score
               </Text>
-            </View>
+            </Pressable>
             {intelligence.bestTime !== 'anytime' ? (
               <View style={[styles.bestTimeChip, { borderColor: border }]}>
                 <Text style={{ color: muted, fontSize: 10, fontWeight: '700', textTransform: 'capitalize' }}>
@@ -305,6 +309,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     prevProps.intelligence?.bestTime === nextProps.intelligence?.bestTime &&
     (prevProps.intelligence?.highlights?.[0] || '') === (nextProps.intelligence?.highlights?.[0] || '') &&
     (prevProps.intelligence?.useCases?.[0] || '') === (nextProps.intelligence?.useCases?.[0] || '') &&
+    prevProps.onScorePress === nextProps.onScorePress &&
     prevProps.tags.length === nextProps.tags.length &&
     prevProps.item.openNow === nextProps.item.openNow
   );
