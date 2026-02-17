@@ -21,6 +21,7 @@ import {
 } from './cacheInvalidation';
 import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
 import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
+import { isPermissionDeniedError } from './permissionErrors';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -1056,6 +1057,12 @@ async function callSocialGraphMutation(action: string, payload: Record<string, a
   }
 }
 
+function raiseSocialGraphPermissionError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because friend graph permissions are blocked. Re-authenticate and retry.`
+  );
+}
+
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
@@ -1514,7 +1521,14 @@ export async function unfollowUserRemote(currentUserId: string, targetUserId: st
   );
   batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
   batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      raiseSocialGraphPermissionError('remove this friend');
+    }
+    throw error;
+  }
   invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
@@ -1717,7 +1731,14 @@ export async function sendFriendRequest(fromId: string, toId: string) {
     batch.set(targetUserRef, { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
     batch.delete(reverseRef);
     batch.delete(db.collection('friendRequests').doc(forwardRequestId));
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (error) {
+      if (isPermissionDeniedError(error)) {
+        raiseSocialGraphPermissionError('accept this friend request');
+      }
+      throw error;
+    }
     invalidateUserFriendsCache([fromId, toId]);
     return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
   }
@@ -1785,7 +1806,14 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
   batch.delete(db.collection('friendRequests').doc(requestId));
   batch.delete(db.collection('friendRequests').doc(`${toId}_${fromId}`));
   batch.delete(db.collection('friendRequests').doc(`${fromId}_${toId}`));
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      raiseSocialGraphPermissionError('accept this friend request');
+    }
+    throw error;
+  }
   invalidateUserFriendsCache([fromId, toId]);
 }
 
@@ -1866,7 +1894,14 @@ export async function blockUserRemote(currentUserId: string, targetUserId: strin
   );
   batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
   batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      raiseSocialGraphPermissionError('block this user');
+    }
+    throw error;
+  }
   invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 

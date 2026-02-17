@@ -270,8 +270,6 @@ export default function FindFriendsScreen() {
     <ThemedView style={{ flex: 1 }}>
       <PolishedHeader
         title="Find Friends"
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
       />
 
       {/* Search Bar */}

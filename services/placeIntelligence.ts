@@ -835,22 +835,27 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const inf = input.inferred;
   if (inf) {
     if (wifiAvg === null && inf.hasWifi === true) {
-      const conf = typeof inf.wifiConfidence === 'number' ? inf.wifiConfidence : 0.5;
-      wifiAvg = 3.5 * 0.6 * conf;
+      const conf = clamp(typeof inf.wifiConfidence === 'number' ? inf.wifiConfidence : 0.6, 0.2, 1);
+      wifiAvg = clamp(2.8 + conf * 1.4, 1, 5);
       wifiSource = 'inferred';
       usedInferred = true;
     }
     if (noiseAvg === null && inf.noise) {
       const mapped = toNoiseLevel(inf.noise);
       if (mapped !== null) {
-        const conf = typeof inf.noiseConfidence === 'number' ? inf.noiseConfidence : 0.5;
-        noiseAvg = mapped * 0.6 * conf;
+        const conf = clamp(typeof inf.noiseConfidence === 'number' ? inf.noiseConfidence : 0.6, 0.2, 1);
+        noiseAvg = clamp(mapped * conf + 3 * (1 - conf), 1, 5);
         noiseSource = 'inferred';
         usedInferred = true;
       }
     }
     if (laptopPct === null && inf.goodForStudying === true) {
-      laptopPct = 60 * 0.6;
+      const confidenceBits = [
+        typeof inf.wifiConfidence === 'number' ? inf.wifiConfidence : null,
+        typeof inf.noiseConfidence === 'number' ? inf.noiseConfidence : null,
+      ].filter((value): value is number => typeof value === 'number');
+      const confidence = confidenceBits.length ? clamp(avg(confidenceBits) || 0.6, 0.35, 1) : 0.6;
+      laptopPct = clamp(52 + confidence * 32, 0, 100);
       laptopSource = 'inferred';
       usedInferred = true;
     }
@@ -901,6 +906,15 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     (tagScores['Seating'] || 0) * 1 +
     (tagScores['Quiet'] || 0) * 1.1;
   const typeText = `${input.placeName || ''} ${(input.types || []).join(' ')}`.toLowerCase();
+  const seatingSignal = (tagScores['Seating'] || 0) + (tagScores['Outdoor Seating'] || 0) * 0.6;
+  const workFriendlyType = /library|cowork|coffee|cafe|study|workspace|bookstore/.test(typeText);
+  const mixedUseType = /restaurant|bakery|hotel|lounge/.test(typeText);
+  const outdoorOnlyType = /park|trail|playground|stadium|field|outdoor|plaza|beach/.test(typeText);
+  const hasLaptopSignals = (laptopPct || 0) >= 35 || checkins.some((c: any) => c?.laptopFriendly === true);
+  const hasConnectivitySignals = (wifiAvg || 0) >= 2.4 || (tagScores['Wi-Fi'] || 0) > 0 || (tagScores['Outlets'] || 0) > 0;
+  const hasSeatingSignals = seatingSignal > 0 || hasLaptopSignals;
+  const noSeatingHardStop = outdoorOnlyType && !hasSeatingSignals && !hasConnectivitySignals && checkins.length < 2;
+  const venueBaseline = workFriendlyType ? 22 : mixedUseType ? 12 : outdoorOnlyType ? 0 : 8;
   const studyTypeBoost =
     /library|cowork|university|study|workspace|bookstore/.test(typeText) ? 8 : 0;
   const cafePenalty = /bar|night_club|casino/.test(typeText) ? 6 : 0;
@@ -908,6 +922,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const momentumBoost = momentum.trend === 'improving' ? 2 : momentum.trend === 'declining' ? -2 : 0;
 
   const score =
+    venueBaseline +
     (wifiAvg || 0) * 10 +
     (laptopPct || 0) * 0.22 +
     (noiseAvg !== null ? (6 - noiseAvg) * 7 : 0) +
@@ -918,7 +933,12 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     openBoost -
     cafePenalty +
     momentumBoost;
-  const workScore = clamp(Math.round(score), 0, 100);
+  let workScore = clamp(Math.round(score), 0, 100);
+  if (noSeatingHardStop) {
+    workScore = 0;
+  } else if (workScore <= 0) {
+    workScore = workFriendlyType ? 30 : 18;
+  }
   const scoreBreakdown: ScoreBreakdown = {
     wifi: { value: round((wifiAvg || 0) * 10, 1), source: wifiSource },
     noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 7 : 0, 1), source: noiseSource },
@@ -926,7 +946,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     laptop: { value: round((laptopPct || 0) * 0.22, 1), source: laptopSource },
     tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 18, 1), source: tagBoost > 0 ? 'checkin' : 'none' },
     externalRating: { value: round((externalRatingAvg || 0) * 6, 1), source: externalRatingAvg ? 'api' : 'none' },
-    venueType: { value: round(studyTypeBoost - cafePenalty, 1) },
+    venueType: { value: round(venueBaseline + studyTypeBoost - cafePenalty, 1) },
     openStatus: { value: round(openBoost, 1) },
     momentum: { value: round(momentumBoost, 1) },
   };
@@ -964,6 +984,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   if (crowdForecast[0]?.level === 'low') highlights.push('Low crowd now');
   if (externalSignals.some((s) => (s.reviewCount || 0) >= 100)) highlights.push('Strong external reviews');
   if (input.openNow === true) highlights.push('Open now');
+  if (noSeatingHardStop) highlights.push('Not suitable for laptop work');
   if (externalSignalMeta.providerCount >= 2 && externalSignalMeta.ratingConsensus >= 0.72 && highlights.length < 4) {
     highlights.push('Cross-source consensus');
   }

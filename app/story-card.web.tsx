@@ -1,13 +1,12 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { buildStoryCard, renderStoryCardSVG } from '@/services/storyCards';
 import { withAlpha } from '@/utils/colors';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
@@ -20,7 +19,6 @@ function normalizeStoryMode(input: unknown, fallback: StoryMode): StoryMode {
 
 export default function StoryCardWebScreen() {
   const { user } = useAuth();
-  const router = useRouter();
   const params = useLocalSearchParams();
   const systemScheme = useColorScheme();
 
@@ -65,23 +63,6 @@ export default function StoryCardWebScreen() {
   return (
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          accessibilityLabel="Back"
-          style={({ pressed }) => [
-            styles.headerIcon,
-            { borderColor: border, backgroundColor: pressed ? highlight : withAlpha(card, 0.92) },
-          ]}
-        >
-          <IconSymbol name="chevron.left" size={18} color={text} />
-        </Pressable>
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={{ color: text, fontWeight: '800', letterSpacing: 0.2 }}>Story card</Text>
-          <Text style={{ color: muted, fontSize: 12, marginTop: 2 }}>{mode === 'dark' ? 'Dark' : 'Light'}</Text>
-        </View>
-        <View style={{ width: 44 }} />
-      </View>
 
       <View style={styles.body}>
         <View style={[styles.previewFrame, { borderColor: withAlpha(border, 0.9), backgroundColor: withAlpha(card, 0.98) }]}>
@@ -122,21 +103,6 @@ export default function StoryCardWebScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerIcon: {
-    width: 44,
-    height: 38,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   body: { flex: 1, paddingHorizontal: 18, paddingTop: 8 },
   previewFrame: {
     borderRadius: 24,

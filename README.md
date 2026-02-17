@@ -1,76 +1,168 @@
-# Welcome to your Expo app 👋
+# Perched
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+**Discover the best cafes and work spots near you — powered by real check-ins, NLP intelligence, and community data.**
 
-## Get started
+Perched is a full-stack mobile app that helps students, remote workers, and freelancers find the perfect place to work. Every cafe, library, and coworking space gets a smart **Work Score** computed from real visitor check-ins, NLP-inferred review signals, and external data sources.
 
-1. Install dependencies
+[App Store](https://perched.app) · [Website](https://perched.app)
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Start the app
+## Features
 
-   ```bash
-   npx expo start
-   ```
+### Smart Work Score Engine
+Every spot gets a 0–100 score computed from 9 weighted factors: WiFi speed, noise level, crowd density, laptop friendliness, community tags, external ratings (Yelp/Foursquare), venue type, open status, and weekly momentum trends. Users can tap any score to see a full **score breakdown** with per-factor contributions and data source attribution.
 
-In the output, you'll find options to open the app in a
+### NLP-Inferred Intelligence
+For spots with zero check-ins, the system falls back to NLP-inferred signals extracted from review text — inferring WiFi availability, noise levels, and study-friendliness with confidence scoring. Inferred data is dampened (0.6×) so it never outweighs real check-in data.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### Real-Time Crowd Forecasting
+A 6-hour crowd forecast built from historical check-in patterns, weighted by hourly busyness averages and weather context signals (via Open-Meteo API). Weather impact adjusts crowd predictions — rain increases expected indoor traffic.
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+### Check-In System with Gamification
+Quick check-ins capture WiFi speed, noise, busyness, drink quality, and price via emoji-based scales. Daily streaks, achievements (exploration, social, streak, time-based, discovery, loyalty categories), and campus leaderboards drive engagement. Confetti celebrations trigger on milestones.
 
-## Get a fresh project
+### External Signal Aggregation
+A Firebase Cloud Function proxies requests to Yelp and Foursquare APIs, normalizing ratings, review counts, price levels, and categories into a unified trust score with provider diversity and rating consensus metrics.
 
-When you're ready, run:
+### Social Layer
+Friend system with add-by-handle/email/contacts, activity feed with animated reaction bar (spring bounce + haptic feedback), "here now" live presence, and campus-scoped discovery.
 
-```bash
-npm run reset-project
+---
+
+## Architecture
+
+```
+React Native (Expo SDK 52) + TypeScript
+├── app/                    # Expo Router file-based navigation (38 screens)
+│   ├── (tabs)/             # Bottom tab navigation (Feed, Explore, Profile)
+│   ├── checkin.tsx          # Multi-step check-in flow with EXIF GPS extraction
+│   ├── spot.tsx             # Spot detail with scroll-aware header + animated score
+│   └── ...
+├── components/ui/          # 37 reusable components (design system)
+├── services/
+│   ├── placeIntelligence.ts # Work Score computation engine (950+ lines)
+│   ├── spotIntelligence.ts  # NLP review analysis pipeline
+│   ├── firebaseClient.ts    # Firestore operations + caching layer
+│   ├── gamification.ts      # Streaks, achievements, stats tracking
+│   └── ...
+├── constants/
+│   ├── theme.ts             # Color system (light/dark) + platform-aware fonts
+│   └── tokens.ts            # Spacing + radius design tokens
+└── functions/               # Firebase Cloud Functions (signal proxy, admin)
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Key Technical Decisions
 
-## Learn more
+| Decision | Rationale |
+|----------|-----------|
+| **react-native-reanimated** for all animation | Worklet-driven animations run on UI thread — zero JS thread blocking for confetti, spring bounces, scroll-aware headers |
+| **File-based routing (Expo Router)** | Type-safe navigation, deep linking support, modal presentation for check-ins |
+| **Firestore + local AsyncStorage** | Offline draft queue syncs up to 5 pending check-ins on app resume |
+| **External signal proxy via Cloud Functions** | Keeps API keys server-side, normalizes multi-provider data, adds auth + App Check validation |
+| **Confidence-weighted scoring** | Reliability model accounts for sample size, data coverage, variance penalty, and external trust scores |
 
-To learn more about developing your project with Expo, look at the following resources:
+### Intelligence Pipeline
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```
+Check-in data (WiFi, noise, busyness, laptop)
+    ↓
+NLP review fallbacks (when no check-ins exist)
+    ↓ dampened at 0.6× confidence
+9-factor weighted score computation
+    ↓
+Reliability scoring (sample size × coverage × variance × external trust)
+    ↓
+Momentum detection (7-day rolling window, recent vs. previous period)
+    ↓
+Weather context adjustment (Open-Meteo API → crowd level delta)
+    ↓
+Work Score (0-100) + Crowd Forecast (6hr) + Score Breakdown
+```
 
-## Join the community
+---
 
-Join our community of developers creating universal apps.
+## Design System
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- **Colors:** Purple primary (#8B5CF6) / Pink accent (#EC4899) with full light/dark mode
+- **Typography:** SF Pro Display (iOS) / Avenir Next (Android) with 7-level type scale
+- **Spacing:** 12-token system (6px–32px)
+- **Components:** PolishedCard (spring entrance), SkeletonLoader (shimmer), EmptyState (staggered animation), CelebrationOverlay (confetti burst)
 
-## Contributing
+---
 
-Before opening a PR or pushing release-critical changes, run:
+## Micro-Interactions
+
+- **Confetti celebration** on check-in publish and streak milestones (7/14/30/50/100 days)
+- **Spring bounce + haptic** on reaction emoji press
+- **Tag vote squish** animation with medium haptic
+- **Save button pop** with scale spring
+- **Score count-up** from 0 → actual via `useAnimatedReaction`
+- **Scroll-aware compact header** fades in on spot detail scroll
+- **Skeleton shimmer** cards during explore loading
+- **Daily nudge card** on feed when no check-in today
+
+---
+
+## Getting Started
 
 ```bash
+# Install dependencies
+npm install
+
+# Start development server
+npx expo start
+
+# Run on iOS simulator
+npx expo run:ios
+
+# Run full verification gate
 npm run check:all
 ```
 
-If you only changed app client code (no Cloud Functions), run:
+### Environment Variables
+
+Create `.env.local` with:
+```
+GOOGLE_MAPS_API_KEY=
+FIREBASE_API_KEY=
+FIREBASE_AUTH_DOMAIN=
+FIREBASE_PROJECT_ID=
+FIREBASE_STORAGE_BUCKET=
+FIREBASE_MESSAGING_SENDER_ID=
+FIREBASE_APP_ID=
+YELP_API_KEY=
+FOURSQUARE_API_KEY=
+INTEL_V1_ENABLED=true
+```
+
+---
+
+## Testing
 
 ```bash
+# App tests (255 tests across 13 suites)
 npm run check:app
-```
 
-## How To Verify
+# Cloud Functions tests (40 tests)
+npm run check:functions
 
-1. Run the full gate:
-
-```bash
+# Full gate (app + functions + iOS export)
 npm run check:all
 ```
 
-2. Review the captured verification transcript:
+---
 
-- `docs/CI-VERIFY-2026-02-14.txt`
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Mobile | React Native, Expo SDK 52, TypeScript |
+| Navigation | Expo Router (file-based) |
+| Animation | react-native-reanimated 4.1 |
+| Maps | react-native-maps + Google Maps API |
+| Backend | Firebase (Auth, Firestore, Cloud Functions, Storage) |
+| External Data | Yelp Fusion API, Foursquare Places API, Open-Meteo Weather API |
+| Charts | victory-native |
+| Haptics | expo-haptics |
+| Images | expo-image |

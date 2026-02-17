@@ -45,8 +45,6 @@ export default function CampusSyncScreen() {
     <ThemedView style={{ flex: 1 }}>
       <PolishedHeader
         title="University Sync"
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
       />
 
       {!selectedCampus ? (

@@ -20,6 +20,7 @@ import { initAnalytics } from '@/services/analytics';
 import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken } from '@/services/firebaseClient';
+import { AppHeader } from '@/components/ui/app-header';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
@@ -215,32 +216,37 @@ function InnerApp() {
   return (
     <ThemeProvider key={`${colorScheme}-${preference}`} value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
       <Stack
-	        screenOptions={{
-	          headerShown: false,
-	          gestureEnabled: true,
-	          fullScreenGestureEnabled: true,
-	          gestureResponseDistance: { start: 70 },
-	        }}
-	      >
+        screenOptions={{
+          headerShown: true,
+          header: (props) => <AppHeader {...props} />,
+          gestureEnabled: true,
+          fullScreenGestureEnabled: true,
+          gestureResponseDistance: { start: 70 },
+        }}
+      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="signin" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="signup" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="checkin" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="signin" options={{ title: 'Perched' }} />
+        <Stack.Screen name="signup" options={{ title: 'Create Account' }} />
+        <Stack.Screen name="onboarding" options={{ title: 'Welcome' }} />
+        <Stack.Screen name="checkin" options={{ title: 'Check In', presentation: 'modal' }} />
+        <Stack.Screen name="spot" options={{ title: 'Spot' }} />
+        <Stack.Screen name="story-card" options={{ title: 'Story Card' }} />
+        <Stack.Screen name="story-card.web" options={{ title: 'Story Card' }} />
         <Stack.Screen
           name="settings"
-	          options={{
-	            headerShown: false,
-	            gestureEnabled: true,
-	            fullScreenGestureEnabled: true,
-	            gestureResponseDistance: { start: 70 },
-	          }}
-	        />
-        <Stack.Screen name="verify" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="upgrade" options={{ headerShown: false }} />
-        <Stack.Screen name="premium-upgrade" options={{ headerShown: false }} />
-        <Stack.Screen name="achievements" options={{ headerShown: false }} />
-        <Stack.Screen name="admin-observability" options={{ headerShown: false }} />
+          options={{
+            title: 'Settings',
+            gestureEnabled: true,
+            fullScreenGestureEnabled: true,
+            gestureResponseDistance: { start: 70 },
+          }}
+        />
+        <Stack.Screen name="verify" options={{ title: 'Verify Account' }} />
+        <Stack.Screen name="upgrade" options={{ title: 'Account' }} />
+        <Stack.Screen name="premium-upgrade" options={{ title: 'Upgrade' }} />
+        <Stack.Screen name="achievements" options={{ title: 'Achievements' }} />
+        <Stack.Screen name="admin-observability" options={{ title: 'Observability' }} />
+        <Stack.Screen name="admin-reports" options={{ title: 'Reports' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />

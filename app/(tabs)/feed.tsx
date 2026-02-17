@@ -21,6 +21,7 @@ import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { getReactions, type ReactionType } from '@/services/social';
+import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
@@ -153,11 +154,13 @@ function toDrinkQualityLabel(value: unknown): string | null {
 
 function FeedPhoto({
 	uri,
+	itemId,
 	background,
 	muted,
 	pending,
 }: {
 	uri?: string | null;
+	itemId?: string;
 	background: string;
 	muted: string;
 	pending?: boolean;
@@ -175,7 +178,10 @@ function FeedPhoto({
 			source={uri}
 			contentFit="cover"
 			style={[styles.cardImage, { backgroundColor: background }]}
-			onError={() => setFailed(true)}
+			onError={() => {
+				devLog('feed photo load failed', { id: itemId || null, uri: uri || null });
+				setFailed(true);
+			}}
 		/>
 	);
 }
@@ -222,13 +228,12 @@ function FeedPhoto({
 
 	const resolvePhotoSrc = useCallback(
 		(item: any) => {
-			const candidate = item?.photoUrl || item?.photoURL || item?.imageUrl || item?.imageURL || item?.image;
-			if (typeof candidate === 'string' && isWeb) {
-				if (candidate.startsWith('file:') || candidate.startsWith('blob:')) {
-					return item?.image || null;
-				}
+			const resolved = resolvePhotoUri(item);
+			if (!resolved) return null;
+			if (isWeb && (resolved.startsWith('file:') || resolved.startsWith('blob:'))) {
+				return isPhotoUriRenderable(item?.image) ? item.image : resolved;
 			}
-			return candidate;
+			return resolved;
 		},
 		[isWeb]
 	);
@@ -321,19 +326,29 @@ function FeedPhoto({
 	// Feed shows full history; "live" is a 24h status indicated with a dot.
 	const filterExpired = useCallback((list: Checkin[]) => list, []);
 
-	const needsDailyCheckin = useMemo(() => {
-		if (!lastSelfCheckinAt) return true;
-		const last = new Date(lastSelfCheckinAt);
-		if (Number.isNaN(last.getTime())) return true;
-		const now = new Date();
-		return last.getFullYear() !== now.getFullYear()
-			|| last.getMonth() !== now.getMonth()
-			|| last.getDate() !== now.getDate();
-	}, [lastSelfCheckinAt]);
-	const selfCheckinCount = useMemo(() => {
-		if (!user?.id) return 0;
-		return items.reduce((sum, it) => sum + (it.userId === user.id ? 1 : 0), 0);
-	}, [items, user?.id]);
+	const hasCheckedInToday = useMemo(() => {
+		if (!items?.length && lastSelfCheckinAt) {
+			const last = new Date(lastSelfCheckinAt);
+			if (!Number.isNaN(last.getTime())) {
+				const today = new Date();
+				return (
+					last.getFullYear() === today.getFullYear() &&
+					last.getMonth() === today.getMonth() &&
+					last.getDate() === today.getDate()
+				);
+			}
+		}
+		if (!items?.length || !user?.id) return false;
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const todayMs = today.getTime();
+		return items.some((item: any) => {
+			const createdAt = item?.createdAt;
+			if (!createdAt) return false;
+			const ms = typeof createdAt === 'number' ? createdAt : toMillis(createdAt) || new Date(createdAt).getTime();
+			return ms >= todayMs && item?.userId === user.id;
+		});
+	}, [items, user?.id, lastSelfCheckinAt]);
 
 	const mergeRemoteWithLocal = useCallback(async (remoteItems: any[]) => {
 		try {
@@ -762,8 +777,7 @@ function FeedPhoto({
 			const toTs = (value: any) => toMillis(value) || 0;
 			const now = Date.now();
 			const hasRenderablePhoto = (it: any) => {
-				const candidate = it?.photoUrl || it?.photoURL || it?.imageUrl || it?.imageURL || it?.image;
-				return typeof candidate === 'string' && candidate.trim().length > 0;
+				return !!resolvePhotoUri(it);
 			};
 			const map: Record<string, { item: Checkin; total: number; live: number }> = {};
 			visibleItems.forEach((it) => {
@@ -977,10 +991,30 @@ function FeedPhoto({
 								</View>
 							</View>
 						) : null}
-						{user && needsDailyCheckin ? (
-							<Text style={{ color: muted, marginTop: 10 }}>
-								{selfCheckinCount === 0 ? 'Get your streak going — tap in today.' : 'Keep your streak going — tap in today.'}
-							</Text>
+						{user && !hasCheckedInToday ? (
+							<Pressable
+								onPress={() => router.push('/checkin')}
+								style={({ pressed }) => [
+									{
+										marginHorizontal: 16,
+										marginBottom: 12,
+										padding: 14,
+										borderRadius: 16,
+										borderWidth: 1,
+										borderColor: border,
+										backgroundColor: pressed ? withAlpha(primary, 0.08) : withAlpha(primary, 0.04),
+										flexDirection: 'row',
+										alignItems: 'center',
+									},
+								]}
+							>
+								<Text style={{ fontSize: 24, marginRight: 10 }}>📍</Text>
+								<View style={{ flex: 1 }}>
+									<Text style={{ color: text, fontWeight: '700', fontSize: 14 }}>Where are you working today?</Text>
+									<Text style={{ color: muted, fontSize: 12, marginTop: 2 }}>Tap to check in and keep your streak going</Text>
+								</View>
+								<Text style={{ color: primary, fontWeight: '700', fontSize: 13 }}>Check in</Text>
+							</Pressable>
 						) : null}
 						<View style={styles.filterRow}>
 							{user ? (
@@ -1169,7 +1203,13 @@ function FeedPhoto({
 								) : null}
 							</View>
 
-							<FeedPhoto uri={photo} background={background} muted={muted} pending={item.photoPending} />
+							<FeedPhoto
+								uri={photo}
+								itemId={String((item as any).id || (item as any).clientId || '')}
+								background={background}
+								muted={muted}
+								pending={item.photoPending}
+							/>
 							<View style={styles.cardContent}>
 								<Pressable
 									onPress={() => {

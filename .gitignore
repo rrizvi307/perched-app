@@ -57,3 +57,7 @@ spot-app-*-firebase-adminsdk-*.json
 .expo-export/
 # local logs
 logs/
+
+# local/process docs (keep README if present)
+docs/*
+!docs/README.md

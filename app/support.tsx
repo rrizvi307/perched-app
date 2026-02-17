@@ -1,10 +1,10 @@
 import { ThemedView } from '@/components/themed-view';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { openExternalLink } from '@/services/externalLinks';
 import { gapStyle } from '@/utils/layout';
 import Constants from 'expo-constants';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import * as Linking from 'expo-linking';
 
 export default function Support() {
   const text = useThemeColor({}, 'text');
@@ -18,9 +18,7 @@ export default function Support() {
   async function emailSupport(subject: string) {
     if (!supportEmail) return;
     const mailto = `mailto:${supportEmail}?subject=${encodeURIComponent(subject)}`;
-    try {
-      await Linking.openURL(mailto);
-    } catch {}
+    await openExternalLink(mailto);
   }
 
   function SocialIcon({ label, onPress }: { label: string; onPress: () => void }) {
@@ -67,16 +65,16 @@ export default function Support() {
           <View style={styles.iconRow}>
             {instagramUrl ? (
               <>
-                <SocialIcon label="IG" onPress={() => Linking.openURL(instagramUrl)} />
-                <Pressable onPress={() => Linking.openURL(instagramUrl)} style={styles.iconLabel}>
+                <SocialIcon label="IG" onPress={() => { void openExternalLink(instagramUrl); }} />
+                <Pressable onPress={() => { void openExternalLink(instagramUrl); }} style={styles.iconLabel}>
                   <Text style={{ color: muted }}>Instagram</Text>
                 </Pressable>
               </>
             ) : null}
             {tiktokUrl ? (
               <>
-                <SocialIcon label="TT" onPress={() => Linking.openURL(tiktokUrl)} />
-                <Pressable onPress={() => Linking.openURL(tiktokUrl)} style={styles.iconLabel}>
+                <SocialIcon label="TT" onPress={() => { void openExternalLink(tiktokUrl); }} />
+                <Pressable onPress={() => { void openExternalLink(tiktokUrl); }} style={styles.iconLabel}>
                   <Text style={{ color: muted }}>TikTok</Text>
                 </Pressable>
               </>

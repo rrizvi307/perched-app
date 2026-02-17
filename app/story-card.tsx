@@ -8,7 +8,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { buildStoryCard, renderStoryCardSVG } from '@/services/storyCards';
 import { withAlpha } from '@/utils/colors';
 import { cacheDirectory, documentDirectory, EncodingType, writeAsStringAsync } from 'expo-file-system/legacy';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -133,7 +133,6 @@ function buildStoryCardHtml(svg: string) {
 
 export default function StoryCardScreen() {
   const { user } = useAuth();
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const systemScheme = useColorScheme();
   const { showToast } = useToast();
@@ -234,24 +233,6 @@ export default function StoryCardScreen() {
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
 
-      <View style={[styles.header, { paddingTop: Math.max(14, insets.top) }]}>
-        <Pressable
-          onPress={() => router.back()}
-          accessibilityLabel="Back"
-          style={({ pressed }) => [
-            styles.headerIcon,
-            { borderColor: border, backgroundColor: pressed ? highlight : withAlpha(card, 0.92) },
-          ]}
-        >
-          <IconSymbol name="chevron.left" size={18} color={text} />
-        </Pressable>
-        <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={{ color: text, fontWeight: '800', letterSpacing: 0.2 }}>Story card</Text>
-          <Text style={{ color: muted, fontSize: 12, marginTop: 2 }}>{mode === 'dark' ? 'Dark' : 'Light'}</Text>
-        </View>
-        <View style={{ width: 44 }} />
-      </View>
-
       <View style={styles.body}>
         <View style={[styles.previewFrame, { borderColor: withAlpha(border, 0.9), backgroundColor: withAlpha(card, 0.98) }]}>
           {loading ? (
@@ -342,20 +323,6 @@ export default function StoryCardScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerIcon: {
-    width: 44,
-    height: 38,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   body: { flex: 1, paddingHorizontal: 18, paddingTop: 8 },
   previewFrame: {
     borderRadius: 24,

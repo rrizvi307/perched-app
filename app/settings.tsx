@@ -1,6 +1,5 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -8,6 +7,7 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { clearPushToken, deleteAccountAndData, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
+import { openExternalLink } from '@/services/externalLinks';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
@@ -17,14 +17,12 @@ import { useRouter } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, signOut } = useAuth();
   const { showToast } = useToast();
   const { preference, setPreference } = useThemePreference();
-  const insets = useSafeAreaInsets();
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -182,17 +180,6 @@ export default function SettingsScreen() {
     <ThemedView style={styles.container}>
       <Atmosphere />
 
-      <View style={[styles.topBar, { paddingTop: Math.max(12, insets.top + 10) }]}> 
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.backButton, pressed ? { opacity: 0.7 } : null]}
-        >
-          <IconSymbol name="chevron.left" size={22} color={muted} />
-          <Text style={{ color: muted, fontWeight: '600', marginLeft: 4 }}>Back</Text>
-        </Pressable>
-      </View>
-
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Label style={{ color: muted, marginBottom: 8 }}>Settings</Label>
         <H1 style={{ color: text, marginBottom: 10 }}>Settings</H1>
@@ -262,7 +249,9 @@ export default function SettingsScreen() {
           <SettingRow
             label="Support"
             value={supportEmail}
-            onPress={() => ExpoLinking.openURL(`mailto:${supportEmail}`)}
+            onPress={() => {
+              void openExternalLink(`mailto:${supportEmail}`);
+            }}
             borderColor={border}
             highlight={highlight}
             textColor={text}
@@ -380,8 +369,6 @@ function SettingToggleRow({
 
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
-  topBar: { paddingHorizontal: 16, paddingBottom: 6 },
-  backButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
   content: { paddingHorizontal: 20, paddingBottom: 24 },
   card: { borderWidth: 1, borderRadius: 18, overflow: 'hidden' },
   row: {

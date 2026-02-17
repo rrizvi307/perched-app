@@ -14,6 +14,7 @@ import { getCheckinsForUserRemote } from '@/services/firebaseClient';
 import { getCheckins, seedDemoNetwork } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
@@ -24,7 +25,7 @@ function createdAtMs(checkin: any) {
 }
 
 function resolvePhoto(checkin: any) {
-  return checkin?.photoUrl || checkin?.photoURL || checkin?.imageUrl || checkin?.imageURL || checkin?.image || null;
+  return resolvePhotoUri(checkin);
 }
 
 function formatWhen(createdAt: any) {

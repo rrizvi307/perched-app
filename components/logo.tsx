@@ -2,10 +2,10 @@ import { Fonts } from '@/constants/theme';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
-import { StyleSheet, Text, View, useColorScheme } from 'react-native';
-import Svg, { Defs, LinearGradient, Stop, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
+import { Image, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
+const MARK_IMAGE = require('../assets/brand/perched-mark-slim.png');
 
 /**
  * Perched Logo - Bird perched on branch in purple palette
@@ -28,31 +28,8 @@ export default function Logo({
   // Brand colors - purple palette
   const gradientEnd = '#EC4899';   // Hot pink
 
-  // Original slim bird mark (no background tile)
-  const LogoMarkSVG = ({ size: s }: { size: number }) => (
-    <Svg width={s} height={s} viewBox="0 0 100 100">
-      <Defs>
-        <LinearGradient id="bodyGrad" x1="20%" y1="0%" x2="80%" y2="100%">
-          <Stop offset="0%" stopColor="#EDE9FE" stopOpacity="1" />
-          <Stop offset="100%" stopColor="#DDD6FE" stopOpacity="1" />
-        </LinearGradient>
-        <LinearGradient id="wingGrad" x1="20%" y1="0%" x2="80%" y2="100%">
-          <Stop offset="0%" stopColor="#C4B5FD" stopOpacity="1" />
-          <Stop offset="100%" stopColor="#A78BFA" stopOpacity="1" />
-        </LinearGradient>
-      </Defs>
-
-      <Line x1="15" y1="72" x2="85" y2="62" stroke="#4C1D95" strokeWidth="3" strokeLinecap="round" />
-      <Line x1="68" y1="65" x2="78" y2="56" stroke="#4C1D95" strokeWidth="2.2" strokeLinecap="round" />
-      <Ellipse cx="45" cy="48" rx="17" ry="14" fill="url(#bodyGrad)" rotation={-8} origin="45,48" />
-      <Circle cx="55" cy="34" r="10" fill="url(#bodyGrad)" />
-      <Ellipse cx="37" cy="50" rx="13" ry="9" fill="url(#wingGrad)" rotation={-15} origin="37,50" />
-      <Polygon points="22,52 13,44 16,56" fill={gradientEnd} />
-      <Polygon points="67,32 73,34 67,36" fill={gradientEnd} />
-      <Circle cx="59" cy="32" r="2" fill="#FFFFFF" />
-      <Line x1="45" y1="64" x2="42" y2="70" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
-      <Line x1="51" y1="63" x2="49" y2="69" stroke="#4C1D95" strokeWidth="1.5" strokeLinecap="round" />
-    </Svg>
+  const LogoMark = ({ size: s }: { size: number }) => (
+    <Image source={MARK_IMAGE} style={{ width: s, height: s }} resizeMode="contain" />
   );
 
   const resolvedVariant: LogoVariant =
@@ -68,7 +45,7 @@ export default function Logo({
     const markSize = Math.max(32, Math.round(size));
     return (
       <View style={[styles.wrap, { height: markSize }]}>
-        <LogoMarkSVG size={markSize} />
+        <LogoMark size={markSize} />
       </View>
     );
   }
@@ -79,7 +56,7 @@ export default function Logo({
     const gap = Math.max(12, Math.round(markSize * 0.25));
     return (
       <View style={[styles.wrap, { height: markSize, flexDirection: 'row', alignItems: 'center' }]}>
-        <LogoMarkSVG size={markSize} />
+        <LogoMark size={markSize} />
         <Text
           style={[
             styles.word,

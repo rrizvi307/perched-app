@@ -4,6 +4,7 @@ import { track } from './analytics';
 import { captureException } from './sentry';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isExpoDevClientLink } from './deepLinkGuards';
+import { classifyLink } from './linkRouting';
 
 const APP_SCHEME = 'perched://';
 const UNIVERSAL_LINK_PREFIX = 'https://perched.app';
@@ -56,6 +57,7 @@ export type DeepLinkRoute =
   | 'explore'
   | 'feed'
   | 'settings'
+  | 'support'
   | 'friend-request';
 
 export interface DeepLinkParams {
@@ -68,6 +70,14 @@ export interface DeepLinkParams {
   [key: string]: string | undefined;
 }
 
+export function normalizeDeepLinkPath(path: string | null | undefined): string {
+  if (!path) return '';
+  const withLeadingSlash = path.startsWith('/') ? path : `/${path}`;
+  const withoutExpoPrefix = withLeadingSlash.replace(/^\/--(?=\/|$)/, '');
+  const collapsed = withoutExpoPrefix.replace(/\/{2,}/g, '/');
+  return collapsed || '/';
+}
+
 /**
  * Parse a deep link URL and extract route + params
  */
@@ -78,12 +88,13 @@ export function parseDeepLink(url: string): {
   try {
     const parsed = Linking.parse(url);
     const { hostname, path, queryParams } = parsed;
+    const normalizedPath = normalizeDeepLinkPath(path);
 
     // Track deep link opened
     track('deeplink_opened', {
       url,
       hostname: hostname || undefined,
-      path: path || undefined,
+      path: normalizedPath || undefined,
     });
 
     // Handle different deep link formats
@@ -100,46 +111,46 @@ export function parseDeepLink(url: string): {
       return value;
     };
 
-    const hostPathSegment = path?.replace(/^\/+/, '') || undefined;
+    const hostPathSegment = normalizedPath.replace(/^\/+/, '') || undefined;
 
-    if (hostname === 'profile' || path?.startsWith('/profile')) {
+    if (hostname === 'profile' || normalizedPath.startsWith('/profile')) {
       route = 'profile';
       const userId =
-        path?.split('/profile/')[1] ||
+        normalizedPath.split('/profile/')[1] ||
         (hostname === 'profile' ? hostPathSegment : undefined) ||
         getParam(queryParams?.userId);
       if (userId) params.userId = userId;
-    } else if (hostname === 'checkin' || path?.startsWith('/checkin') || path?.startsWith('/c/')) {
+    } else if (hostname === 'checkin' || normalizedPath.startsWith('/checkin') || normalizedPath.startsWith('/c/')) {
       route = 'checkin';
       const checkinId =
-        path?.split('/checkin/')[1] ||
-        path?.split('/c/')[1] ||
+        normalizedPath.split('/checkin/')[1] ||
+        normalizedPath.split('/c/')[1] ||
         (hostname === 'checkin' ? hostPathSegment : undefined) ||
         getParam(queryParams?.checkinId);
       if (checkinId) params.checkinId = checkinId;
-    } else if (hostname === 'spot' || path?.startsWith('/spot') || path?.startsWith('/s/')) {
+    } else if (hostname === 'spot' || normalizedPath.startsWith('/spot') || normalizedPath.startsWith('/s/')) {
       route = 'spot';
       const spotId =
-        path?.split('/spot/')[1] ||
-        path?.split('/s/')[1] ||
+        normalizedPath.split('/spot/')[1] ||
+        normalizedPath.split('/s/')[1] ||
         (hostname === 'spot' ? hostPathSegment : undefined) ||
         getParam(queryParams?.spotId);
-      if (spotId) {
-        params.spotId = spotId;
-        const placeId = getParam(queryParams?.placeId);
-        if (placeId) params.placeId = placeId;
-      }
-    } else if (hostname === 'explore' || path?.startsWith('/explore')) {
+      const placeId = getParam(queryParams?.placeId);
+      if (spotId) params.spotId = spotId;
+      if (placeId) params.placeId = placeId;
+    } else if (hostname === 'explore' || normalizedPath.startsWith('/explore')) {
       route = 'explore';
-    } else if (hostname === 'feed' || path?.startsWith('/feed')) {
+    } else if (hostname === 'feed' || normalizedPath.startsWith('/feed')) {
       route = 'feed';
-    } else if (hostname === 'settings' || path?.startsWith('/settings')) {
+    } else if (hostname === 'settings' || normalizedPath.startsWith('/settings')) {
       route = 'settings';
-    } else if (hostname === 'friend-request' || path?.startsWith('/friend-request') || path?.startsWith('/fr/')) {
+    } else if (hostname === 'support' || normalizedPath.startsWith('/support')) {
+      route = 'support';
+    } else if (hostname === 'friend-request' || normalizedPath.startsWith('/friend-request') || normalizedPath.startsWith('/fr/')) {
       route = 'friend-request';
       const requestId =
-        path?.split('/friend-request/')[1] ||
-        path?.split('/fr/')[1] ||
+        normalizedPath.split('/friend-request/')[1] ||
+        normalizedPath.split('/fr/')[1] ||
         (hostname === 'friend-request' ? hostPathSegment : undefined) ||
         getParam(queryParams?.requestId);
       if (requestId) params.requestId = requestId;
@@ -211,6 +222,10 @@ export function handleDeepLink(url: string) {
 
       case 'settings':
         router.push('/settings');
+        break;
+
+      case 'support':
+        router.push('/support');
         break;
 
       case 'friend-request':
@@ -289,6 +304,10 @@ export function createDeepLink(
       path = '/settings';
       break;
 
+    case 'support':
+      path = '/support';
+      break;
+
     case 'friend-request':
       path = `/fr/${params?.requestId || ''}`;
       break;
@@ -342,12 +361,23 @@ export function createShareContent(
  * Open a deep link (useful for testing)
  */
 export async function openDeepLink(url: string) {
-  const supported = await Linking.canOpenURL(url);
-  if (supported) {
-    await Linking.openURL(url);
-  } else {
+  const classification = classifyLink(url);
+  if (classification.decision === 'invalid' || !classification.normalizedUrl) {
     console.error('Cannot open URL:', url);
+    return false;
   }
+
+  if (classification.decision === 'internal-route') {
+    return handleDeepLink(classification.normalizedUrl);
+  }
+
+  const supported = await Linking.canOpenURL(classification.normalizedUrl);
+  if (!supported) {
+    console.error('Cannot open URL:', classification.normalizedUrl);
+    return false;
+  }
+  await Linking.openURL(classification.normalizedUrl);
+  return true;
 }
 
 export default {

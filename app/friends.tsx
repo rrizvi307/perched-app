@@ -229,8 +229,6 @@ export default function FriendsScreen() {
     <ThemedView style={{ flex: 1 }}>
       <PolishedHeader
         title="Friends"
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
         rightIcon="person.badge.plus"
         onRightPress={() => router.push('/find-friends')}
       />

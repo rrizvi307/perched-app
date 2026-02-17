@@ -7,6 +7,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
 import { findUserByHandle, getCheckinsForUserRemote, getUsersByIds, sendFriendRequest } from '@/services/firebaseClient';
 import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -102,11 +103,11 @@ export default function ProfileView() {
           <Text style={{ color: muted, marginBottom: 6 }}>Recent check-ins</Text>
           {visibleCheckins.map((c) => {
             const remaining = formatTimeRemaining(c);
-            const photo = c.photoUrl || (c as any).photoURL || (c as any).imageUrl || (c as any).imageURL || c.image;
+            const photo = resolvePhotoUri(c);
             return (
               <View key={c.id} style={[styles.feedRow, { borderColor: border, backgroundColor: card }]}>
                 {photo ? (
-                  <SpotImage source={{ uri: photo }} style={styles.feedThumb} />
+                  <SpotImage source={photo} style={styles.feedThumb} />
                 ) : (
                   <View style={[styles.feedThumb, { backgroundColor: border }]} />
                 )}

@@ -6,6 +6,7 @@ import {
   isIntelV1Enabled,
 } from '@/components/ui/FilterBottomSheet';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
 import SpotListItem from '@/components/ui/spot-list-item';
 import { SpotIntelligence } from '@/components/ui/SpotIntelligence';
@@ -36,6 +37,8 @@ import {
 import { requestForegroundLocation } from '@/services/location';
 import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
 import { buildPlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
+import { buildGoogleMapsUrl } from '@/services/mapsLinks';
+import { openExternalLink } from '@/services/externalLinks';
 import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
@@ -47,11 +50,10 @@ import {
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
+import * as ExpoLinking from 'expo-linking';
 import { distanceBetween, geohashQueryBounds } from 'geofire-common';
-import * as Linking from 'expo-linking';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   InteractionManager,
   Platform,
@@ -257,6 +259,7 @@ export default function Explore() {
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
 
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
+  const [selectedIntelState, setSelectedIntelState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [breakdownSpotKey, setBreakdownSpotKey] = useState<string | null>(null);
 
   const slowQueryNoticeRef = useRef(false);
@@ -681,7 +684,7 @@ export default function Explore() {
       const current = await requestForegroundLocation({ ignoreCache: true, preferFresh: true });
       if (!current) {
         showToast('Location unavailable. Check Settings permissions.', 'warning');
-        await Linking.openSettings().catch(() => {});
+        await ExpoLinking.openSettings().catch(() => {});
         return;
       }
 
@@ -781,6 +784,21 @@ export default function Explore() {
     if (!selectedSpotKey) return null;
     return intelligenceMap.get(selectedSpotKey) || null;
   }, [selectedSpotKey, intelligenceMap]);
+  const shouldRenderLegacyIntel = useMemo(() => {
+    if (!selectedSpot) return false;
+    const intel = selectedSpot?.intel || {};
+    const display = selectedSpot?.display || {};
+    return Boolean(
+      intel?.priceLevel ||
+        typeof intel?.avgRating === 'number' ||
+        intel?.inferredNoise ||
+        intel?.hasWifi ||
+        intel?.goodForStudying ||
+        intel?.goodForMeetings ||
+        display?.noise ||
+        display?.busyness
+    );
+  }, [selectedSpot]);
   const breakdownIntelligence = useMemo(
     () => (breakdownSpotKey ? intelligenceMap.get(breakdownSpotKey) || null : null),
     [breakdownSpotKey, intelligenceMap],
@@ -795,12 +813,23 @@ export default function Explore() {
   }, [breakdownSpotKey, listData]);
 
   useEffect(() => {
+    if (!selectedSpot) {
+      setSelectedIntelState('idle');
+      return;
+    }
+    if (selectedSpotIntelligence) {
+      setSelectedIntelState('ready');
+    }
+  }, [selectedSpot, selectedSpotIntelligence]);
+
+  useEffect(() => {
     if (!selectedSpot || !selectedSpotKey || selectedSpotIntelligence) return;
     const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
     const name = selectedSpot?.name || '';
     if (!name) return;
 
     let active = true;
+    setSelectedIntelState('loading');
     const task = InteractionManager.runAfterInteractions(() => {
       void (async () => {
         try {
@@ -828,7 +857,10 @@ export default function Explore() {
             next.set(selectedSpotKey, intel);
             return next;
           });
-        } catch {}
+          setSelectedIntelState('ready');
+        } catch {
+          if (active) setSelectedIntelState('error');
+        }
       })();
     });
 
@@ -923,9 +955,10 @@ export default function Explore() {
             {canShowInteractiveMap ? (
               <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
                 {loading ? (
-                  <View pointerEvents="none" style={[styles.mapLoading, { backgroundColor: card }]}> 
-                    <ActivityIndicator color={primary} />
-                    <Text style={{ color: muted, marginTop: 6 }}>Loading spots…</Text>
+                  <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+                    {[0, 1, 2, 3].map((i) => (
+                      <SkeletonLoader key={i} style={{ height: 120, borderRadius: 16, marginBottom: 12 }} />
+                    ))}
                   </View>
                 ) : null}
                 <MapView
@@ -1055,12 +1088,26 @@ export default function Explore() {
               {selectedSpot.distance !== undefined ? ` · ${formatDistance(selectedSpot.distance)}` : ''}
             </Text>
 
-            <SpotIntelligence
-              intel={selectedSpot?.intel}
-              display={selectedSpot?.display}
-              liveCheckinCount={selectedSpot?.live?.checkinCount || selectedSpot?.checkinCount || selectedSpot?.count || 0}
-              containerStyle={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}
-            />
+            {shouldRenderLegacyIntel ? (
+              <SpotIntelligence
+                intel={selectedSpot?.intel}
+                display={selectedSpot?.display}
+                liveCheckinCount={selectedSpot?.live?.checkinCount || selectedSpot?.checkinCount || selectedSpot?.count || 0}
+                containerStyle={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}
+              />
+            ) : selectedIntelState === 'loading' ? (
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
+                <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Refreshing intelligence…</Text>
+                <Text style={{ color: muted }}>Fetching live + inferred signals for this spot.</Text>
+              </View>
+            ) : selectedIntelState === 'error' ? (
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
+                <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Intelligence temporarily unavailable</Text>
+                <Text style={{ color: muted }}>
+                  Live enrichment failed right now. Try again shortly or open the spot page.
+                </Text>
+              </View>
+            ) : null}
 
             {selectedSpotIntelligence ? (
               <View style={[styles.snapshotCard, { borderColor: border, backgroundColor: withAlpha(primary, 0.06) }]}>
@@ -1142,16 +1189,9 @@ export default function Explore() {
                     const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId;
                     const name = selectedSpot?.name || 'Spot';
                     const coords = selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location;
-                    const url = placeId
-                      ? `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`
-                      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                          coords ? `${coords.lat},${coords.lng}` : name
-                        )}`;
-                    if (Platform.OS === 'web') {
-                      window.open(url, '_blank', 'noopener');
-                    } else {
-                      Linking.openURL(url);
-                    }
+                    const url = buildGoogleMapsUrl({ placeId, coords, name });
+                    if (!url) return;
+                    void openExternalLink(url);
                   } catch {}
                 }}
                 style={[styles.sheetButton, { backgroundColor: highlight, borderColor: border }]}

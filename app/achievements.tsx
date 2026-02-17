@@ -1,9 +1,10 @@
 import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ACHIEVEMENTS, getUserStats, getUnlockedAchievements, UserStats } from '@/services/gamification';
 import { AchievementCard } from '@/components/ui/achievement-card';
+import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { H1, Body } from '@/components/ui/typography';
@@ -32,6 +33,8 @@ export default function AchievementsScreen() {
   const [stats, setStats] = useState<UserStats | null>(null);
   const [unlocked, setUnlocked] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevUnlockedCountRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -54,6 +57,18 @@ export default function AchievementsScreen() {
   const unlockedIds = unlocked.map(a => a.id);
   const unlockedCount = unlockedIds.length;
   const totalCount = ACHIEVEMENTS.length;
+
+  useEffect(() => {
+    if (prevUnlockedCountRef.current === null) {
+      prevUnlockedCountRef.current = unlockedCount;
+      return;
+    }
+    if (unlockedCount > prevUnlockedCountRef.current) {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 2500);
+    }
+    prevUnlockedCountRef.current = unlockedCount;
+  }, [unlockedCount]);
 
   const categories = {
     'Explorer': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'exploration'),
@@ -158,6 +173,7 @@ export default function AchievementsScreen() {
           )}
         </ScrollView>
       )}
+      <CelebrationOverlay visible={showCelebration} />
     </ThemedView>
   );
 }

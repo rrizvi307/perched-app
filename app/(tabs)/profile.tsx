@@ -2,6 +2,7 @@ import ProfilePicture from '@/components/profile-picture';
 import PermissionSheet from '@/components/ui/permission-sheet';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H2, Label } from '@/components/ui/typography';
 import { StreakBadge } from '@/components/ui/streak-badge';
@@ -31,11 +32,12 @@ import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, seedDemoNetwork, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { isPhoneLike, normalizePhone } from '@/utils/phone';
+import { openExternalLink } from '@/services/externalLinks';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { Button, Platform, Pressable, RefreshControl, SectionList, Share, StyleSheet, Text, TextInput, View, useColorScheme } from 'react-native';
-import * as ExpoLinking from 'expo-linking';
+import * as Haptics from 'expo-haptics';
 import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
 
 type CheckinRow = { key: string; items: any[] };
@@ -110,6 +112,8 @@ export default function ProfileScreen() {
   const { showToast } = useToast();
   const wasOfflineRef = useRef(false);
   const [userStats, setUserStats] = useState<{ streakDays: number; totalCheckins: number; uniqueSpots: number } | null>(null);
+  const [showStreakCelebration, setShowStreakCelebration] = useState(false);
+  const prevStreakRef = useRef(0);
   const fbAvailable = isFirebaseConfigured();
   const storyMode = preference === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : preference;
   const profileCompletion = useMemo(() => {
@@ -253,6 +257,17 @@ export default function ProfileScreen() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const milestones = [7, 14, 30, 50, 100];
+    const current = userStats?.streakDays || 0;
+    if (current > prevStreakRef.current && milestones.includes(current)) {
+      setShowStreakCelebration(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setTimeout(() => setShowStreakCelebration(false), 2500);
+    }
+    prevStreakRef.current = current;
+  }, [userStats?.streakDays]);
 
   useEffect(() => {
     if (user?.handle) setHandleDraft(user.handle);
@@ -667,30 +682,54 @@ export default function ProfileScreen() {
 
   async function sendRequest(targetId: string) {
     if (!user) return;
-    await sendFriendRequest(user.id, targetId);
-    await refreshFriends();
+    try {
+      await sendFriendRequest(user.id, targetId);
+      await refreshFriends();
+      showToast('Friend request sent.', 'success');
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('friend graph permissions')) {
+        setContactError('Friend sync is temporarily unavailable. Please re-open the app and try again.');
+      } else {
+        setContactError('Unable to send friend request right now.');
+      }
+    }
   }
 
   async function acceptRequest(request: any) {
     if (!user) return;
-    await acceptFriendRequest(request.id, request.fromId, request.toId);
-    await refreshFriends();
+    try {
+      await acceptFriendRequest(request.id, request.fromId, request.toId);
+      await refreshFriends();
+      showToast('Friend request accepted.', 'success');
+    } catch {
+      setContactError('Unable to accept this request right now.');
+    }
   }
 
   async function declineRequest(request: any) {
-    await declineFriendRequest(request.id);
-    await refreshFriends();
+    try {
+      await declineFriendRequest(request.id);
+      await refreshFriends();
+    } catch {
+      setContactError('Unable to decline this request right now.');
+    }
   }
 
   async function removeFriend(targetId: string) {
     if (!user) return;
-    await unfollowUserRemote(user.id, targetId);
-    await refreshFriends();
+    try {
+      await unfollowUserRemote(user.id, targetId);
+      await refreshFriends();
+    } catch {
+      setContactError('Unable to remove friend right now.');
+    }
   }
 
 
   async function loadContacts() {
     setContactError(null);
+    const startedAt = Date.now();
     try {
       const seen = await getPermissionPrimerSeen('contacts');
       if (!seen) {
@@ -701,15 +740,24 @@ export default function ProfileScreen() {
       const Contacts = req('expo-contacts');
       if (!Contacts?.requestPermissionsAsync) {
         setContactError('Contacts unavailable on this build.');
+        devLog('contacts_sync_unavailable', { platform: Platform.OS });
         return;
       }
-      const { status } = await Contacts.requestPermissionsAsync();
+      const currentPerm = Contacts.getPermissionsAsync ? await Contacts.getPermissionsAsync().catch(() => null) : null;
+      const { status, canAskAgain } = await Contacts.requestPermissionsAsync();
+      devLog('contacts_sync_permission', {
+        platform: Platform.OS,
+        initialStatus: currentPerm?.status || null,
+        status,
+        canAskAgain: canAskAgain ?? null,
+      });
       if (status !== 'granted') {
-        setContactError('Contacts permission denied');
+        setContactError(canAskAgain === false ? 'Contacts permission denied. Enable it from Settings.' : 'Contacts permission denied.');
         return;
       }
       const fields = [Contacts.Fields.Emails];
       if (Contacts.Fields.PhoneNumbers) fields.push(Contacts.Fields.PhoneNumbers);
+      const fetchStartedAt = Date.now();
       const { data } = await Contacts.getContactsAsync({ fields });
       const emails = (data || [])
         .flatMap((c: any) => (c.emails || []).map((e: any) => e.email))
@@ -729,8 +777,24 @@ export default function ProfileScreen() {
         if (match && !matchesMap.has(match.id)) matchesMap.set(match.id, match);
       });
       setContactMatches(Array.from(matchesMap.values()).slice(0, 8));
+      devLog('contacts_sync_complete', {
+        platform: Platform.OS,
+        totalContacts: Array.isArray(data) ? data.length : 0,
+        uniqueEmails: uniqueEmails.length,
+        uniquePhones: uniquePhones.length,
+        matches: matchesMap.size,
+        fetchDurationMs: Date.now() - fetchStartedAt,
+        totalDurationMs: Date.now() - startedAt,
+      });
+      if (!matchesMap.size) {
+        setContactError('No matches found in contacts yet.');
+      }
     } catch {
-      setContactError('Unable to load contacts');
+      devLog('contacts_sync_failed', {
+        platform: Platform.OS,
+        totalDurationMs: Date.now() - startedAt,
+      });
+      setContactError('Unable to load contacts right now. Try again in a moment.');
     }
   }
 
@@ -1454,7 +1518,9 @@ export default function ProfileScreen() {
           <View style={{ marginTop: 18, marginBottom: 40, alignItems: 'center' }}>
             <View style={styles.socialRow}>
               <Pressable
-                onPress={() => ExpoLinking.openURL('https://instagram.com/perchedapp')}
+                onPress={() => {
+                  void openExternalLink('https://instagram.com/perchedapp');
+                }}
                 accessibilityLabel="Perched on Instagram"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1464,7 +1530,9 @@ export default function ProfileScreen() {
                 <FontAwesome5 name="instagram" size={18} color={textColor} />
               </Pressable>
               <Pressable
-                onPress={() => ExpoLinking.openURL('https://tiktok.com/@perchedapp')}
+                onPress={() => {
+                  void openExternalLink('https://tiktok.com/@perchedapp');
+                }}
                 accessibilityLabel="Perched on TikTok"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1474,7 +1542,9 @@ export default function ProfileScreen() {
                 <FontAwesome5 name="tiktok" size={18} color={textColor} />
               </Pressable>
               <Pressable
-                onPress={() => ExpoLinking.openURL('mailto:perchedappteam@gmail.com')}
+                onPress={() => {
+                  void openExternalLink('mailto:perchedappteam@gmail.com');
+                }}
                 accessibilityLabel="Email Perched"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1512,6 +1582,7 @@ export default function ProfileScreen() {
           </View>
         )}
       />
+      <CelebrationOverlay visible={showStreakCelebration} />
     </ThemedView>
   );
 }

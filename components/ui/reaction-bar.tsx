@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { ReactionType, REACTION_EMOJIS, addReaction, removeReaction } from '@/services/social';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { tokens } from '@/constants/tokens';
+import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 
 interface ReactionBarProps {
   checkinId: string;
@@ -12,6 +14,72 @@ interface ReactionBarProps {
   initialCounts?: Record<ReactionType, number>;
   userReaction?: ReactionType | null;
   onReactionChange?: () => void;
+}
+
+function ReactionButton({
+  type,
+  emoji,
+  count,
+  isSelected,
+  onPress,
+  primary,
+  surface,
+  border,
+  muted,
+}: {
+  type: ReactionType;
+  emoji: string;
+  count: number;
+  isSelected: boolean;
+  onPress: (type: ReactionType) => void;
+  primary: string;
+  surface: string;
+  border: string;
+  muted: string;
+}) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const handlePress = () => {
+    scale.value = withSequence(
+      withSpring(1.4, { damping: 4, stiffness: 300 }),
+      withSpring(1, { damping: 8, stiffness: 200 }),
+    );
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onPress(type);
+  };
+
+  return (
+    <Pressable onPress={handlePress}>
+      <Animated.View
+        style={[
+          styles.reaction,
+          {
+            backgroundColor: isSelected ? primary : surface,
+            borderColor: isSelected ? primary : border,
+          },
+          animatedStyle,
+        ]}
+      >
+        <Text style={styles.emoji}>{emoji}</Text>
+        {count > 0 ? (
+          <Text
+            style={[
+              styles.count,
+              {
+                color: isSelected ? '#FFFFFF' : muted,
+                fontWeight: isSelected ? '700' : '600',
+              },
+            ]}
+          >
+            {count}
+          </Text>
+        ) : null}
+      </Animated.View>
+    </Pressable>
+  );
 }
 
 export function ReactionBar({
@@ -30,12 +98,12 @@ export function ReactionBar({
 
   const [counts, setCounts] = useState(initialCounts);
   const [userReaction, setUserReaction] = useState<ReactionType | null>(initialUserReaction);
-  const [animating, setAnimating] = useState<ReactionType | null>(null);
+  const [animating, setAnimating] = useState(false);
 
   const handleReaction = async (type: ReactionType) => {
     if (animating) return; // Prevent double-tap
 
-    setAnimating(type);
+    setAnimating(true);
 
     if (userReaction === type) {
       // Remove reaction
@@ -64,49 +132,27 @@ export function ReactionBar({
     }
 
     onReactionChange?.();
-    setTimeout(() => setAnimating(null), 300);
+    setTimeout(() => setAnimating(false), 300);
   };
 
   const reactionTypes: ReactionType[] = ['fire', 'coffee', 'book', 'party', 'heart', 'thumbs_up'];
 
   return (
     <View style={styles.container}>
-      {reactionTypes.map((type) => {
-        const count = counts[type] || 0;
-        const isActive = userReaction === type;
-        const isAnimating = animating === type;
-
-        return (
-          <Pressable
-            key={type}
-            onPress={() => handleReaction(type)}
-            style={({ pressed }) => [
-              styles.reaction,
-              {
-                backgroundColor: isActive ? primary : surface,
-                borderColor: isActive ? primary : border,
-                opacity: pressed ? 0.7 : 1,
-                transform: [{ scale: isAnimating ? 1.2 : 1 }],
-              },
-            ]}
-          >
-            <Text style={styles.emoji}>{REACTION_EMOJIS[type]}</Text>
-            {count > 0 && (
-              <Text
-                style={[
-                  styles.count,
-                  {
-                    color: isActive ? '#FFFFFF' : muted,
-                    fontWeight: isActive ? '700' : '600',
-                  },
-                ]}
-              >
-                {count}
-              </Text>
-            )}
-          </Pressable>
-        );
-      })}
+      {reactionTypes.map((type) => (
+        <ReactionButton
+          key={type}
+          type={type}
+          emoji={REACTION_EMOJIS[type]}
+          count={counts[type] || 0}
+          isSelected={userReaction === type}
+          onPress={handleReaction}
+          primary={primary}
+          surface={surface}
+          border={border}
+          muted={muted}
+        />
+      ))}
     </View>
   );
 }

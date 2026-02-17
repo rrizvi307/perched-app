@@ -17,6 +17,7 @@ import { tokens } from '@/constants/tokens';
 interface EmptyStateProps {
   icon: string;
   title: string;
+  message?: string;
   description?: string;
   actionLabel?: string;
   onAction?: () => void;
@@ -31,6 +32,7 @@ interface EmptyStateProps {
 export function EmptyState({
   icon,
   title,
+  message,
   description,
   actionLabel,
   onAction,
@@ -74,20 +76,26 @@ export function EmptyState({
     opacity: contentOpacity.value,
     transform: [{ translateY: contentY.value }],
   }));
+  const bodyText = message ?? description;
+  const emojiIcon = /\p{Extended_Pictographic}/u.test(icon);
 
   return (
     <View style={styles.container}>
       {/* Icon */}
       <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
-        <IconSymbol name={icon as any} size={56} color={primary} />
+        {emojiIcon ? (
+          <Text style={{ fontSize: 56 }}>{icon}</Text>
+        ) : (
+          <IconSymbol name={icon as any} size={56} color={primary} />
+        )}
       </Animated.View>
 
       {/* Content */}
       <Animated.View style={[styles.content, contentAnimatedStyle]}>
         <Text style={[styles.title, { color: text }]}>{title}</Text>
-        {description && (
+        {bodyText && (
           <Text style={[styles.description, { color: muted }]}>
-            {description}
+            {bodyText}
           </Text>
         )}
 
@@ -121,38 +129,38 @@ export function EmptyState({
 /**
  * Pre-built empty states for common scenarios
  */
-export function EmptyFeed({ onCheckin }: { onCheckin: () => void }) {
+export function EmptyFeed({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="photo.on.rectangle.angled"
-      title="No check-ins yet"
-      description="Start sharing your favorite spots and see what your friends are up to."
-      actionLabel="Check in now"
-      onAction={onCheckin}
-      secondaryLabel="Find friends"
-      onSecondary={() => {/* Navigate to explore */}}
+      icon="📍"
+      title="Your feed is waiting"
+      message="Check in to your favorite work spot and see what friends are up to"
+      actionLabel="Make your first check-in"
+      onAction={onAction}
     />
   );
 }
 
-export function EmptySearch() {
+export function EmptySpots({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="magnifyingglass"
-      title="No results found"
-      description="Try adjusting your search or filters to find what you're looking for."
+      icon="🗺️"
+      title="No spots nearby"
+      message="Be the first to discover and rate work spots in this area"
+      actionLabel="Explore the map"
+      onAction={onAction}
     />
   );
 }
 
-export function EmptySpots({ onExplore }: { onExplore: () => void }) {
+export function EmptySearch({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="map.fill"
-      title="Discover spots nearby"
-      description="Find coffee shops, libraries, and coworking spaces perfect for you."
-      actionLabel="Explore map"
-      onAction={onExplore}
+      icon="🔍"
+      title="No matches"
+      message="Try adjusting your filters or searching a different area"
+      actionLabel="Clear filters"
+      onAction={onAction}
     />
   );
 }

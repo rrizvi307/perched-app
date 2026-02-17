@@ -82,6 +82,29 @@ describe('buildPlaceIntelligence', () => {
     expect(result.generatedAt).toBeGreaterThan(0);
   });
 
+  it('keeps baseline work score non-zero for work-friendly venues without checkins', async () => {
+    const result = await buildPlaceIntelligence({
+      placeName: 'Catalina Coffee',
+      types: ['cafe', 'food'],
+      checkins: [],
+    });
+
+    expect(result.workScore).toBeGreaterThan(0);
+    expect(result.scoreBreakdown.venueType.value).toBeGreaterThanOrEqual(20);
+  });
+
+  it('returns zero work score for no-seating outdoor spots', async () => {
+    const result = await buildPlaceIntelligence({
+      placeName: 'Memorial Trail Park',
+      types: ['park'],
+      checkins: [],
+      tagScores: { Seating: 0, 'Wi-Fi': 0, Outlets: 0 },
+    });
+
+    expect(result.workScore).toBe(0);
+    expect(result.highlights).toContain('Not suitable for laptop work');
+  });
+
   it('applies inferred fallbacks and marks inferred sources when checkin data is missing', async () => {
     const result = await buildPlaceIntelligence({
       placeName: 'Inferred Signals Spot',

@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
@@ -121,6 +122,7 @@ export default function CheckinScreen() {
 	const draftEmptyRef = useRef(false);
 	const [showCameraPrimer, setShowCameraPrimer] = useState(false);
 	const [showLocationPrimer, setShowLocationPrimer] = useState(false);
+	const [showCelebration, setShowCelebration] = useState(false);
 	const activeRef = useRef(true);
 	const lastDetectRef = useRef<string | null>(null);
 	const detectionThreshold = 0.2; // km
@@ -688,6 +690,8 @@ export default function CheckinScreen() {
 				if (activePlace?.placeId) {
 					try {
 						const stats = await updateStatsAfterCheckin(activePlace.placeId, Date.now());
+						setShowCelebration(true);
+						setTimeout(() => setShowCelebration(false), 2500);
 
 						// Track for rating prompt
 						await trackCheckinForRating();
@@ -1340,6 +1344,7 @@ export default function CheckinScreen() {
 					) : null}
 					</View>
 				</KeyboardAvoidingView>
+				<CelebrationOverlay visible={showCelebration} />
 		</ThemedView>
 	);
 }

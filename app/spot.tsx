@@ -2,7 +2,6 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, Label } from '@/components/ui/typography';
-import { PolishedHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
 import { PolishedCard } from '@/components/ui/polished-card';
 import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
@@ -11,17 +10,31 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
 import { getCheckinsRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
+import { buildGoogleMapsUrl } from '@/services/mapsLinks';
+import { openExternalLink } from '@/services/externalLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
 import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spotUtils';
 import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Linking, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
+import * as Haptics from 'expo-haptics';
 import { logEvent } from '@/services/logEvent';
 import { useToast } from '@/contexts/ToastContext';
 import { buildPlaceIntelligence, PlaceIntelligence } from '@/services/placeIntelligence';
 import { runAfterInteractions } from '@/services/performance';
+import Animated, {
+  Easing,
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 const TAG_VOTES_KEY = 'spot_tag_votes_v1';
 const TAG_VARIANT_KEY = 'spot_tag_variant_v1';
@@ -29,6 +42,58 @@ const TAG_VARIANTS = {
   core5: ['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Late-night'],
   full7: ['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Bright', 'Spacious', 'Late-night'],
 } as const;
+
+function VoteableTag({
+  tag,
+  isActive,
+  onVote,
+  border,
+  accent,
+  text,
+}: {
+  tag: string;
+  isActive: boolean;
+  onVote: (tag: string) => boolean;
+  border: string;
+  accent: string;
+  text: string;
+}) {
+  const tagScale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: tagScale.value }],
+  }));
+
+  const handleVote = () => {
+    const shouldAnimate = onVote(tag);
+    if (!shouldAnimate) return;
+    tagScale.value = withSequence(
+      withSpring(0.85, { damping: 6, stiffness: 400 }),
+      withSpring(1.05, { damping: 6, stiffness: 300 }),
+      withSpring(1, { damping: 10, stiffness: 200 }),
+    );
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  return (
+    <Pressable onPress={handleVote}>
+      <Animated.View
+        style={[
+          styles.tagChip,
+          {
+            borderColor: border,
+            backgroundColor: isActive ? accent : 'transparent',
+            opacity: isActive ? 0.85 : 1,
+          },
+          animatedStyle,
+        ]}
+      >
+        <Text style={{ color: isActive ? '#FFFFFF' : text, fontWeight: '600' }}>
+          {tag}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
 
 export default function SpotDetail() {
   const router = useRouter();
@@ -41,7 +106,6 @@ export default function SpotDetail() {
   const primary = useThemeColor({}, 'primary');
   const accent = useThemeColor({}, 'accent');
   const { showToast } = useToast();
-  const isWeb = Platform.OS === 'web';
   const placeId = typeof params.placeId === 'string' ? params.placeId : '';
   const nameParam = typeof params.name === 'string' ? params.name : '';
   const [place, setPlace] = useState<any | null>(null);
@@ -56,11 +120,17 @@ export default function SpotDetail() {
   const [tagVariant, setTagVariant] = useState<keyof typeof TAG_VARIANTS>('core5');
   const [intelligence, setIntelligence] = useState<PlaceIntelligence | null>(null);
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [displayScoreText, setDisplayScoreText] = useState('0');
+  const saveScale = useSharedValue(1);
+  const displayScore = useSharedValue(0);
   const displayName = place?.name || nameParam || 'Spot';
   const coords = place?.location || checkins.find((c) => c.spotLatLng)?.spotLatLng || checkins.find((c) => c.location)?.location;
   const category = classifySpotCategory(displayName, place?.types);
   const normalizedName = normalizeSpotName(displayName);
   const placeKey = spotKey(placeId || undefined, displayName || 'unknown');
+  const saveAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: saveScale.value }],
+  }));
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
   const canTag = useMemo(() => {
     if (!user) return false;
@@ -95,19 +165,11 @@ export default function SpotDetail() {
     return scores;
   }, [visibleCheckins]);
   const mapsUrl = useMemo(() => {
-    if (placeId) {
-      // Prefer a place_id-based URL so the Maps app opens the business listing (reviews, hours, etc).
-      return `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(placeId)}`;
-    }
-    const hasName = displayName && displayName.trim() && displayName.trim().toLowerCase() !== 'spot';
-    const query = hasName
-      ? coords
-        ? `${displayName} ${coords.lat},${coords.lng}`
-        : displayName
-      : coords
-      ? `${coords.lat},${coords.lng}`
-      : '';
-    return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : null;
+    return buildGoogleMapsUrl({
+      placeId,
+      coords,
+      name: displayName,
+    });
   }, [placeId, coords, displayName]);
 
   function formatTime(input: string | { seconds?: number } | undefined) {
@@ -325,293 +387,295 @@ export default function SpotDetail() {
     return buckets.map((b) => Math.max(0.1, b / max));
   }, [visibleCheckins]);
 
+  useEffect(() => {
+    if (intelligence?.workScore != null) {
+      displayScore.value = 0;
+      displayScore.value = withTiming(intelligence.workScore, {
+        duration: 800,
+        easing: Easing.out(Easing.cubic),
+      });
+    } else {
+      displayScore.value = 0;
+      setDisplayScoreText('0');
+    }
+  }, [displayScore, intelligence?.workScore]);
+
+  useAnimatedReaction(
+    () => Math.round(displayScore.value),
+    (current, prev) => {
+      if (current !== prev) {
+        runOnJS(setDisplayScoreText)(String(current));
+      }
+    },
+  );
+
+  function handleTagVote(tag: string): boolean {
+    if (!canTag) {
+      showToast('Tap in here first to add tags.', 'info');
+      return false;
+    }
+    const eventPayload = { placeId: placeId || null, name: displayName, tag };
+    const isActive = !!tagVotes[tag];
+    const nextVotes = { ...tagVotes, [tag]: !isActive };
+    setTagVotes(nextVotes);
+    persistTagVotes(nextVotes);
+    const delta = isActive ? -1 : 1;
+    recordPlaceTag(eventPayload.placeId, eventPayload.name, tag, delta);
+    recordPlaceTagRemote({ ...eventPayload, delta });
+    if (user?.id) {
+      recordPlaceTagVoteRemote({ userId: user.id, placeId: eventPayload.placeId, name: eventPayload.name, tag, active: !isActive });
+    }
+    showToast(isActive ? `${tag} removed` : `${tag} added`, 'success');
+    return true;
+  }
+
   return (
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
-      <PolishedHeader
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
-        rightIcon="square.and.arrow.up"
-        onRightPress={async () => {
-          try {
-            await Share.share({
-              title: displayName,
-              message: `Check out ${displayName} on Perched!${mapsUrl ? `\n${mapsUrl}` : ''}`,
-            });
-          } catch {}
-        }}
-        blurred
-      />
-      <Label style={{ color: muted, marginBottom: 8 }}>Spot</Label>
-      <H1 style={{ color: text }}>{displayName}</H1>
-      {normalizedName ? null : null}
-      <View style={{ height: 12 }} />
-      {intelligence ? (
-        <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
-          <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
-          <View style={styles.intelRow}>
-            <Pressable onPress={() => setShowBreakdown(true)} style={styles.intelItem}>
-              <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{intelligence.workScore}</Text>
-              <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
-            </Pressable>
-            <View style={styles.intelItem}>
-              <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
-              <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
+      <Animated.ScrollView contentContainerStyle={styles.scrollContent}>
+        <Label style={{ color: muted, marginBottom: 8 }}>Spot</Label>
+        <H1 style={{ color: text }}>{displayName}</H1>
+        {normalizedName ? null : null}
+        <View style={{ height: 12 }} />
+        {intelligence ? (
+          <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
+            <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
+            <View style={styles.intelRow}>
+              <Pressable onPress={() => setShowBreakdown(true)} style={styles.intelItem}>
+                <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{displayScoreText}</Text>
+                <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
+              </Pressable>
+              <View style={styles.intelItem}>
+                <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
+                <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
+              </View>
+              <View style={styles.intelItem}>
+                <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.bestTime}</Text>
+                <Text style={{ color: muted, fontSize: 12 }}>Best time</Text>
+              </View>
             </View>
-            <View style={styles.intelItem}>
-              <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.bestTime}</Text>
-              <Text style={{ color: muted, fontSize: 12 }}>Best time</Text>
-            </View>
-          </View>
-          {intelligence.highlights.length ? (
-            <View style={styles.intelChipRow}>
-              {intelligence.highlights.map((item) => (
-                <View key={`hl-${item}`} style={[styles.intelChip, { borderColor: border }]}>
-                  <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-          {intelligence.useCases.length ? (
-            <View style={styles.useCaseRow}>
-              {intelligence.useCases.map((item) => (
-                <View key={`uc-${item}`} style={[styles.useCaseChip, { borderColor: border }]}>
-                  <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-          {intelligence.crowdForecast.length ? (
-            <View style={styles.forecastRow}>
-              {intelligence.crowdForecast.slice(0, 4).map((point) => {
-                const tone = point.level === 'low'
-                  ? '#22C55E'
-                  : point.level === 'high'
-                  ? '#F97316'
-                  : point.level === 'moderate'
-                  ? '#F59E0B'
-                  : muted;
-                return (
-                  <View key={`fc-${point.offsetHours}`} style={[styles.forecastChip, { borderColor: border }]}>
-                    <Text style={{ color: muted, fontSize: 11, fontWeight: '700' }}>{point.label}</Text>
-                    <Text style={{ color: tone, fontSize: 12, fontWeight: '700', textTransform: 'capitalize' }}>{point.level}</Text>
+            {intelligence.highlights.length ? (
+              <View style={styles.intelChipRow}>
+                {intelligence.highlights.map((item) => (
+                  <View key={`hl-${item}`} style={[styles.intelChip, { borderColor: border }]}>
+                    <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
                   </View>
-                );
-              })}
-            </View>
-          ) : null}
-          <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
-            Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
-          </Text>
-          {intelligence.externalSignals.length ? (
+                ))}
+              </View>
+            ) : null}
+            {intelligence.useCases.length ? (
+              <View style={styles.useCaseRow}>
+                {intelligence.useCases.map((item) => (
+                  <View key={`uc-${item}`} style={[styles.useCaseChip, { borderColor: border }]}>
+                    <Text style={{ color: text, fontSize: 12, fontWeight: '600' }}>{item}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            {intelligence.crowdForecast.length ? (
+              <View style={styles.forecastRow}>
+                {intelligence.crowdForecast.slice(0, 4).map((point) => {
+                  const tone = point.level === 'low'
+                    ? '#22C55E'
+                    : point.level === 'high'
+                      ? '#F97316'
+                      : point.level === 'moderate'
+                        ? '#F59E0B'
+                        : muted;
+                  return (
+                    <View key={`fc-${point.offsetHours}`} style={[styles.forecastChip, { borderColor: border }]}>
+                      <Text style={{ color: muted, fontSize: 11, fontWeight: '700' }}>{point.label}</Text>
+                      <Text style={{ color: tone, fontSize: 12, fontWeight: '700', textTransform: 'capitalize' }}>{point.level}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
             <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
-              External signals: {intelligence.externalSignals.map((s) => s.source).join(' + ')}
+              Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
             </Text>
-          ) : null}
-        </PolishedCard>
-      ) : null}
-      <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginTop: 12, marginBottom: 8 }}>
-        Tags from the community
-      </Text>
-      <View style={styles.tagRow}>
-        {TAG_VARIANTS[tagVariant].map((tag) => (
+            {intelligence.externalSignals.length ? (
+              <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
+                External signals: {intelligence.externalSignals.map((s) => s.source).join(' + ')}
+              </Text>
+            ) : null}
+          </PolishedCard>
+        ) : null}
+        <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginTop: 12, marginBottom: 8 }}>
+          Tags from the community
+        </Text>
+        <View style={styles.tagRow}>
+          {TAG_VARIANTS[tagVariant].map((tag) => (
+            <VoteableTag
+              key={`tag-${tag}`}
+              tag={tag}
+              isActive={!!tagVotes[tag]}
+              onVote={handleTagVote}
+              border={border}
+              accent={accent}
+              text={text}
+            />
+          ))}
+        </View>
+        {mapUrl ? (
           <Pressable
-            key={`tag-${tag}`}
             onPress={() => {
-              if (!canTag) {
-                showToast('Tap in here first to add tags.', 'info');
-                return;
-              }
-              const eventPayload = { placeId: placeId || null, name: displayName, tag };
-              const isActive = !!tagVotes[tag];
-              const nextVotes = { ...tagVotes, [tag]: !isActive };
-              setTagVotes(nextVotes);
-              persistTagVotes(nextVotes);
-              const delta = isActive ? -1 : 1;
-              recordPlaceTag(eventPayload.placeId, eventPayload.name, tag, delta);
-              recordPlaceTagRemote({ ...eventPayload, delta });
-              if (user?.id) {
-                recordPlaceTagVoteRemote({ userId: user.id, placeId: eventPayload.placeId, name: eventPayload.name, tag, active: !isActive });
-              }
-              showToast(isActive ? `${tag} removed` : `${tag} added`, 'success');
+              try {
+                if (!mapsUrl) return;
+                void openExternalLink(mapsUrl);
+              } catch {}
             }}
-            style={[
-              styles.tagChip,
-              {
-                borderColor: border,
-                backgroundColor: tagVotes[tag] ? accent : 'transparent',
-                opacity: tagVotes[tag] ? 0.85 : 1,
-              },
-            ]}
           >
-            <Text style={{ color: tagVotes[tag] ? '#FFFFFF' : text, fontWeight: '600' }}>
-              {tag}
-            </Text>
+            <SpotImage source={{ uri: mapUrl }} style={styles.map} />
           </Pressable>
-        ))}
-      </View>
-      {mapUrl ? (
-        <Pressable
+        ) : (
+          <View style={[styles.map, { backgroundColor: card, borderColor: border }]} />
+        )}
+        <View style={{ height: 10 }} />
+        <View style={styles.densityRow}>
+          {densityBars.map((h, i) => (
+            <View key={`bar-${i}`} style={[styles.densityBar, { backgroundColor: border }]}>
+              <View style={[styles.densityFill, { backgroundColor: primary, flex: h }]} />
+            </View>
+          ))}
+        </View>
+        <Text style={{ color: muted, marginTop: 6 }}>Past 12 hours</Text>
+        <View style={{ height: 12 }} />
+        <PremiumButton
           onPress={() => {
-            try {
-              if (!mapsUrl) return;
-              if (Platform.OS === 'web') {
-                window.open(mapsUrl, '_blank', 'noopener');
-              } else {
-                Linking.openURL(mapsUrl);
-              }
-            } catch {}
+            const name = encodeURIComponent(displayName);
+            const lat = typeof coords?.lat === 'number' ? `&lat=${coords.lat}` : '';
+            const lng = typeof coords?.lng === 'number' ? `&lng=${coords.lng}` : '';
+            router.push(`/checkin?spot=${name}${lat}${lng}&placeId=${encodeURIComponent(placeId || '')}`);
           }}
+          variant="primary"
+          size="large"
+          icon="plus.circle.fill"
+          fullWidth
         >
-          <SpotImage source={{ uri: mapUrl }} style={styles.map} />
-        </Pressable>
-      ) : (
-        <View style={[styles.map, { backgroundColor: card, borderColor: border }]} />
-      )}
-      <View style={{ height: 10 }} />
-      <View style={styles.densityRow}>
-        {densityBars.map((h, i) => (
-          <View key={`bar-${i}`} style={[styles.densityBar, { backgroundColor: border }]}>
-            <View style={[styles.densityFill, { backgroundColor: primary, flex: h }]} />
-          </View>
-        ))}
-      </View>
-      <Text style={{ color: muted, marginTop: 6 }}>Past 12 hours</Text>
-      <View style={{ height: 12 }} />
-      <PremiumButton
-        onPress={() => {
-          const name = encodeURIComponent(displayName);
-          const lat = typeof coords?.lat === 'number' ? `&lat=${coords.lat}` : '';
-          const lng = typeof coords?.lng === 'number' ? `&lng=${coords.lng}` : '';
-          router.push(`/checkin?spot=${name}${lat}${lng}&placeId=${encodeURIComponent(placeId || '')}`);
-        }}
-        variant="primary"
-        size="large"
-        icon="plus.circle.fill"
-        fullWidth
-      >
-        Tap in here
-      </PremiumButton>
-      <View style={styles.actionRow}>
-        {coords ? (
-	          <Pressable
-	            onPress={() => {
-	              const eventPayload = { event: 'map_open' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
-	              recordPlaceEvent(eventPayload);
-	              recordPlaceEventRemote(eventPayload);
-	              if (!mapsUrl) return;
-              if (Platform.OS === 'web') {
-                window.open(mapsUrl, '_blank', 'noopener');
-              } else {
-                Linking.openURL(mapsUrl);
+          Tap in here
+        </PremiumButton>
+        <View style={styles.actionRow}>
+          {coords ? (
+            <Pressable
+              onPress={() => {
+                const eventPayload = { event: 'map_open' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
+                recordPlaceEvent(eventPayload);
+                recordPlaceEventRemote(eventPayload);
+                if (!mapsUrl) return;
+                void openExternalLink(mapsUrl);
+              }}
+              style={[styles.secondary, { borderColor: border }]}
+            >
+              <Text style={{ color: text, fontWeight: '700' }}>Open in Maps</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            onPress={async () => {
+              if (saving) return;
+              saveScale.value = withSequence(
+                withSpring(1.3, { damping: 4, stiffness: 400 }),
+                withSpring(1, { damping: 8, stiffness: 200 }),
+              );
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setSaving(true);
+              try {
+                const next = await toggleSavedSpot({ placeId: placeId || undefined, name: displayName });
+                setSaved(next);
+                if (next) {
+                  const eventPayload = { event: 'save' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
+                  recordPlaceEvent(eventPayload);
+                  recordPlaceEventRemote(eventPayload);
+                }
+              } finally {
+                setSaving(false);
               }
+            }}
+            style={[styles.secondary, { borderColor: border, backgroundColor: saved ? primary : 'transparent' }]}
+          >
+            <Animated.View style={saveAnimStyle}>
+              <Text style={{ color: saved ? '#FFFFFF' : text, fontWeight: '700' }}>{saved ? 'Saved' : 'Save'}</Text>
+            </Animated.View>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              const deepLink = ExpoLinking.createURL('/spot', { queryParams: { placeId: placeId || '', name: displayName } });
+              const message = `${displayName}\n${deepLink}`;
+              Share.share({ message });
             }}
             style={[styles.secondary, { borderColor: border }]}
           >
-            <Text style={{ color: text, fontWeight: '700' }}>Open in Maps</Text>
+            <Text style={{ color: text, fontWeight: '700' }}>Share spot</Text>
           </Pressable>
+        </View>
+
+        {friendsHere.length ? (
+          <View style={{ marginTop: 16 }}>
+            <Text style={{ color: muted, marginBottom: 6 }}>Friends here now</Text>
+            {friendsHere.map((f) => (
+              <View key={f.id} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
+                <Text style={{ color: text, fontWeight: '600' }}>{f.name || 'Friend'}</Text>
+                <Text style={{ color: muted }}>{f.handle ? `@${f.handle}` : f.email || ''}</Text>
+              </View>
+            ))}
+          </View>
         ) : null}
-        <Pressable
-          onPress={async () => {
-            if (saving) return;
-            setSaving(true);
-            try {
-	              const next = await toggleSavedSpot({ placeId: placeId || undefined, name: displayName });
-	              setSaved(next);
-	              if (next) {
-	                const eventPayload = { event: 'save' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
-	                recordPlaceEvent(eventPayload);
-	                recordPlaceEventRemote(eventPayload);
-	              }
-            } finally {
-              setSaving(false);
-            }
-          }}
-          style={[styles.secondary, { borderColor: border, backgroundColor: saved ? primary : 'transparent' }]}
-        >
-          <Text style={{ color: saved ? '#FFFFFF' : text, fontWeight: '700' }}>{saved ? 'Saved' : 'Save'}</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            const deepLink = ExpoLinking.createURL('/spot', { queryParams: { placeId: placeId || '', name: displayName } });
-            const message = `${displayName}\n${deepLink}`;
-            Share.share({ message });
-          }}
-          style={[styles.secondary, { borderColor: border }]}
-        >
-          <Text style={{ color: text, fontWeight: '700' }}>Share spot</Text>
-        </Pressable>
-      </View>
-
-      {friendsHere.length ? (
-        <View style={{ marginTop: 16 }}>
-          <Text style={{ color: muted, marginBottom: 6 }}>Friends here now</Text>
-          {friendsHere.map((f) => (
-            <View key={f.id} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
-              <Text style={{ color: text, fontWeight: '600' }}>{f.name || 'Friend'}</Text>
-              <Text style={{ color: muted }}>{f.handle ? `@${f.handle}` : f.email || ''}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-      {peopleHere.length ? (
-        <View style={{ marginTop: 16 }}>
-          <Text style={{ color: muted, marginBottom: 6 }}>People here now</Text>
-          {peopleHere.map((p) => (
-            <View key={p.id} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: text, fontWeight: '600' }}>{p.name || 'Student'}</Text>
-                <Text style={{ color: muted }}>{p.handle ? `@${p.handle}` : p.email || ''}</Text>
+        {peopleHere.length ? (
+          <View style={{ marginTop: 16 }}>
+            <Text style={{ color: muted, marginBottom: 6 }}>People here now</Text>
+            {peopleHere.map((p) => (
+              <View key={p.id} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: text, fontWeight: '600' }}>{p.name || 'Student'}</Text>
+                  <Text style={{ color: muted }}>{p.handle ? `@${p.handle}` : p.email || ''}</Text>
+                </View>
+                <Pressable
+                  onPress={() => user && sendFriendRequest(user.id, p.id)}
+                  style={[styles.addButton, { backgroundColor: primary }]}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
+                </Pressable>
               </View>
-              <Pressable
-                onPress={() => user && sendFriendRequest(user.id, p.id)}
-                style={[styles.addButton, { backgroundColor: primary }]}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
-              </Pressable>
-            </View>
-          ))}
-        </View>
-      ) : null}
+            ))}
+          </View>
+        ) : null}
 
-      {recentCheckins.length ? (
-        <View style={{ marginTop: 16 }}>
-          <Text style={{ color: muted, marginBottom: 6 }}>Recent check-ins</Text>
-          {recentCheckins.map((c) => {
-            const remaining = formatTimeRemaining(c);
-            const candidate = c.photoUrl || (c as any).photoURL || (c as any).imageUrl || (c as any).imageURL || c.image;
-            const photo = typeof candidate === 'string' && isWeb && (candidate.startsWith('file:') || candidate.startsWith('blob:'))
-              ? c.image
-              : candidate;
-            return (
-            <View key={c.id} style={[styles.feedRow, { borderColor: border, backgroundColor: card }]}>
-              {photo ? (
-                <SpotImage source={{ uri: photo }} style={styles.feedThumb} />
-              ) : (
-                <View style={[styles.feedThumb, { backgroundColor: border }]} />
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: text, fontWeight: '600' }}>{c.userName || 'Someone'}</Text>
-                <Text style={{ color: muted }}>{c.caption || 'Checked in'}</Text>
-                <Text style={{ color: muted, marginTop: 4 }}>{formatTime(c.createdAt)}</Text>
-                {remaining ? <Text style={{ color: muted, marginTop: 2 }}>{remaining}</Text> : null}
-              </View>
-              <Pressable
-                onPress={async () => {
-                  setReactions((prev) => ({ ...prev, [c.id]: (prev[c.id] || 0) + 1 }));
-                  await logEvent('checkin_reacted', user?.id, { checkinId: c.id, spot: displayName, reaction: 'wave' });
-                }}
-                style={[styles.reaction, { borderColor: border }]}
-              >
-                <Text style={{ color: text }}>👋 {reactions[c.id] || 0}</Text>
-              </Pressable>
-            </View>
-          );
-          })}
-        </View>
-      ) : (
-        <Body style={{ color: muted, marginTop: 12 }}>No recent check-ins yet.</Body>
-      )}
+        {recentCheckins.length ? (
+          <View style={{ marginTop: 16 }}>
+            <Text style={{ color: muted, marginBottom: 6 }}>Recent check-ins</Text>
+            {recentCheckins.map((c) => {
+              const remaining = formatTimeRemaining(c);
+              const photo = resolvePhotoUri(c);
+              return (
+                <View key={c.id} style={[styles.feedRow, { borderColor: border, backgroundColor: card }]}>
+                  {photo ? (
+                    <SpotImage source={photo} style={styles.feedThumb} />
+                  ) : (
+                    <View style={[styles.feedThumb, { backgroundColor: border }]} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: text, fontWeight: '600' }}>{c.userName || 'Someone'}</Text>
+                    <Text style={{ color: muted }}>{c.caption || 'Checked in'}</Text>
+                    <Text style={{ color: muted, marginTop: 4 }}>{formatTime(c.createdAt)}</Text>
+                    {remaining ? <Text style={{ color: muted, marginTop: 2 }}>{remaining}</Text> : null}
+                  </View>
+                  <Pressable
+                    onPress={async () => {
+                      setReactions((prev) => ({ ...prev, [c.id]: (prev[c.id] || 0) + 1 }));
+                      await logEvent('checkin_reacted', user?.id, { checkinId: c.id, spot: displayName, reaction: 'wave' });
+                    }}
+                    style={[styles.reaction, { borderColor: border }]}
+                  >
+                    <Text style={{ color: text }}>👋 {reactions[c.id] || 0}</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Body style={{ color: muted, marginTop: 12 }}>No recent check-ins yet.</Body>
+        )}
+      </Animated.ScrollView>
 
       {intelligence ? (
         <ScoreBreakdownSheet
@@ -626,7 +690,8 @@ export default function SpotDetail() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
+  container: { flex: 1 },
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 28 },
   intelCard: {
     borderWidth: 1,
     borderRadius: 18,

@@ -1,4 +1,5 @@
 import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
+import { findInvalidPhotoSeeds, resolvePhotoUri } from '@/services/photoSources';
 const KEY = 'spot_checkins_v1';
 const CHECKIN_COOLDOWN_KEY = 'spot_checkin_last_v1';
 const DEMO_SEED_KEY = 'spot_demo_seeded_v1';
@@ -740,6 +741,7 @@ export async function removePendingCheckin(clientId: string) {
 
 export async function seedDemoNetwork(currentUserId?: string) {
   try {
+    const demoFallbackPhoto = 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=1400&q=80';
     const now = Date.now();
     const SEED_TTL_MS = 6 * 60 * 60 * 1000;
     if (isWeb()) {
@@ -1064,8 +1066,21 @@ export async function seedDemoNetwork(currentUserId?: string) {
       // ignore
     }
 
+    const rawSeedEntries = [...selfSeed, ...demoCheckins] as any[];
+    if (__DEV__) {
+      const invalid = findInvalidPhotoSeeds(rawSeedEntries);
+      if (invalid.length) {
+        console.warn('[demo-seed] Invalid photo URL(s) detected:', invalid.slice(0, 8));
+      }
+    }
+    const normalizeSeedPhoto = (entry: any) => {
+      const resolved = resolvePhotoUri(entry);
+      if (resolved) return { ...entry, photoUrl: resolved };
+      return { ...entry, photoUrl: demoFallbackPhoto, image: demoFallbackPhoto };
+    };
+    const normalizedSeedEntries = rawSeedEntries.map(normalizeSeedPhoto);
     const filtered = checkins.filter((c: any) => !isDemoSeedId(c?.id));
-    const next = [...selfSeed, ...demoCheckins, ...filtered];
+    const next = [...normalizedSeedEntries, ...filtered];
     if (isWeb()) {
       window.localStorage.setItem(KEY, JSON.stringify(next));
       try { window.localStorage.setItem(DEMO_SEED_KEY, String(now)); } catch {}

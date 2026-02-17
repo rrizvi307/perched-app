@@ -10,6 +10,59 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function friendList(doc) {
+      return doc.friends is list ? doc.friends : [];
+    }
+
+    function closeFriendList(doc) {
+      return doc.closeFriends is list ? doc.closeFriends : [];
+    }
+
+    function hasPendingIncomingFriendRequest(ownerId, actorId) {
+      return exists(/databases/$(database)/documents/friendRequests/$(ownerId + "_" + actorId)) &&
+        get(/databases/$(database)/documents/friendRequests/$(ownerId + "_" + actorId)).data.status == 'pending';
+    }
+
+    function canAddSelfToFriendList(ownerId) {
+      return !friendList(resource.data).hasAny([request.auth.uid]) &&
+        friendList(request.resource.data).hasAny([request.auth.uid]) &&
+        friendList(request.resource.data).hasAll(friendList(resource.data)) &&
+        friendList(request.resource.data).size() <= friendList(resource.data).size() + 1 &&
+        closeFriendList(request.resource.data).hasAll(closeFriendList(resource.data)) &&
+        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
+        hasPendingIncomingFriendRequest(ownerId, request.auth.uid);
+    }
+
+    function canRemoveSelfFromFriendList() {
+      return friendList(resource.data).hasAny([request.auth.uid]) &&
+        !friendList(request.resource.data).hasAny([request.auth.uid]) &&
+        friendList(resource.data).hasAll(friendList(request.resource.data)) &&
+        friendList(resource.data).size() <= friendList(request.resource.data).size() + 1 &&
+        !closeFriendList(request.resource.data).hasAny([request.auth.uid]) &&
+        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
+        closeFriendList(resource.data).size() <= closeFriendList(request.resource.data).size() + 1;
+    }
+
+    function canRemoveSelfFromCloseFriendList() {
+      return closeFriendList(resource.data).hasAny([request.auth.uid]) &&
+        !closeFriendList(request.resource.data).hasAny([request.auth.uid]) &&
+        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
+        closeFriendList(resource.data).size() <= closeFriendList(request.resource.data).size() + 1 &&
+        friendList(request.resource.data).hasAll(friendList(resource.data)) &&
+        friendList(resource.data).hasAll(friendList(request.resource.data));
+    }
+
+    function canMutateFriendEdge(ownerId) {
+      return isAuthenticated() &&
+        request.auth.uid != ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends', 'closeFriends']) &&
+        (
+          canAddSelfToFriendList(ownerId) ||
+          canRemoveSelfFromFriendList() ||
+          canRemoveSelfFromCloseFriendList()
+        );
+    }
+
     function isAdmin() {
       return isAuthenticated() &&
         exists(/databases/$(database)/documents/admins/$(request.auth.uid));
@@ -36,9 +89,11 @@ service cloud.firestore {
                       request.auth.uid == userId &&
                       request.resource.data.keys().hasAll(['email', 'createdAt']);
 
-      allow update: if isOwner(userId) &&
-                      // Prevent changing critical fields
-                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'createdAt']);
+      allow update: if (
+        isOwner(userId) &&
+          // Prevent changing critical fields
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'createdAt'])
+      ) || canMutateFriendEdge(userId);
 
       // Only user or admin can delete
       allow delete: if isOwner(userId) || isAdmin();
