@@ -4,7 +4,7 @@
     "slug": "perched",
     "version": "1.1",
     "orientation": "portrait",
-    "icon": "./assets/brand/perched-icon-slim-white.png",
+    "icon": "./assets/brand/perched-icon-purple.png",
     "scheme": "perched",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -72,7 +72,7 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/brand/perched-icon-slim-white.png"
+      "favicon": "./assets/brand/perched-icon-purple.png"
     },
     "plugins": [
       "expo-router",
