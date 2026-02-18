@@ -93,6 +93,29 @@ describe('buildPlaceIntelligence', () => {
     expect(result.scoreBreakdown.venueType.value).toBeGreaterThanOrEqual(20);
   });
 
+  it('raises work score when wifi, laptop-friendliness, and outlets are stronger', async () => {
+    const weak = await buildPlaceIntelligence({
+      placeName: 'Signals Low',
+      placeId: 'signals-low',
+      checkins: [
+        mkCheckin({ wifiSpeed: 2, laptopFriendly: false, outletAvailability: 'few', busyness: 3, noiseLevel: 'moderate' }),
+      ],
+    });
+
+    const strong = await buildPlaceIntelligence({
+      placeName: 'Signals High',
+      placeId: 'signals-high',
+      checkins: [
+        mkCheckin({ wifiSpeed: 4, laptopFriendly: true, outletAvailability: 'plenty', busyness: 3, noiseLevel: 'moderate' }),
+      ],
+    });
+
+    expect(strong.workScore).toBeGreaterThan(weak.workScore);
+    expect(strong.scoreBreakdown.wifi.value).toBeGreaterThan(weak.scoreBreakdown.wifi.value);
+    expect(strong.scoreBreakdown.laptop.value).toBeGreaterThan(weak.scoreBreakdown.laptop.value);
+    expect(strong.scoreBreakdown.outlet.value).toBeGreaterThan(weak.scoreBreakdown.outlet.value);
+  });
+
   it('returns zero work score for no-seating outdoor spots', async () => {
     const result = await buildPlaceIntelligence({
       placeName: 'Memorial Trail Park',

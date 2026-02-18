@@ -5,6 +5,7 @@ import { Body, H1, Label } from '@/components/ui/typography';
 import { PremiumButton } from '@/components/ui/premium-button';
 import { PolishedCard } from '@/components/ui/polished-card';
 import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
+import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
@@ -20,11 +21,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { logEvent } from '@/services/logEvent';
 import { useToast } from '@/contexts/ToastContext';
 import { buildPlaceIntelligence, PlaceIntelligence } from '@/services/placeIntelligence';
 import { runAfterInteractions } from '@/services/performance';
+import { safeImpact } from '@/utils/haptics';
 import Animated, {
   Easing,
   runOnJS,
@@ -71,7 +74,7 @@ function VoteableTag({
       withSpring(1.05, { damping: 6, stiffness: 300 }),
       withSpring(1, { damping: 10, stiffness: 200 }),
     );
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void safeImpact(Haptics.ImpactFeedbackStyle.Medium);
   };
 
   return (
@@ -119,6 +122,7 @@ export default function SpotDetail() {
   const [tagVotes, setTagVotes] = useState<Record<string, boolean>>({});
   const [tagVariant, setTagVariant] = useState<keyof typeof TAG_VARIANTS>('core5');
   const [intelligence, setIntelligence] = useState<PlaceIntelligence | null>(null);
+  const [loadingInitial, setLoadingInitial] = useState(true);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [displayScoreText, setDisplayScoreText] = useState('0');
   const saveScale = useSharedValue(1);
@@ -197,10 +201,15 @@ export default function SpotDetail() {
         return;
       }
     } catch {}
-    try {
-      (global as any)._spot_tag_votes = (global as any)._spot_tag_votes || {};
-      (global as any)._spot_tag_votes[placeKey] = nextVotes;
-    } catch {}
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TAG_VOTES_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        const data = parsed && typeof parsed === 'object' ? parsed : {};
+        data[placeKey] = nextVotes;
+        await AsyncStorage.setItem(TAG_VOTES_KEY, JSON.stringify(data));
+      } catch {}
+    })();
   }
 
   useEffect(() => {
@@ -212,10 +221,20 @@ export default function SpotDetail() {
         return;
       }
     } catch {}
-    try {
-      const data = (global as any)._spot_tag_votes || {};
-      setTagVotes(data[placeKey] || {});
-    } catch {}
+    let canceled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TAG_VOTES_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        const data = parsed && typeof parsed === 'object' ? parsed : {};
+        if (!canceled) setTagVotes(data[placeKey] || {});
+      } catch {
+        if (!canceled) setTagVotes({});
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
   }, [placeKey]);
 
   useEffect(() => {
@@ -262,6 +281,7 @@ export default function SpotDetail() {
 
   useEffect(() => {
     (async () => {
+      setLoadingInitial(true);
       try {
         const res = await getCheckinsRemote(80);
         const items = (res.items || []).filter((it: any) => !isCheckinExpired(it));
@@ -273,6 +293,8 @@ export default function SpotDetail() {
         setCheckins(filtered);
       } catch {
         setCheckins([]);
+      } finally {
+        setLoadingInitial(false);
       }
     })();
   }, [placeId, nameParam]);
@@ -437,7 +459,17 @@ export default function SpotDetail() {
         <H1 style={{ color: text }}>{displayName}</H1>
         {normalizedName ? null : null}
         <View style={{ height: 12 }} />
-        {intelligence ? (
+        {loadingInitial ? (
+          <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
+            <SkeletonLoader width="38%" height={14} />
+            <View style={[styles.intelRow, { marginTop: 12 }]}>
+              <SkeletonLoader width="30%" height={40} />
+              <SkeletonLoader width="30%" height={40} />
+              <SkeletonLoader width="30%" height={40} />
+            </View>
+            <SkeletonLoader width="52%" height={14} style={{ marginTop: 12 }} />
+          </PolishedCard>
+        ) : intelligence ? (
           <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
             <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
             <View style={styles.intelRow}>
@@ -577,7 +609,7 @@ export default function SpotDetail() {
                 withSpring(1.3, { damping: 4, stiffness: 400 }),
                 withSpring(1, { damping: 8, stiffness: 200 }),
               );
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              void safeImpact(Haptics.ImpactFeedbackStyle.Medium);
               setSaving(true);
               try {
                 const next = await toggleSavedSpot({ placeId: placeId || undefined, name: displayName });

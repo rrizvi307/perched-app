@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { track } from './analytics';
+import { ensureFirebase, updateUserRemote } from './firebaseClient';
 
 export interface Achievement {
   id: string;
@@ -213,6 +214,23 @@ export async function updateStatsAfterCheckin(
   }
   stats.spotVisits[spotId]++;
 
+  // Check if first discovery (first person to check in at this spot)
+  if (stats.spotVisits[spotId] === 1) {
+    try {
+      const fb = ensureFirebase();
+      if (fb) {
+        const snap = await fb.firestore()
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .limit(2)
+          .get();
+        if (snap.size <= 1) {
+          stats.firstDiscoveries++;
+        }
+      }
+    } catch {}
+  }
+
   // Check if return visit (3+ times)
   if (stats.spotVisits[spotId] >= 3) {
     stats.returnVisits = Object.values(stats.spotVisits).filter((count) => count >= 3).length;
@@ -262,6 +280,18 @@ export async function updateStatsAfterCheckin(
 
   // Save stats
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stats));
+
+  // Sync streak to Firestore user doc for campus leaderboard
+  try {
+    const fb = ensureFirebase();
+    const uid = fb?.auth()?.currentUser?.uid;
+    if (uid) {
+      void updateUserRemote(uid, {
+        streakDays: stats.streakDays,
+        longestStreak: stats.longestStreak,
+      });
+    }
+  } catch {}
 
   // Check for new achievements
   await checkAchievements(stats);

@@ -11,6 +11,7 @@ import { recordPerfMetric } from './perfMonitor';
 import { parseCheckinTimestamp } from './schemaHelpers';
 import { withErrorBoundary } from './errorBoundary';
 import { devLog } from './logger';
+import { getUserPreferenceScores } from '@/storage/local';
 
 export interface SpotRecommendation {
   placeId: string;
@@ -277,6 +278,8 @@ export async function learnUserPreferences(userId: string): Promise<UserPreferen
     // Analyze preferences
     const noiseLevels: number[] = [];
     const busynessLevels: number[] = [];
+    const wifiSpeeds: number[] = [];
+    const outletAvailabilityScores: number[] = [];
     const spotTypes: string[] = [];
     const checkinTimes: number[] = [];
     const spotIds = new Set<string>();
@@ -284,6 +287,9 @@ export async function learnUserPreferences(userId: string): Promise<UserPreferen
     checkins.forEach(checkin => {
       if (checkin.noiseLevel) noiseLevels.push(checkin.noiseLevel);
       if (checkin.busyness) busynessLevels.push(checkin.busyness);
+      if (typeof checkin.wifiSpeed === 'number') wifiSpeeds.push(checkin.wifiSpeed);
+      const outletScore = toOutletAvailabilityScore(checkin.outletAvailability);
+      if (outletScore !== null) outletAvailabilityScores.push(outletScore);
       if (checkin.spotType) spotTypes.push(checkin.spotType);
       if (checkin.spotPlaceId) spotIds.add(checkin.spotPlaceId);
 
@@ -302,6 +308,9 @@ export async function learnUserPreferences(userId: string): Promise<UserPreferen
       ? busynessLevels.reduce((a, b) => a + b, 0) / busynessLevels.length
       : null;
 
+    const avgWifiSpeed = average(wifiSpeeds);
+    const avgOutletAvailability = average(outletAvailabilityScores);
+
     const preferences: UserPreferences = {
       userId,
       preferredNoiseLevel: avgNoise
@@ -312,8 +321,8 @@ export async function learnUserPreferences(userId: string): Promise<UserPreferen
         : null,
       preferredSpotTypes: getMostFrequent(spotTypes, 3),
       preferredTimeOfDay: getPreferredTimeOfDay(checkinTimes),
-      wifiImportance: 'medium', // TODO: Infer from behavior
-      outletImportance: 'medium', // TODO: Infer from behavior
+      wifiImportance: toImportance(avgWifiSpeed),
+      outletImportance: toImportance(avgOutletAvailability),
       frequentSpots: Array.from(spotIds).slice(0, 10),
       checkinTimes: checkinTimes.slice(0, 20),
       avgSessionLength: 60, // TODO: Calculate from check-in duration
@@ -429,6 +438,15 @@ async function calculateSpotScore(
       score += 15;
     }
   }
+
+  // Behavioral preference boost from place events
+  try {
+    const prefScores = await getUserPreferenceScores(userId);
+    const categoryWeight = prefScores[spot.category] || 0;
+    if (categoryWeight > 0) {
+      score = score * (1 + 0.3 * Math.min(categoryWeight, 1));
+    }
+  } catch {}
 
   // Frequency bonus (user's frequent spots)
   if (preferences.frequentSpots.includes(spot.placeId)) {
@@ -580,6 +598,30 @@ function getMostFrequent(arr: string[], limit: number): string[] {
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([item]) => item);
+}
+
+function average(values: number[]): number | null {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function toImportance(avgValue: number | null): 'low' | 'medium' | 'high' {
+  if (avgValue === null) return 'medium';
+  if (avgValue >= 4) return 'high';
+  if (avgValue <= 2) return 'low';
+  return 'medium';
+}
+
+function toOutletAvailabilityScore(value: unknown): number | null {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 4 : 1;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'plenty') return 4;
+  if (normalized === 'some') return 3;
+  if (normalized === 'few') return 2;
+  if (normalized === 'none') return 1;
+  return null;
 }
 
 function getPreferredTimeOfDay(hours: number[]): 'morning' | 'afternoon' | 'evening' | null {

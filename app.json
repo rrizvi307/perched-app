@@ -63,6 +63,7 @@
       "REVENUECAT_PUBLIC_KEY": "",
       "TIKTOK_URL": "https://tiktok.com/@perchedapp",
       "INTEL_V1_ENABLED": false,
+      "PLACE_INTEL_ENABLE_WEATHER": "true",
       "eas": {
         "projectId": "8413644e-43e4-4409-8302-9454707c4f42"
       },

@@ -2,7 +2,6 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import * as ImagePicker from 'expo-image-picker';
-import * as Haptics from 'expo-haptics';
 import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
@@ -31,9 +30,11 @@ import { syncPendingCheckins } from '@/services/syncPending';
 import { useLocalSearchParams, useRootNavigationState, useRouter } from 'expo-router';
 import { classifySpotCategory } from '@/services/spotUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { updateStatsAfterCheckin } from '@/services/gamification';
+import { updateStatsAfterCheckin, getUserStats } from '@/services/gamification';
 import { notifyAchievementUnlocked, scheduleStreakReminder } from '@/services/smartNotifications';
+import { safeImpact, safeNotification } from '@/utils/haptics';
 import { trackCheckinForRating, promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
+import { toNumericNoiseLevel } from '@/services/checkinUtils';
 
 function dmsToDeg(value: any, ref?: string) {
 	if (!value) return null;
@@ -75,6 +76,8 @@ export default function CheckinScreen() {
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [drinkPrice, setDrinkPrice] = useState<1 | 2 | 3 | null>(null); // 1=$, 2=$$, 3=$$$
 	const [drinkQuality, setDrinkQuality] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -165,13 +168,13 @@ export default function CheckinScreen() {
 	// Celebrate when all metrics are completed
 	const prevMetricsCompleteRef = useRef(false);
 	useEffect(() => {
-		const allComplete = noiseLevel !== null && busyness !== null && drinkPrice !== null && drinkQuality !== null;
-		if (allComplete && !prevMetricsCompleteRef.current) {
-			// Just completed all metrics - celebrate!
-			Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-		}
-		prevMetricsCompleteRef.current = allComplete;
-	}, [noiseLevel, busyness, drinkPrice, drinkQuality]);
+			const allComplete = noiseLevel !== null && busyness !== null && drinkPrice !== null && drinkQuality !== null && wifiSpeed !== null && laptopFriendly !== null;
+			if (allComplete && !prevMetricsCompleteRef.current) {
+				// Just completed all metrics - celebrate!
+				void safeNotification();
+			}
+			prevMetricsCompleteRef.current = allComplete;
+		}, [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly]);
 
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
@@ -204,15 +207,13 @@ export default function CheckinScreen() {
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
 					// Load metrics from edit mode
-					if (check.noiseLevel) {
-						const convertedNoise = typeof check.noiseLevel === 'string'
-							? (check.noiseLevel === 'quiet' ? 2 : check.noiseLevel === 'moderate' ? 3 : 4)
-							: check.noiseLevel;
-						setNoiseLevel(convertedNoise);
-					}
+					const convertedNoise = toNumericNoiseLevel(check.noiseLevel ?? null);
+					if (convertedNoise) setNoiseLevel(convertedNoise);
 					if (check.busyness) setBusyness(check.busyness);
 					if (check.drinkPrice) setDrinkPrice(check.drinkPrice);
 					if (check.drinkQuality) setDrinkQuality(check.drinkQuality);
+					if (typeof check.wifiSpeed === 'number') setWifiSpeed(check.wifiSpeed);
+					if (typeof check.laptopFriendly === 'boolean') setLaptopFriendly(check.laptopFriendly);
 					}
 				} catch {
 					try {
@@ -225,13 +226,13 @@ export default function CheckinScreen() {
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 							// Load metrics from edit mode (local fallback)
-							if (found.noiseLevel) {
-								const convertedNoise = typeof found.noiseLevel === 'string'
-									? (found.noiseLevel === 'quiet' ? 2 : found.noiseLevel === 'moderate' ? 3 : 4)
-									: found.noiseLevel;
-								setNoiseLevel(convertedNoise);
-							}
+							const convertedNoiseLocal = toNumericNoiseLevel(found.noiseLevel ?? null);
+							if (convertedNoiseLocal) setNoiseLevel(convertedNoiseLocal);
 							if (found.busyness) setBusyness(found.busyness);
+							if (found.drinkPrice) setDrinkPrice(found.drinkPrice);
+							if (found.drinkQuality) setDrinkQuality(found.drinkQuality);
+							if (typeof found.wifiSpeed === 'number') setWifiSpeed(found.wifiSpeed);
+							if (typeof found.laptopFriendly === 'boolean') setLaptopFriendly(found.laptopFriendly);
 						}
 					} catch {}
 					}
@@ -328,17 +329,16 @@ export default function CheckinScreen() {
 						});
 					}
 					// Load metrics from draft
-					if (draft.noiseLevel) {
-						const convertedNoise = typeof draft.noiseLevel === 'string' 
-							? (draft.noiseLevel === 'quiet' ? 2 : draft.noiseLevel === 'moderate' ? 3 : 4)
-							: draft.noiseLevel;
-						setNoiseLevel(convertedNoise);
-					}
+					const convertedNoiseDraft = toNumericNoiseLevel(draft.noiseLevel ?? null);
+					if (convertedNoiseDraft) setNoiseLevel(convertedNoiseDraft);
 					if (typeof draft.busyness === 'number') setBusyness(draft.busyness);
 					if (typeof draft.drinkPrice === 'number') setDrinkPrice(draft.drinkPrice);
 					if (typeof draft.drinkQuality === 'number') setDrinkQuality(draft.drinkQuality);
+					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
+					if (typeof draft.laptopFriendly === 'boolean') setLaptopFriendly(draft.laptopFriendly);
 				}
 			} catch {}
+			draftLoadedRef.current = true;
 			const seen = await getPermissionPrimerSeen('camera');
 			if (!seen) {
 				setShowCameraPrimer(true);
@@ -347,8 +347,6 @@ export default function CheckinScreen() {
 			const cam = await ImagePicker.requestCameraPermissionsAsync();
 			setHasPermission(cam.status === 'granted');
 			await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-			draftLoadedRef.current = true;
 		})();
 		logEvent('checkin_started', user?.id);
 	}, [openCamera, user?.id]);
@@ -389,10 +387,12 @@ export default function CheckinScreen() {
 					busyness,
 					drinkPrice,
 					drinkQuality,
+					wifiSpeed,
+					laptopFriendly,
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -534,6 +534,8 @@ export default function CheckinScreen() {
 		setVisibility('public');
 		setIsEditMode(false);
 		setEditId(null);
+		setWifiSpeed(null);
+		setLaptopFriendly(null);
 		lastDetectRef.current = null;
 		draftEmptyRef.current = false;
 	}
@@ -560,7 +562,7 @@ export default function CheckinScreen() {
 				return;
 			}
 		// Gentle encouragement for metrics (non-blocking)
-		const metricsProvided = [noiseLevel, busyness, drinkPrice, drinkQuality].filter(Boolean).length;
+		const metricsProvided = [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly].filter((v) => v !== null && v !== undefined).length;
 		if (metricsProvided === 0) {
 			showToast('💡 Consider adding Spot Intel to help others!', 'info');
 			// Still allow posting - don't block
@@ -596,6 +598,8 @@ export default function CheckinScreen() {
 								busyness: busyness ?? null,
 								drinkPrice: drinkPrice ?? null,
 								drinkQuality: drinkQuality ?? null,
+								wifiSpeed: wifiSpeed ?? null,
+								laptopFriendly: laptopFriendly ?? null,
 							};
 						await fb.updateCheckinRemote(editId, updates);
 						// update local copy
@@ -658,6 +662,8 @@ export default function CheckinScreen() {
 					busyness: busyness ?? null,
 					drinkPrice: drinkPrice ?? null,
 					drinkQuality: drinkQuality ?? null,
+					wifiSpeed: wifiSpeed ?? null,
+					laptopFriendly: laptopFriendly ?? null,
 				} as any;
 			const pendingPayload = {
 				userId: uid,
@@ -680,6 +686,8 @@ export default function CheckinScreen() {
 					busyness: busyness ?? null,
 					drinkPrice: drinkPrice ?? null,
 					drinkQuality: drinkQuality ?? null,
+					wifiSpeed: wifiSpeed ?? null,
+					laptopFriendly: laptopFriendly ?? null,
 				};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
@@ -687,36 +695,42 @@ export default function CheckinScreen() {
 				await setLastCheckinAt(Date.now());
 
 				// Track gamification stats
+				let stats;
 				if (activePlace?.placeId) {
 					try {
-						const stats = await updateStatsAfterCheckin(activePlace.placeId, Date.now());
-						setShowCelebration(true);
-						setTimeout(() => setShowCelebration(false), 2500);
-
-						// Track for rating prompt
-						await trackCheckinForRating();
-
-						// Check for streak milestones and notify
-						if (stats.streakDays === 3 || stats.streakDays === 7 || stats.streakDays === 30 || stats.streakDays === 100) {
-							await notifyAchievementUnlocked(`${stats.streakDays} Day Streak`, '🔥');
-							// Perfect moment to ask for rating - user just hit milestone!
-							setTimeout(() => {
-								void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
-							}, 2000); // Wait 2s after notification
-						}
-
-						// Schedule next streak reminder
-						await scheduleStreakReminder();
-
-						// Prompt for rating after 10th check-in (milestone)
-						if (stats.totalCheckins === 10 || stats.totalCheckins === 25) {
-							setTimeout(() => {
-								void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
-							}, 2000);
-						}
+						stats = await updateStatsAfterCheckin(activePlace.placeId, Date.now());
 					} catch (error) {
 						console.error('Failed to update gamification stats:', error);
 					}
+				}
+				// Celebration + notifications don't require placeId
+				try {
+					if (!stats) stats = await getUserStats();
+					setShowCelebration(true);
+					setTimeout(() => setShowCelebration(false), 2500);
+
+					// Track for rating prompt
+					await trackCheckinForRating();
+
+					// Check for streak milestones and notify
+					if (stats.streakDays === 3 || stats.streakDays === 7 || stats.streakDays === 30 || stats.streakDays === 100) {
+						await notifyAchievementUnlocked(`${stats.streakDays} Day Streak`, '🔥');
+						setTimeout(() => {
+							void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
+						}, 2000);
+					}
+
+					// Schedule next streak reminder
+					await scheduleStreakReminder();
+
+					// Prompt for rating after 10th check-in (milestone)
+					if (stats.totalCheckins === 10 || stats.totalCheckins === 25) {
+						setTimeout(() => {
+							void promptRatingAtMoment(RatingTriggers.MILESTONE_REACHED);
+						}, 2000);
+					}
+				} catch (error) {
+					console.error('Failed to process celebration/notifications:', error);
 				}
 
 				// Track metrics impact
@@ -972,8 +986,8 @@ export default function CheckinScreen() {
 						{/* Spot Intel Section - Utility Metrics */}
 						<View style={{ marginTop: 16, marginBottom: 8 }}>
 							{(() => {
-								const metricsCompleted = [noiseLevel !== null, busyness !== null, drinkPrice !== null, drinkQuality !== null].filter(Boolean).length;
-								const metricsTotal = 4;
+								const metricsCompleted = [noiseLevel !== null, busyness !== null, drinkPrice !== null, drinkQuality !== null, wifiSpeed !== null, laptopFriendly !== null].filter(Boolean).length;
+								const metricsTotal = 6;
 								const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
 								return (
 									<>
@@ -1022,7 +1036,7 @@ export default function CheckinScreen() {
 										<Pressable
 											key={`noise-${level}`}
 											onPress={() => {
-												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												void safeImpact();
 												setNoiseLevel(noiseLevel === level ? null : level);
 											}}
 											style={[
@@ -1068,7 +1082,7 @@ export default function CheckinScreen() {
 										<Pressable
 											key={`busy-${level}`}
 											onPress={() => {
-												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												void safeImpact();
 												setBusyness(busyness === level ? null : level);
 											}}
 											style={[
@@ -1114,7 +1128,7 @@ export default function CheckinScreen() {
 										<Pressable
 											key={`price-${level}`}
 											onPress={() => {
-												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												void safeImpact();
 												setDrinkPrice(drinkPrice === level ? null : level);
 											}}
 											style={[
@@ -1156,7 +1170,7 @@ export default function CheckinScreen() {
 										<Pressable
 											key={`quality-${level}`}
 											onPress={() => {
-												Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+												void safeImpact();
 												setDrinkQuality(drinkQuality === level ? null : level);
 											}}
 											style={[
@@ -1192,6 +1206,113 @@ export default function CheckinScreen() {
 										: drinkQuality === 5
 										? 'Exceptional!'
 										: 'Tap to rate drink quality'}
+								</Text>
+							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>WiFi Speed</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([1, 2, 3, 4, 5] as const).map((level) => (
+										<Pressable
+											key={`wifi-${level}`}
+											onPress={() => {
+												void safeImpact();
+												setWifiSpeed(wifiSpeed === level ? null : level);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: wifiSpeed === level ? primary : 'transparent',
+													minWidth: 50,
+												},
+											]}
+										>
+											<Text
+												style={{
+													color: wifiSpeed === level ? '#FFFFFF' : text,
+													fontWeight: '600',
+													textAlign: 'center',
+												}}
+											>
+												{level === 1 ? '🐌' : level === 2 ? '📶' : level === 3 ? '✅' : level === 4 ? '🚀' : '⚡'}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{wifiSpeed === 1
+										? 'Unusable'
+										: wifiSpeed === 2
+										? 'Slow'
+										: wifiSpeed === 3
+										? 'Decent'
+										: wifiSpeed === 4
+										? 'Fast'
+										: wifiSpeed === 5
+										? 'Blazing!'
+										: 'Tap to rate WiFi speed'}
+								</Text>
+							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Laptop-Friendly?</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									<Pressable
+										onPress={() => {
+											void safeImpact();
+											setLaptopFriendly(laptopFriendly === true ? null : true);
+										}}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: laptopFriendly === true ? primary : 'transparent',
+												minWidth: 80,
+											},
+										]}
+									>
+										<Text
+											style={{
+												color: laptopFriendly === true ? '#FFFFFF' : text,
+												fontWeight: '600',
+												textAlign: 'center',
+											}}
+										>
+											💻 Yes
+										</Text>
+									</Pressable>
+									<Pressable
+										onPress={() => {
+											void safeImpact();
+											setLaptopFriendly(laptopFriendly === false ? null : false);
+										}}
+										style={[
+											styles.metricChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: laptopFriendly === false ? primary : 'transparent',
+												minWidth: 80,
+											},
+										]}
+									>
+										<Text
+											style={{
+												color: laptopFriendly === false ? '#FFFFFF' : text,
+												fontWeight: '600',
+												textAlign: 'center',
+											}}
+										>
+											🚫 No
+										</Text>
+									</Pressable>
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{laptopFriendly === true
+										? 'Good for laptop work'
+										: laptopFriendly === false
+										? 'Not great for laptops'
+										: 'Would you bring your laptop here?'}
 								</Text>
 							</View>
 						</View>

@@ -1204,7 +1204,7 @@ export default function ProfileScreen() {
             <View style={{ height: 20 }} />
             <H2 style={{ color: textColor }}>Friends</H2>
             <View style={[styles.friendCard, { backgroundColor: cardBg, borderColor }]}>
-              {!fbAvailable ? (
+              {__DEV__ && !fbAvailable ? (
                 <Text style={{ color: muted, marginBottom: 8 }}>
                   Demo mode: try adding @mayap or @jonstudy to test friends.
                 </Text>

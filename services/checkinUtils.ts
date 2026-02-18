@@ -1,5 +1,27 @@
 export const CHECKIN_TTL_MS = 24 * 60 * 60 * 1000;
 
+export function toNumericNoiseLevel(value: string | number | null): 1 | 2 | 3 | 4 | 5 | null {
+  if (value == null) return null;
+
+  if (typeof value === 'number') {
+    if (Number.isInteger(value) && value >= 1 && value <= 5) {
+      return value as 1 | 2 | 3 | 4 | 5;
+    }
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'quiet') return 2;
+  if (normalized === 'moderate') return 3;
+  if (normalized === 'lively') return 4;
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 5) {
+    return parsed as 1 | 2 | 3 | 4 | 5;
+  }
+  return null;
+}
+
 export function toMillis(input: any): number | null {
   if (!input) return null;
   if (typeof input === 'number') return input;

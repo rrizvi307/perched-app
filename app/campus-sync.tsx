@@ -9,6 +9,8 @@ import { PremiumButton } from '@/components/ui/premium-button';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
+import { useAuth } from '@/contexts/AuthContext';
+import { updateUserRemote } from '@/services/firebaseClient';
 
 interface Campus {
   id: string;
@@ -25,6 +27,7 @@ interface Campus {
  * Helps users connect with their university community
  */
 export default function CampusSyncScreen() {
+  const { user } = useAuth();
   const [selectedCampus, setSelectedCampus] = useState<Campus | null>(null);
   const [verificationMethod, setVerificationMethod] = useState<'email' | 'manual' | null>(null);
 
@@ -35,9 +38,12 @@ export default function CampusSyncScreen() {
 
   const handleSaveCampus = async () => {
     if (!selectedCampus) return;
-
-    // TODO: Save campus to user profile
-    console.log('Saving campus:', selectedCampus);
+    if (user?.id) {
+      await updateUserRemote(user.id, {
+        campus: selectedCampus.name,
+        campusOrCity: selectedCampus.name,
+      });
+    }
     router.back();
   };
 

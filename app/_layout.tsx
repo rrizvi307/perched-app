@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect, useRef } from 'react';
@@ -188,8 +188,7 @@ function InnerApp() {
         // Handle notification tap - navigate based on type
         const notifType = response.notification.request.content.data?.type;
         if (notifType === 'achievement') {
-          // Navigate to achievements screen when implemented
-          // router.push('/achievements');
+          router.push('/achievements');
         }
       });
 

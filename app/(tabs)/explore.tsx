@@ -43,7 +43,9 @@ import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
   getCheckins,
+  getLastKnownLocation,
   getLocationEnabled,
+  saveLastKnownLocation,
   seedDemoNetwork,
   setPermissionPrimerSeen,
 } from '@/storage/local';
@@ -280,7 +282,7 @@ export default function Explore() {
   const mapCenter = useMemo(() => {
     if (mapFocus) return mapFocus;
     if (loc) return loc;
-    return { lat: 29.7604, lng: -95.3698 };
+    return { lat: 39.83, lng: -98.58 };
   }, [mapFocus, loc]);
 
   const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
@@ -668,6 +670,19 @@ export default function Explore() {
     });
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      const lastKnown = await getLastKnownLocation().catch(() => null);
+      if (!active || !lastKnown) return;
+      setLoc((prev) => prev || lastKnown);
+      setMapFocus((prev) => prev || lastKnown);
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const handleLocateMe = useCallback(async () => {
     if (locBusy) return;
     setLocBusy(true);
@@ -690,6 +705,7 @@ export default function Explore() {
 
       setLoc(current);
       setMapFocus(current);
+      void saveLastKnownLocation(current);
       if (mapViewRef.current?.animateToRegion) {
         mapViewRef.current.animateToRegion(
           {

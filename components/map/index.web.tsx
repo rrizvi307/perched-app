@@ -32,7 +32,7 @@ function centerFromRegion(initialRegion: any) {
   if (initialRegion?.latitude && initialRegion?.longitude) {
     return { lat: initialRegion.latitude, lng: initialRegion.longitude };
   }
-  return { lat: 29.7604, lng: -95.3698 };
+  return { lat: 39.83, lng: -98.58 };
 }
 
 function toLatLng(input: any) {

@@ -87,8 +87,35 @@ export async function buildSpotIntelligence(
     // Collect reviews for NLP (5-10 samples)
     const reviews = collectReviewSamples(googleData, yelpData);
 
-    // Run NLP analysis
-    const nlpResult = await analyzeReviews(reviews, spotName);
+    // Run NLP analysis via Cloud Function (server-side, non-blocking)
+    let nlpResult: ReviewNLPResult;
+    try {
+      const fb = ensureFirebase();
+      if (fb && reviews.length > 0) {
+        const callable = fb.functions().httpsCallable('analyzeSpotReviews');
+        const response = await callable({
+          placeId: googlePlaceId,
+          placeName: spotName,
+          reviewTexts: reviews.map(r => r.text),
+        });
+        const d = response.data as any;
+        nlpResult = {
+          inferredNoise: d.noise || null,
+          inferredNoiseConfidence: d.noiseConfidence || 0,
+          hasWifi: d.hasWifi || false,
+          wifiConfidence: d.wifiConfidence || 0,
+          goodForStudying: d.goodForStudying || false,
+          goodForMeetings: d.goodForMeetings || false,
+          reviewCount: reviews.length,
+          lastAnalyzed: Date.now(),
+        };
+      } else {
+        nlpResult = await analyzeReviews(reviews, spotName);
+      }
+    } catch {
+      // Fallback to client-side analysis (dev only)
+      nlpResult = await analyzeReviews(reviews, spotName);
+    }
 
     // Derive boolean filters
     const goodForStudying = nlpResult.inferredNoise === 'quiet' && nlpResult.hasWifi;

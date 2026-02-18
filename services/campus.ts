@@ -390,7 +390,7 @@ export async function getCampusLeaderboard(
     const userById = new Map<string, any>(users.map((entry: any) => [entry.id, entry]));
     const leaderboard = sorted.map(([userId, checkinCount], index) => {
       const userData: any = userById.get(userId);
-      const streak = 0; // TODO: Implement proper streak calculation
+      const streak = userData?.streakDays ?? 0;
       return {
         userId,
         userName: userData?.name || 'Anonymous',

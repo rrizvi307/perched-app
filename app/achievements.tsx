@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ACHIEVEMENTS, getUserStats, getUnlockedAchievements, UserStats } from '@/services/gamification';
 import { AchievementCard } from '@/components/ui/achievement-card';
 import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { H1, Body } from '@/components/ui/typography';
@@ -160,17 +161,17 @@ export default function AchievementsScreen() {
             );
           })}
 
-          {unlockedCount === 0 && (
+          {unlockedCount === 0 ? (
             <View style={styles.emptyState}>
-              <Text style={{ fontSize: 48, marginBottom: 16 }}>🏆</Text>
-              <Text style={[styles.emptyTitle, { color: text }]}>
-                Start Your Journey
-              </Text>
-              <Text style={[styles.emptyText, { color: muted }]}>
-                Check in at spots to unlock achievements and build your streak!
-              </Text>
+              <EmptyState
+                icon="🏆"
+                title="Start your journey"
+                description="Check in at spots to unlock achievements and build your streak."
+                actionLabel="Make a check-in"
+                onAction={() => router.push('/checkin')}
+              />
             </View>
-          )}
+          ) : null}
         </ScrollView>
       )}
       <CelebrationOverlay visible={showCelebration} />
@@ -241,17 +242,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    textAlign: 'center',
-    maxWidth: 280,
+    paddingVertical: 30,
   },
 });

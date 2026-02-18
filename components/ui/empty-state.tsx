@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { Pressable, View, Text, StyleSheet } from 'react-native';
 import { useEffect } from 'react';
 import Animated, {
   useSharedValue,
@@ -10,7 +10,6 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import { IconSymbol } from './icon-symbol';
-import { PremiumButton } from './premium-button';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { tokens } from '@/constants/tokens';
 
@@ -42,6 +41,7 @@ export function EmptyState({
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
+  const border = useThemeColor({}, 'border');
 
   const iconScale = useSharedValue(0.5);
   const iconOpacity = useSharedValue(0);
@@ -102,22 +102,28 @@ export function EmptyState({
         {/* Actions */}
         {actionLabel && onAction && (
           <View style={styles.actions}>
-            <PremiumButton
+            <Pressable
               onPress={onAction}
-              variant="primary"
-              size="medium"
+              style={({ pressed }) => [
+                styles.primaryAction,
+                { backgroundColor: primary },
+                pressed ? { opacity: 0.86 } : null,
+              ]}
             >
-              {actionLabel}
-            </PremiumButton>
+              <Text style={styles.primaryActionText}>{actionLabel}</Text>
+            </Pressable>
 
             {secondaryLabel && onSecondary && (
-              <PremiumButton
+              <Pressable
                 onPress={onSecondary}
-                variant="ghost"
-                size="medium"
+                style={({ pressed }) => [
+                  styles.secondaryAction,
+                  { borderColor: border },
+                  pressed ? { opacity: 0.72 } : null,
+                ]}
               >
-                {secondaryLabel}
-              </PremiumButton>
+                <Text style={[styles.secondaryActionText, { color: text }]}>{secondaryLabel}</Text>
+              </Pressable>
             )}
           </View>
         )}
@@ -201,5 +207,28 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     gap: 12,
     width: '100%',
+  },
+  primaryAction: {
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  primaryActionText: {
+    color: '#FFFFFF',
+    fontSize: tokens.type.body.fontSize,
+    fontWeight: '700',
+  },
+  secondaryAction: {
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    backgroundColor: 'transparent',
+  },
+  secondaryActionText: {
+    fontSize: tokens.type.body.fontSize,
+    fontWeight: '600',
   },
 });

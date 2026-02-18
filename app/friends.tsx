@@ -354,6 +354,8 @@ export default function FriendsScreen() {
                 icon="sparkles"
                 title="No suggestions yet"
                 description="We'll suggest friends based on your campus, check-ins, and mutual connections."
+                actionLabel="Find friends"
+                onAction={() => router.push('/find-friends')}
               />
             ) : (
               <>

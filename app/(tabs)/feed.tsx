@@ -910,7 +910,7 @@ function FeedPhoto({
 										actionLabel="Retry"
 										onAction={loadLatest}
 									/>
-									{status.tone === 'warning' && !demoMode ? (
+									{__DEV__ && status.tone === 'warning' && !demoMode ? (
 										<View style={[styles.debugCard, { borderColor: border, backgroundColor: card, marginTop: 10, padding: 10, borderRadius: 10 }]}> 
 											<Text style={{ color: muted, marginBottom: 6 }}>Diagnostics:</Text>
 											<Text style={{ color: muted, fontSize: 12 }}>Firebase configured: {isFirebaseConfigured() ? 'yes' : 'no'}</Text>

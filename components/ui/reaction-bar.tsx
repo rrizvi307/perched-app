@@ -4,7 +4,7 @@ import { ReactionType, REACTION_EMOJIS, addReaction, removeReaction } from '@/se
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { tokens } from '@/constants/tokens';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
-import * as Haptics from 'expo-haptics';
+import { safeImpact } from '@/utils/haptics';
 
 interface ReactionBarProps {
   checkinId: string;
@@ -47,7 +47,7 @@ function ReactionButton({
       withSpring(1.4, { damping: 4, stiffness: 300 }),
       withSpring(1, { damping: 8, stiffness: 200 }),
     );
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void safeImpact();
     onPress(type);
   };
 

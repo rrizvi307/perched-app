@@ -13,6 +13,7 @@ type Props = {
 
 const FACTOR_LABELS: { key: keyof ScoreBreakdown; label: string; icon: string }[] = [
   { key: 'wifi', label: 'WiFi', icon: '📶' },
+  { key: 'outlet', label: 'Outlets', icon: '🔌' },
   { key: 'noise', label: 'Noise', icon: '🔇' },
   { key: 'busyness', label: 'Busyness', icon: '👥' },
   { key: 'laptop', label: 'Laptop Friendly', icon: '💻' },

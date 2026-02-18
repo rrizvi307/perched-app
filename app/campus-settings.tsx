@@ -23,6 +23,7 @@ import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 import { useToast } from '@/contexts/ToastContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { updateUserRemote } from '@/services/firebaseClient';
 
 interface CampusPreferences {
   autoDetect: boolean;
@@ -135,7 +136,12 @@ export default function CampusSettingsScreen() {
       if (detectedCampus) {
         showToast(`Detected ${detectedCampus.name}!`, 'success');
         setCampus(detectedCampus);
-        // TODO: Update user.campus in Firestore
+        if (user?.id) {
+          await updateUserRemote(user.id, {
+            campus: detectedCampus.name,
+            campusOrCity: detectedCampus.name,
+          });
+        }
       } else {
         showToast('No campus detected at your location', 'warning');
       }
@@ -150,9 +156,14 @@ export default function CampusSettingsScreen() {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setCampus(selectedCampus);
+      if (user?.id) {
+        await updateUserRemote(user.id, {
+          campus: selectedCampus.name,
+          campusOrCity: selectedCampus.name,
+        });
+      }
       setShowCampusPicker(false);
       showToast(`Switched to ${selectedCampus.name}`, 'success');
-      // TODO: Update user.campus in Firestore
     } catch {
       showToast('Failed to update campus', 'error');
     }
@@ -162,8 +173,10 @@ export default function CampusSettingsScreen() {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setCampus(null);
+      if (user?.id) {
+        await updateUserRemote(user.id, { campus: null, campusOrCity: null });
+      }
       showToast('Campus removed', 'success');
-      // TODO: Update user.campus in Firestore
     } catch {
       showToast('Failed to remove campus', 'error');
     }

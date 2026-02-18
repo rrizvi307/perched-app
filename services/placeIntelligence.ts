@@ -58,6 +58,7 @@ export type ScoreFactorSource = 'checkin' | 'inferred' | 'api' | 'none';
 
 export type ScoreBreakdown = {
   wifi: { value: number; source: ScoreFactorSource };
+  outlet: { value: number; source: ScoreFactorSource };
   noise: { value: number; source: ScoreFactorSource };
   busyness: { value: number; source: ScoreFactorSource };
   laptop: { value: number; source: ScoreFactorSource };
@@ -121,6 +122,7 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
     workScore: 50,
     scoreBreakdown: {
       wifi: { value: 0, source: 'none' },
+      outlet: { value: 0, source: 'none' },
       noise: { value: 0, source: 'none' },
       busyness: { value: 0, source: 'none' },
       laptop: { value: 0, source: 'none' },
@@ -192,6 +194,18 @@ function toNoiseLevel(value: unknown) {
   if (value === 'moderate') return 3;
   if (value === 'lively') return 4;
   if (value === 'loud') return 4;
+  return null;
+}
+
+function toOutletAvailabilityLevel(value: unknown) {
+  if (typeof value === 'number') return clamp(value, 1, 4);
+  if (typeof value === 'boolean') return value ? 4 : 1;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'plenty') return 4;
+  if (normalized === 'some') return 3;
+  if (normalized === 'few') return 2;
+  if (normalized === 'none') return 1;
   return null;
 }
 
@@ -297,6 +311,15 @@ function toWeatherImpact(condition: ContextSignal['condition']): ContextSignal['
   if (condition === 'rain' || condition === 'snow') return 'increase_crowd';
   if (condition === 'clear') return 'decrease_crowd';
   return 'neutral';
+}
+
+function deriveWeatherConfidence(code: number, precipitationMm: number): number {
+  const condition = classifyWeatherCondition(code, precipitationMm);
+  if (condition === 'rain') return precipitationMm >= 2 ? 0.85 : 0.65;
+  if (condition === 'snow') return 0.78;
+  if (condition === 'clear') return 0.4;
+  if (condition === 'cloudy') return 0.55;
+  return 0.5;
 }
 
 async function getProxyAuthHeaders() {
@@ -431,7 +454,7 @@ async function getWeatherSignals(input: BuildIntelligenceInput): Promise<Context
       source: 'weather',
       condition,
       impact,
-      confidence: 0.68,
+      confidence: deriveWeatherConfidence(code, precipitation),
       temperatureC: temperature,
       precipitationMm: precipitation,
     }];
@@ -815,10 +838,14 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const tagScores = input.tagScores || {};
 
   const wifiValues = checkins.map((c: any) => c?.wifiSpeed).filter((v: any) => typeof v === 'number') as number[];
+  const outletValues = checkins
+    .map((c: any) => toOutletAvailabilityLevel(c?.outletAvailability))
+    .filter((v: any) => typeof v === 'number') as number[];
   const busynessValues = checkins.map((c: any) => c?.busyness).filter((v: any) => typeof v === 'number') as number[];
   const noiseValues = checkins.map((c: any) => toNoiseLevel(c?.noiseLevel)).filter((v: any) => typeof v === 'number') as number[];
 
   let wifiAvg = avg(wifiValues);
+  const outletAvg = avg(outletValues);
   let noiseAvg = avg(noiseValues);
   const laptopVotes = checkins
     .map((c: any) => c?.laptopFriendly)
@@ -924,6 +951,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const score =
     venueBaseline +
     (wifiAvg || 0) * 10 +
+    (outletAvg !== null ? (outletAvg - 1) * 5 : 0) +
     (laptopPct || 0) * 0.22 +
     (noiseAvg !== null ? (6 - noiseAvg) * 7 : 0) +
     (adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0) +
@@ -941,6 +969,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   }
   const scoreBreakdown: ScoreBreakdown = {
     wifi: { value: round((wifiAvg || 0) * 10, 1), source: wifiSource },
+    outlet: { value: round(outletAvg !== null ? (outletAvg - 1) * 5 : 0, 1), source: outletAvg !== null ? 'checkin' : 'none' },
     noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 7 : 0, 1), source: noiseSource },
     busyness: { value: round(adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0, 1), source: adjustedBusynessAvg !== null ? 'checkin' : 'none' },
     laptop: { value: round((laptopPct || 0) * 0.22, 1), source: laptopSource },

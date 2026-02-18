@@ -37,6 +37,9 @@ type Checkin = {
   noiseLevel?: 'quiet' | 'moderate' | 'lively' | 1 | 2 | 3 | 4 | 5; // Legacy string or new 1-5 scale (1=silent, 5=loud)
   busyness?: 1 | 2 | 3 | 4 | 5; // 1=empty, 5=packed
   outletAvailability?: 'plenty' | 'some' | 'few' | 'none'; // power outlet availability
+  laptopFriendly?: boolean; // good for laptop work
+  drinkPrice?: 1 | 2 | 3; // 1=$, 2=$$, 3=$$$
+  drinkQuality?: 1 | 2 | 3 | 4 | 5; // 1=poor, 5=exceptional
 };
 
 type DemoCustomPhoto = { uri: string; fileName?: string | null };
@@ -1466,6 +1469,7 @@ const ONBOARDING_KEY = 'spot_onboarding_complete_v1';
 const ONBOARDING_PROFILE_KEY = 'spot_onboarding_profile_v1';
 const NOTIF_KEY = 'spot_notifications_v1';
 const LOCATION_ENABLED_KEY = 'spot_location_enabled_v1';
+const LAST_KNOWN_LOCATION_KEY = 'spot_last_known_location_v1';
 const SAVED_SPOTS_KEY = 'spot_saved_spots_v1';
 const PLACE_EVENTS_KEY = 'spot_place_events_v1';
 const PLACE_PREFS_KEY = 'spot_place_prefs_v1';
@@ -1920,4 +1924,36 @@ export async function getLocationEnabled() {
     return raw ? JSON.parse(raw) : true;
   }
   return await readNativeJson<boolean>(LOCATION_ENABLED_KEY, true);
+}
+
+export async function saveLastKnownLocation(location: { lat: number; lng: number }) {
+  if (!location) return;
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  const payload = { lat, lng, ts: Date.now() };
+  if (isWeb()) {
+    window.localStorage.setItem(LAST_KNOWN_LOCATION_KEY, JSON.stringify(payload));
+    return;
+  }
+  await writeNativeJson(LAST_KNOWN_LOCATION_KEY, payload);
+}
+
+export async function getLastKnownLocation(maxAgeMs = 90 * 24 * 60 * 60 * 1000): Promise<{ lat: number; lng: number } | null> {
+  let payload: any = null;
+  if (isWeb()) {
+    const raw = window.localStorage.getItem(LAST_KNOWN_LOCATION_KEY);
+    payload = raw ? JSON.parse(raw) : null;
+  } else {
+    payload = await readNativeJson<any>(LAST_KNOWN_LOCATION_KEY, null);
+  }
+
+  if (!payload || typeof payload !== 'object') return null;
+  const lat = Number(payload.lat);
+  const lng = Number(payload.lng);
+  const ts = typeof payload.ts === 'number' ? payload.ts : Date.now();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (maxAgeMs > 0 && Date.now() - ts > maxAgeMs) return null;
+  return { lat, lng };
 }

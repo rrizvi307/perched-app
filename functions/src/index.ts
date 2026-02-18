@@ -1018,6 +1018,145 @@ export const placeSignalsProxy = functions
 });
 
 // =============================================================================
+// NLP REVIEW ANALYSIS (Cloud Function — moves OpenAI call server-side)
+// =============================================================================
+
+const NLP_CACHE_COLLECTION = 'nlpReviewCache';
+const NLP_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Analyze spot reviews using GPT-4o-mini via Cloud Function.
+ * Accepts { placeId, placeName, reviewTexts: string[] }.
+ * Returns { noise, wifiConfidence, goodForStudying, goodForMeetings }.
+ * Results are cached in Firestore for 24h to avoid repeated OpenAI calls.
+ */
+export const analyzeSpotReviews = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const placeId = typeof data?.placeId === 'string' ? data.placeId.trim() : '';
+  const placeName = typeof data?.placeName === 'string' ? data.placeName.trim() : '';
+  const reviewTexts: string[] = Array.isArray(data?.reviewTexts)
+    ? data.reviewTexts.filter((t: unknown) => typeof t === 'string').slice(0, 10)
+    : [];
+
+  if (!placeId || !placeName) {
+    throw new functions.https.HttpsError('invalid-argument', 'placeId and placeName are required');
+  }
+  if (reviewTexts.length === 0) {
+    return { noise: null, noiseConfidence: 0, hasWifi: false, wifiConfidence: 0, goodForStudying: false, goodForMeetings: false };
+  }
+
+  // Check Firestore TTL cache
+  try {
+    const cacheDoc = await db.collection(NLP_CACHE_COLLECTION).doc(placeId).get();
+    if (cacheDoc.exists) {
+      const cached = cacheDoc.data();
+      if (cached && cached.analyzedAt && Date.now() - cached.analyzedAt < NLP_CACHE_TTL_MS) {
+        return cached.result;
+      }
+    }
+  } catch {}
+
+  // Fetch OpenAI API key from Secret Manager
+  const openaiKey = await getCachedSecret('OPENAI_API_KEY');
+  if (!openaiKey) {
+    throw new functions.https.HttpsError('failed-precondition', 'OpenAI API key not configured');
+  }
+
+  // Build prompt
+  const reviewBlock = reviewTexts
+    .map((text, i) => `Review ${i + 1}: "${text.slice(0, 200)}"`)
+    .join('\n\n');
+
+  const prompt = `Analyze these reviews for "${placeName}" and extract the following information:
+
+${reviewBlock}
+
+Respond with JSON matching this exact schema:
+{
+  "noise": "quiet" | "moderate" | "loud" | null,
+  "noiseConfidence": 0.0 to 1.0,
+  "hasWifi": true | false,
+  "wifiConfidence": 0.0 to 1.0,
+  "goodForStudying": true | false,
+  "goodForMeetings": true | false
+}
+
+Guidelines:
+- "noise": Infer from mentions of "quiet", "loud", "noisy", "peaceful", "busy atmosphere"
+- "noiseConfidence": How certain you are (0-1)
+- "hasWifi": True if WiFi is mentioned positively
+- "wifiConfidence": How certain you are based on mentions
+- "goodForStudying": True if reviews mention "study", "work", "laptop", "quiet for work"
+- "goodForMeetings": True if reviews mention "meet", "meetings", "group work"
+
+If no information is found, use null for noise and false for booleans with 0 confidence.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert at analyzing coffee shop and workspace reviews to extract structured data about noise levels, WiFi, and work suitability. Respond ONLY with valid JSON.',
+          },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 200,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('OpenAI API error:', errText);
+      throw new functions.https.HttpsError('internal', 'OpenAI API call failed');
+    }
+
+    const apiData = await response.json();
+    const content = apiData.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new functions.https.HttpsError('internal', 'Empty OpenAI response');
+    }
+
+    const parsed = JSON.parse(content);
+    const result = {
+      noise: ['quiet', 'moderate', 'loud'].includes(parsed.noise) ? parsed.noise : null,
+      noiseConfidence: Math.max(0, Math.min(1, parsed.noiseConfidence || 0)),
+      hasWifi: Boolean(parsed.hasWifi),
+      wifiConfidence: Math.max(0, Math.min(1, parsed.wifiConfidence || 0)),
+      goodForStudying: Boolean(parsed.goodForStudying),
+      goodForMeetings: Boolean(parsed.goodForMeetings),
+    };
+
+    // Cache result in Firestore
+    try {
+      await db.collection(NLP_CACHE_COLLECTION).doc(placeId).set({
+        result,
+        analyzedAt: Date.now(),
+        placeName,
+        reviewCount: reviewTexts.length,
+      });
+    } catch {}
+
+    return result;
+  } catch (error: any) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error('analyzeSpotReviews error:', error);
+    throw new functions.https.HttpsError('internal', 'NLP analysis failed');
+  }
+});
+
+// =============================================================================
 // B2B API ENDPOINTS
 // =============================================================================
 

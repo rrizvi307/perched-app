@@ -1,11 +1,12 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import SpotImage from '@/components/ui/spot-image';
+import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { findUserByHandle, getCheckinsForUserRemote, getUsersByIds, sendFriendRequest } from '@/services/firebaseClient';
+import { findUserByHandle, getCheckinsForUserRemote, getOutgoingFriendRequests, getUsersByIds, sendFriendRequest } from '@/services/firebaseClient';
 import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -27,6 +28,7 @@ export default function ProfileView() {
   const [checkins, setCheckins] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [requesting, setRequesting] = useState(false);
+  const [requestSent, setRequestSent] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -58,6 +60,22 @@ export default function ProfileView() {
     })();
   }, [profile?.id]);
 
+  useEffect(() => {
+    (async () => {
+      if (!user?.id || !profile?.id || user.id === profile.id) {
+        setRequestSent(false);
+        return;
+      }
+      try {
+        const outgoing = await getOutgoingFriendRequests(user.id);
+        const exists = outgoing.some((request: any) => request?.toId === profile.id);
+        setRequestSent(exists);
+      } catch {
+        setRequestSent(false);
+      }
+    })();
+  }, [user?.id, profile?.id]);
+
   const canAdd = !!(user && profile && user.id !== profile.id);
   const displayName = profile?.name || profile?.handle || 'Perched user';
   const locationBits = [profile?.city, profile?.campus].filter(Boolean);
@@ -72,7 +90,13 @@ export default function ProfileView() {
       <H1 style={{ color: text }}>{displayName}</H1>
       {tagline ? <Body style={{ color: muted }}>{tagline}</Body> : null}
       <View style={{ height: 12 }} />
-      {loading ? <Body style={{ color: muted }}>Loading profile…</Body> : null}
+      {loading ? (
+        <View style={{ marginTop: 4 }}>
+          <SkeletonLoader width="55%" height={18} />
+          <SkeletonLoader width="40%" height={16} style={{ marginTop: 8 }} />
+          <SkeletonLoader width="100%" height={84} style={{ marginTop: 16, borderRadius: 14 }} />
+        </View>
+      ) : null}
       {!loading && !profile ? (
         <View>
           <Body style={{ color: muted }}>Profile not found.</Body>
@@ -84,18 +108,21 @@ export default function ProfileView() {
       {profile && canAdd ? (
         <Pressable
           onPress={async () => {
-            if (!user || !profile || requesting) return;
+            if (!user || !profile || requesting || requestSent) return;
             setRequesting(true);
             try {
               await sendFriendRequest(user.id, profile.id);
+              setRequestSent(true);
             } finally {
               setRequesting(false);
             }
           }}
-          style={[styles.cta, { backgroundColor: primary, opacity: requesting ? 0.6 : 1 }]}
-          disabled={requesting}
+          style={[styles.cta, { backgroundColor: primary, opacity: requesting || requestSent ? 0.6 : 1 }]}
+          disabled={requesting || requestSent}
         >
-          <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>{requesting ? 'Sending…' : 'Add friend'}</Text>
+          <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+            {requestSent ? 'Request sent' : requesting ? 'Sending…' : 'Add friend'}
+          </Text>
         </Pressable>
       ) : null}
       {visibleCheckins.length ? (

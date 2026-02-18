@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
@@ -53,12 +53,7 @@ export default function FindFriendsScreen() {
   const card = useThemeColor({}, 'card');
   const success = useThemeColor({}, 'success');
 
-  // Load campus suggestions on mount
-  useState(() => {
-    loadCampusSuggestions();
-  });
-
-  const loadCampusSuggestions = async () => {
+  const loadCampusSuggestions = useCallback(async () => {
     if (!user?.id) {
       setLoadingSuggestions(false);
       return;
@@ -98,7 +93,12 @@ export default function FindFriendsScreen() {
     } finally {
       setLoadingSuggestions(false);
     }
-  };
+  }, [user?.id, user?.campus, user?.campusOrCity]);
+
+  // Load campus suggestions on mount
+  useEffect(() => {
+    void loadCampusSuggestions();
+  }, [loadCampusSuggestions]);
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !user?.id) return;
