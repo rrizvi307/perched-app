@@ -7,7 +7,6 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { clearPushToken, deleteAccountAndData, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
-import { openExternalLink } from '@/services/externalLinks';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
@@ -188,7 +187,7 @@ export default function SettingsScreen() {
           <SettingRow
             label="Account"
             value={!user ? 'Not signed in' : user.email || user.phone || 'Signed in'}
-            onPress={() => router.push('/upgrade')}
+            onPress={() => router.push(user ? '/upgrade' : '/signin')}
             borderColor={border}
             highlight={highlight}
             textColor={text}
@@ -249,9 +248,7 @@ export default function SettingsScreen() {
           <SettingRow
             label="Support"
             value={supportEmail}
-            onPress={() => {
-              void openExternalLink(`mailto:${supportEmail}`);
-            }}
+            onPress={() => router.push('/support')}
             borderColor={border}
             highlight={highlight}
             textColor={text}
@@ -261,29 +258,29 @@ export default function SettingsScreen() {
 
         <View style={{ height: 18 }} />
 
-        <Pressable
-          onPress={async () => {
-            try {
-              await signOut();
-              showToast('Signed out.', 'success');
-              router.replace('/signin');
-            } catch {
-              showToast('Unable to sign out.', 'error');
-            }
-          }}
-          style={({ pressed }) => [
-            styles.dangerRow,
-            {
-              borderColor: withAlpha(danger, 0.35),
-              backgroundColor: pressed ? withAlpha(danger, 0.12) : card,
-            },
-          ]}
-        >
-          <Text style={{ color: danger, fontWeight: '700' }}>Sign out</Text>
-        </Pressable>
-
         {user ? (
           <>
+            <Pressable
+              onPress={async () => {
+                try {
+                  await signOut();
+                  showToast('Signed out.', 'success');
+                  router.replace('/signin');
+                } catch {
+                  showToast('Unable to sign out.', 'error');
+                }
+              }}
+              style={({ pressed }) => [
+                styles.dangerRow,
+                {
+                  borderColor: withAlpha(danger, 0.35),
+                  backgroundColor: pressed ? withAlpha(danger, 0.12) : card,
+                },
+              ]}
+            >
+              <Text style={{ color: danger, fontWeight: '700' }}>Sign out</Text>
+            </Pressable>
+
             <View style={{ height: 12 }} />
             <Pressable
               onPress={confirmDeleteAccount}
@@ -298,7 +295,20 @@ export default function SettingsScreen() {
               <Text style={{ color: danger, fontWeight: '700' }}>Delete account</Text>
             </Pressable>
           </>
-        ) : null}
+        ) : (
+          <Pressable
+            onPress={() => router.push('/signin')}
+            style={({ pressed }) => [
+              styles.dangerRow,
+              {
+                borderColor: withAlpha(primary, 0.35),
+                backgroundColor: pressed ? withAlpha(primary, 0.12) : card,
+              },
+            ]}
+          >
+            <Text style={{ color: primary, fontWeight: '700' }}>Sign in</Text>
+          </Pressable>
+        )}
 
         <View style={{ height: 24 }} />
       </ScrollView>
