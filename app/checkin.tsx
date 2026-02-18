@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
 import PermissionSheet from '@/components/ui/permission-sheet';
 import StatusBanner from '@/components/ui/status-banner';
-import { Alert, Image, InteractionManager, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, InteractionManager, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 // use ImagePicker for camera-launch to avoid direct Camera component on web
 import PlaceSearch from '@/components/place-search';
 import { Body, H1, Label } from '@/components/ui/typography';
@@ -77,6 +77,7 @@ export default function CheckinScreen() {
 	const [drinkPrice, setDrinkPrice] = useState<1 | 2 | 3 | null>(null); // 1=$, 2=$$, 3=$$$
 	const [drinkQuality, setDrinkQuality] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+	const [outletAvailability, setOutletAvailability] = useState<'plenty' | 'some' | 'few' | 'none' | null>(null);
 	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
@@ -127,6 +128,7 @@ export default function CheckinScreen() {
 	const [showLocationPrimer, setShowLocationPrimer] = useState(false);
 	const [showCelebration, setShowCelebration] = useState(false);
 	const activeRef = useRef(true);
+	const submittingRef = useRef(false);
 	const lastDetectRef = useRef<string | null>(null);
 	const detectionThreshold = 0.2; // km
 	const displayPlace = placeInfo || detectedPlace;
@@ -168,13 +170,20 @@ export default function CheckinScreen() {
 	// Celebrate when all metrics are completed
 	const prevMetricsCompleteRef = useRef(false);
 	useEffect(() => {
-			const allComplete = noiseLevel !== null && busyness !== null && drinkPrice !== null && drinkQuality !== null && wifiSpeed !== null && laptopFriendly !== null;
-			if (allComplete && !prevMetricsCompleteRef.current) {
-				// Just completed all metrics - celebrate!
-				void safeNotification();
-			}
-			prevMetricsCompleteRef.current = allComplete;
-		}, [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly]);
+		const allComplete =
+			noiseLevel !== null &&
+			busyness !== null &&
+			drinkPrice !== null &&
+			drinkQuality !== null &&
+			wifiSpeed !== null &&
+			outletAvailability !== null &&
+			laptopFriendly !== null;
+		if (allComplete && !prevMetricsCompleteRef.current) {
+			// Just completed all metrics - celebrate!
+			void safeNotification();
+		}
+		prevMetricsCompleteRef.current = allComplete;
+	}, [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
 
 	useEffect(() => {
 		const prefillSpot = typeof params.spot === 'string' ? params.spot : '';
@@ -213,6 +222,7 @@ export default function CheckinScreen() {
 					if (check.drinkPrice) setDrinkPrice(check.drinkPrice);
 					if (check.drinkQuality) setDrinkQuality(check.drinkQuality);
 					if (typeof check.wifiSpeed === 'number') setWifiSpeed(check.wifiSpeed);
+					if (typeof check.outletAvailability === 'string') setOutletAvailability(check.outletAvailability as any);
 					if (typeof check.laptopFriendly === 'boolean') setLaptopFriendly(check.laptopFriendly);
 					}
 				} catch {
@@ -232,6 +242,7 @@ export default function CheckinScreen() {
 							if (found.drinkPrice) setDrinkPrice(found.drinkPrice);
 							if (found.drinkQuality) setDrinkQuality(found.drinkQuality);
 							if (typeof found.wifiSpeed === 'number') setWifiSpeed(found.wifiSpeed);
+							if (typeof found.outletAvailability === 'string') setOutletAvailability(found.outletAvailability as any);
 							if (typeof found.laptopFriendly === 'boolean') setLaptopFriendly(found.laptopFriendly);
 						}
 					} catch {}
@@ -335,6 +346,7 @@ export default function CheckinScreen() {
 					if (typeof draft.drinkPrice === 'number') setDrinkPrice(draft.drinkPrice);
 					if (typeof draft.drinkQuality === 'number') setDrinkQuality(draft.drinkQuality);
 					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
+					if (typeof draft.outletAvailability === 'string') setOutletAvailability(draft.outletAvailability as any);
 					if (typeof draft.laptopFriendly === 'boolean') setLaptopFriendly(draft.laptopFriendly);
 				}
 			} catch {}
@@ -388,11 +400,12 @@ export default function CheckinScreen() {
 					drinkPrice,
 					drinkQuality,
 					wifiSpeed,
+					outletAvailability,
 					laptopFriendly,
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly]);
+	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -534,13 +547,23 @@ export default function CheckinScreen() {
 		setVisibility('public');
 		setIsEditMode(false);
 		setEditId(null);
+		setNoiseLevel(null);
+		setBusyness(null);
+		setDrinkPrice(null);
+		setDrinkQuality(null);
 		setWifiSpeed(null);
+		setOutletAvailability(null);
 		setLaptopFriendly(null);
 		lastDetectRef.current = null;
 		draftEmptyRef.current = false;
 	}
 
-		async function handlePost() {
+	async function handlePost() {
+		if (submittingRef.current) return;
+		submittingRef.current = true;
+		Keyboard.dismiss();
+
+		try {
 			if (!image) return;
 			if (!user?.id) {
 				showToast('Please sign in to post a check-in.', 'warning');
@@ -555,92 +578,99 @@ export default function CheckinScreen() {
 				setPostStatus({ message: 'Please select a spot from lookup.', tone: 'warning' });
 				return;
 			}
+
 			// basic anti-spam: require short caption or at least one tag
 			const trimmed = String(caption || '').trim();
 			if (trimmed.length < 3 && (!selectedTags || selectedTags.length === 0)) {
 				setPostStatus({ message: 'Add a short caption or select a tag.', tone: 'warning' });
 				return;
 			}
-		// Gentle encouragement for metrics (non-blocking)
-		const metricsProvided = [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, laptopFriendly].filter((v) => v !== null && v !== undefined).length;
-		if (metricsProvided === 0) {
-			showToast('💡 Consider adding Spot Intel to help others!', 'info');
-			// Still allow posting - don't block
-		}
-		const last = await getLastCheckinAt();
-		const now = Date.now();
+
+			// Gentle encouragement for metrics (non-blocking)
+			const metricsProvided = [noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]
+				.filter((v) => v !== null && v !== undefined)
+				.length;
+			if (metricsProvided === 0) {
+				showToast('💡 Consider adding Spot Intel to help others!', 'info');
+			}
+
+			const last = await getLastCheckinAt();
+			const now = Date.now();
 			// rate-limit public posts: 10 minutes for public posts, 5 for others
 			const MIN_GAP_PUBLIC = 10 * 60 * 1000;
 			const MIN_GAP_OTHER = 5 * 60 * 1000;
 			const MIN_GAP = visibility === 'public' ? MIN_GAP_PUBLIC : MIN_GAP_OTHER;
-		if (last && now - last < MIN_GAP) {
-			const mins = Math.ceil((MIN_GAP - (now - last)) / 60000);
-			Alert.alert('Slow down', `You can post another check-in in about ${mins} minute${mins === 1 ? '' : 's'}.`);
-			return;
-		}
+			if (last && now - last < MIN_GAP) {
+				const mins = Math.ceil((MIN_GAP - (now - last)) / 60000);
+				showToast(`You can post again in about ${mins} minute${mins === 1 ? '' : 's'}.`, 'warning');
+				return;
+			}
+
 			setLoading(true);
-			try {
-				const uid = user.id;
-				const clientId = `client-${Date.now()}`;
-				// If editing, perform an update flow
-				if (isEditMode && editId) {
-						try {
-							const fb = await import('@/services/firebaseClient');
-							const updates: any = {
-								spotName: spot,
-								spotPlaceId: activePlace?.placeId,
-								spotLatLng: activePlace?.location,
-								caption,
-								tags: selectedTags,
-								visibility,
-								// Utility metrics
-								noiseLevel: noiseLevel ?? null,
-								busyness: busyness ?? null,
-								drinkPrice: drinkPrice ?? null,
-								drinkQuality: drinkQuality ?? null,
-								wifiSpeed: wifiSpeed ?? null,
-								laptopFriendly: laptopFriendly ?? null,
-							};
-						await fb.updateCheckinRemote(editId, updates);
-						// update local copy
-						const local = await import('@/storage/local');
-						await local.updateCheckinLocalById(editId, updates as any);
-						publishCheckin({ id: editId, ...updates });
-						// Track metrics impact for edits
-						try {
-							const { updateMetricsImpact } = await import('@/services/metricsImpact');
-							await updateMetricsImpact(uid, updates);
-						} catch (error) {
-							console.error('Failed to update metrics impact:', error);
-						}
-						showToast('Check-in updated.', 'success');
-						try {
-							await clearCheckinDraft();
-						} catch {}
-						resetDraftState();
-						router.replace('/(tabs)/feed');
-						return;
-					} catch (e) {
-						devLog('edit update failed', e);
-						setPostStatus({ message: 'Unable to update. Try again.', tone: 'error' });
-						setLoading(false);
-						return;
-					}
-				}
-				let persistedImage = image as string;
+			const uid = user.id;
+			const clientId = `client-${Date.now()}`;
+
+			// If editing, perform an update flow
+			if (isEditMode && editId) {
 				try {
-					if (persistedImage && !persistedImage.startsWith('http') && !persistedImage.startsWith('data:') && documentDirectory) {
-						const dir = `${documentDirectory}perched-photos`;
-						try {
-							await makeDirectoryAsync(dir, { intermediates: true });
-						} catch {}
+					const fb = await import('@/services/firebaseClient');
+					const updates: any = {
+						spotName: spot,
+						spotPlaceId: activePlace?.placeId,
+						spotLatLng: activePlace?.location,
+						caption,
+						tags: selectedTags,
+						visibility,
+						// Utility metrics
+						noiseLevel: noiseLevel ?? null,
+						busyness: busyness ?? null,
+						drinkPrice: drinkPrice ?? null,
+						drinkQuality: drinkQuality ?? null,
+						wifiSpeed: wifiSpeed ?? null,
+						outletAvailability: outletAvailability ?? null,
+						laptopFriendly: laptopFriendly ?? null,
+					};
+					await fb.updateCheckinRemote(editId, updates);
+					// update local copy
+					const local = await import('@/storage/local');
+					await local.updateCheckinLocalById(editId, updates as any);
+					publishCheckin({ id: editId, ...updates });
+					// Track metrics impact for edits
+					try {
+						const { updateMetricsImpact } = await import('@/services/metricsImpact');
+						await updateMetricsImpact(uid, updates);
+					} catch (error) {
+						devLog('metrics impact update failed (edit)', error);
+					}
+					showToast('Check-in updated.', 'success');
+					try {
+						await clearCheckinDraft();
+					} catch {}
+					resetDraftState();
+					router.replace('/(tabs)/feed');
+					return;
+				} catch (e) {
+					devLog('edit update failed', e);
+					setPostStatus({ message: 'Unable to update. Try again.', tone: 'error' });
+					return;
+				}
+			}
+
+			let persistedImage = image as string;
+			try {
+				if (persistedImage && !persistedImage.startsWith('http') && !persistedImage.startsWith('data:') && documentDirectory) {
+					const dir = `${documentDirectory}perched-photos`;
+					try {
+						await makeDirectoryAsync(dir, { intermediates: true });
+					} catch {}
 					const target = `${dir}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
 					await copyAsync({ from: persistedImage, to: target });
 					persistedImage = target;
 				}
 			} catch {}
+
 			const displayName = user?.name || user?.handle || (user?.email ? user.email.split('@')[0] : null) || 'Someone';
-				const localPayload = {
+			const localPayload = {
 				spot,
 				spotName: spot,
 				spotPlaceId: activePlace?.placeId,
@@ -655,16 +685,17 @@ export default function CheckinScreen() {
 				userPhotoUrl: user?.photoUrl,
 				city: user?.city,
 				campus: user?.campus,
-					visibility,
-					clientId,
-					// Utility metrics
-					noiseLevel: noiseLevel ?? null,
-					busyness: busyness ?? null,
-					drinkPrice: drinkPrice ?? null,
-					drinkQuality: drinkQuality ?? null,
-					wifiSpeed: wifiSpeed ?? null,
-					laptopFriendly: laptopFriendly ?? null,
-				} as any;
+				visibility,
+				clientId,
+				// Utility metrics
+				noiseLevel: noiseLevel ?? null,
+				busyness: busyness ?? null,
+				drinkPrice: drinkPrice ?? null,
+				drinkQuality: drinkQuality ?? null,
+				wifiSpeed: wifiSpeed ?? null,
+				outletAvailability: outletAvailability ?? null,
+				laptopFriendly: laptopFriendly ?? null,
+			} as any;
 			const pendingPayload = {
 				userId: uid,
 				userName: displayName,
@@ -679,16 +710,17 @@ export default function CheckinScreen() {
 				campusOrCity: user?.campusOrCity || user?.city,
 				city: user?.city,
 				campus: user?.campus,
-					visibility,
-					clientId,
-					// Utility metrics
-					noiseLevel: noiseLevel ?? null,
-					busyness: busyness ?? null,
-					drinkPrice: drinkPrice ?? null,
-					drinkQuality: drinkQuality ?? null,
-					wifiSpeed: wifiSpeed ?? null,
-					laptopFriendly: laptopFriendly ?? null,
-				};
+				visibility,
+				clientId,
+				// Utility metrics
+				noiseLevel: noiseLevel ?? null,
+				busyness: busyness ?? null,
+				drinkPrice: drinkPrice ?? null,
+				drinkQuality: drinkQuality ?? null,
+				wifiSpeed: wifiSpeed ?? null,
+				outletAvailability: outletAvailability ?? null,
+				laptopFriendly: laptopFriendly ?? null,
+			};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
 				publishCheckin(savedLocal);
@@ -700,7 +732,7 @@ export default function CheckinScreen() {
 					try {
 						stats = await updateStatsAfterCheckin(activePlace.placeId, Date.now());
 					} catch (error) {
-						console.error('Failed to update gamification stats:', error);
+						devLog('gamification stats update failed', error);
 					}
 				}
 				// Celebration + notifications don't require placeId
@@ -730,7 +762,7 @@ export default function CheckinScreen() {
 						}, 2000);
 					}
 				} catch (error) {
-					console.error('Failed to process celebration/notifications:', error);
+					devLog('celebration/notification flow failed', error);
 				}
 
 				// Track metrics impact
@@ -738,23 +770,25 @@ export default function CheckinScreen() {
 					const { updateMetricsImpact } = await import('@/services/metricsImpact');
 					await updateMetricsImpact(uid, localPayload);
 				} catch (error) {
-					console.error('Failed to update metrics impact:', error);
+					devLog('metrics impact update failed (new checkin)', error);
 				}
 			} catch {}
+
 			setPendingRemote(pendingPayload);
 			await enqueuePendingCheckin(pendingPayload);
-				showToast('Check-in queued. Posting in background.', 'success');
-				const category = classifySpotCategory(spot);
-				const eventPayload = {
-					event: 'checkin' as const,
-					ts: Date.now(),
-					userId: user?.id,
-					placeId: activePlace?.placeId || null,
-					name: spot,
-					category,
-				};
-				recordPlaceEvent(eventPayload);
-				void recordPlaceEventRemote(eventPayload);
+			showToast('Check-in queued. Posting in background.', 'success');
+
+			const category = classifySpotCategory(spot);
+			const eventPayload = {
+				event: 'checkin' as const,
+				ts: Date.now(),
+				userId: user?.id,
+				placeId: activePlace?.placeId || null,
+				name: spot,
+				category,
+			};
+			recordPlaceEvent(eventPayload);
+			void recordPlaceEventRemote(eventPayload);
 			if (selectedTags.length) {
 				selectedTags.forEach((tag) => {
 					recordPlaceTag(activePlace?.placeId || null, spot, tag, 1);
@@ -777,17 +811,18 @@ export default function CheckinScreen() {
 			setTimeout(() => {
 				void runSync();
 			}, 0);
-			setLoading(false);
 			try {
 				await clearCheckinDraft();
 			} catch {}
 			resetDraftState();
 			router.replace('/(tabs)/feed');
 		} catch (e) {
-			setLoading(false);
 			devLog('handlePost error', e);
 			setPostStatus({ message: 'Unable to post right now. Check your connection and try again.', tone: 'error' });
 			showToast('Unable to post right now.', 'error');
+		} finally {
+			setLoading(false);
+			submittingRef.current = false;
 		}
 	}
 
@@ -986,8 +1021,8 @@ export default function CheckinScreen() {
 						{/* Spot Intel Section - Utility Metrics */}
 						<View style={{ marginTop: 16, marginBottom: 8 }}>
 							{(() => {
-								const metricsCompleted = [noiseLevel !== null, busyness !== null, drinkPrice !== null, drinkQuality !== null, wifiSpeed !== null, laptopFriendly !== null].filter(Boolean).length;
-								const metricsTotal = 6;
+								const metricsCompleted = [noiseLevel !== null, busyness !== null, drinkPrice !== null, drinkQuality !== null, wifiSpeed !== null, outletAvailability !== null, laptopFriendly !== null].filter(Boolean).length;
+								const metricsTotal = 7;
 								const metricsPercentage = Math.round((metricsCompleted / metricsTotal) * 100);
 								return (
 									<>
@@ -1023,7 +1058,7 @@ export default function CheckinScreen() {
 												? 'Help others find the perfect spot by sharing quick metrics'
 												: metricsPercentage === 100
 												? 'Thanks for helping the community!'
-												: metricsCompleted === 3 ? 'One more metric to go' : `${metricsTotal - metricsCompleted} more to go`}
+												: metricsTotal - metricsCompleted === 1 ? 'One more metric to go' : `${metricsTotal - metricsCompleted} more to go`}
 										</Text>
 									</>
 								);
@@ -1252,6 +1287,55 @@ export default function CheckinScreen() {
 										: wifiSpeed === 5
 										? 'Blazing!'
 										: 'Tap to rate WiFi speed'}
+								</Text>
+							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Outlets Available?</Text>
+								<View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+									{([
+										{ key: 'plenty', label: '🔌 Plenty' },
+										{ key: 'some', label: '✅ Some' },
+										{ key: 'few', label: '🤏 Few' },
+										{ key: 'none', label: '❌ None' },
+									] as const).map((option) => (
+										<Pressable
+											key={`outlet-${option.key}`}
+											onPress={() => {
+												void safeImpact();
+												setOutletAvailability(outletAvailability === option.key ? null : option.key);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: outletAvailability === option.key ? primary : 'transparent',
+													minWidth: 86,
+												},
+											]}
+										>
+											<Text
+												style={{
+													color: outletAvailability === option.key ? '#FFFFFF' : text,
+													fontWeight: '600',
+													textAlign: 'center',
+												}}
+											>
+												{option.label}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{outletAvailability === 'plenty'
+										? 'Easy to find outlets'
+										: outletAvailability === 'some'
+										? 'Enough for most people'
+										: outletAvailability === 'few'
+										? 'Limited outlet access'
+										: outletAvailability === 'none'
+										? 'No usable outlets'
+										: 'Tap to rate outlet availability'}
 								</Text>
 							</View>
 

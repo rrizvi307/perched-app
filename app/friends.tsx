@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { useState, useEffect, useCallback } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
@@ -15,6 +15,7 @@ import { tokens } from '@/constants/tokens';
 import { getDemoFriendRequests, getDemoFriendSuggestions } from '@/services/demoDataManager';
 import { isDemoMode } from '@/services/demoMode';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
 import {
   getIncomingFriendRequests,
   acceptFriendRequest,
@@ -57,6 +58,7 @@ interface FriendSuggestion {
  */
 export default function FriendsScreen() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
@@ -180,7 +182,7 @@ export default function FriendsScreen() {
       console.error('Failed to accept friend request:', error);
       // Revert on error
       loadFriendData();
-      Alert.alert('Error', 'Failed to accept friend request. Please try again.');
+      showToast('Failed to accept friend request. Please try again.', 'error');
     }
   };
 
@@ -202,7 +204,7 @@ export default function FriendsScreen() {
       console.error('Failed to decline friend request:', error);
       // Revert on error
       loadFriendData();
-      Alert.alert('Error', 'Failed to decline friend request. Please try again.');
+      showToast('Failed to decline friend request. Please try again.', 'error');
     }
   };
 
@@ -220,7 +222,7 @@ export default function FriendsScreen() {
       void logEvent('friend_request_sent', user.id, { toUserId: targetUserId });
     } catch (error) {
       console.error('Failed to send friend request:', error);
-      Alert.alert('Error', 'Failed to send friend request. Please try again.');
+      showToast('Failed to send friend request. Please try again.', 'error');
       throw error; // Re-throw so SuggestionCard can handle UI state
     }
   };
