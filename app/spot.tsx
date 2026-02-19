@@ -18,7 +18,7 @@ import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spo
 import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -28,6 +28,8 @@ import { useToast } from '@/contexts/ToastContext';
 import { buildPlaceIntelligence, PlaceIntelligence } from '@/services/placeIntelligence';
 import { runAfterInteractions } from '@/services/performance';
 import { safeImpact } from '@/utils/haptics';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 import Animated, {
   Easing,
   runOnJS,
@@ -45,6 +47,8 @@ const TAG_VARIANTS = {
   core5: ['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Late-night'],
   full7: ['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Bright', 'Spacious', 'Late-night'],
 } as const;
+
+const SPOT_CHECKINS_LIMIT = 50;
 
 function VoteableTag({
   tag,
@@ -125,6 +129,9 @@ export default function SpotDetail() {
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [displayScoreText, setDisplayScoreText] = useState('0');
+  const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+  const aboveFoldMarkedRef = useRef(false);
+  const dataHydratedMarkedRef = useRef(false);
   const saveScale = useSharedValue(1);
   const displayScore = useSharedValue(0);
   const displayName = place?.name || nameParam || 'Spot';
@@ -181,12 +188,44 @@ export default function SpotDetail() {
   }
 
   useEffect(() => {
+    const markId = startPerfMark('screen_spot_mount');
+    aboveFoldMarkedRef.current = false;
+    dataHydratedMarkedRef.current = false;
+    let active = true;
+    void markPerfEvent('screen_spot_mounted');
+    void trackScreenLoad('spot').then((stop) => {
+      if (active) {
+        screenLoadStopRef.current = stop;
+      } else {
+        void stop();
+      }
+    });
+
+    return () => {
+      active = false;
+      void endPerfMark(markId, true);
+      const stop = screenLoadStopRef.current;
+      screenLoadStopRef.current = null;
+      if (stop) void stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    aboveFoldMarkedRef.current = false;
+    dataHydratedMarkedRef.current = false;
+  }, [placeId, nameParam]);
+
+  useEffect(() => {
     (async () => {
       if (placeId) {
+        const markId = startPerfMark('spot_fetch_place_details');
         try {
           const details = await getPlaceDetails(placeId);
+          void endPerfMark(markId, true);
           if (details) setPlace(details);
-        } catch {}
+        } catch (error) {
+          void endPerfMark(markId, false, { error: String(error) });
+        }
       }
     })();
   }, [placeId]);
@@ -282,8 +321,10 @@ export default function SpotDetail() {
   useEffect(() => {
     (async () => {
       setLoadingInitial(true);
+      const fetchMarkId = startPerfMark('spot_fetch_checkins');
       try {
-        const res = await getCheckinsRemote(80);
+        const res = await getCheckinsRemote(SPOT_CHECKINS_LIMIT);
+        void endPerfMark(fetchMarkId, true, { limit: SPOT_CHECKINS_LIMIT });
         const items = (res.items || []).filter((it: any) => !isCheckinExpired(it));
         const targetKey = spotKey(placeId || undefined, nameParam || '');
         const filtered = items.filter((it: any) => {
@@ -291,13 +332,24 @@ export default function SpotDetail() {
           return spotKey(it.spotPlaceId, name) === targetKey;
         });
         setCheckins(filtered);
-      } catch {
+      } catch (error) {
+        void endPerfMark(fetchMarkId, false, { limit: SPOT_CHECKINS_LIMIT, error: String(error) });
         setCheckins([]);
       } finally {
         setLoadingInitial(false);
       }
     })();
   }, [placeId, nameParam]);
+
+  useEffect(() => {
+    if (loadingInitial || aboveFoldMarkedRef.current) return;
+    aboveFoldMarkedRef.current = true;
+    void markPerfEvent('spot_above_fold_ready');
+    void endPerfMark('spot_navigation', true);
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+  }, [loadingInitial]);
 
   useEffect(() => {
     (async () => {
@@ -382,6 +434,15 @@ export default function SpotDetail() {
       active = false;
     };
   }, [displayName, placeId, coords, place?.openNow, place?.types, place?.intel, visibleCheckins, aggregatedTagScores]);
+
+  useEffect(() => {
+    if (loadingInitial || !intelligence || dataHydratedMarkedRef.current) return;
+    dataHydratedMarkedRef.current = true;
+    void markPerfEvent('spot_data_hydrated', {
+      checkins: visibleCheckins.length,
+      highlights: intelligence.highlights.length,
+    });
+  }, [loadingInitial, intelligence, visibleCheckins.length]);
 
   const mapUrl = useMemo(() => {
     if (!coords) return null;
@@ -553,9 +614,17 @@ export default function SpotDetail() {
           <Pressable
             onPress={() => {
               try {
-                if (!mapsUrl) return;
-                void openExternalLink(mapsUrl);
-              } catch {}
+                const markId = startPerfMark('maps_open_latency');
+                if (!mapsUrl) {
+                  void endPerfMark(markId, false, { reason: 'missing_url' });
+                  return;
+                }
+                void openExternalLink(mapsUrl)
+                  .then(() => endPerfMark(markId, true))
+                  .catch((error) => endPerfMark(markId, false, { error: String(error) }));
+              } catch (error) {
+                void endPerfMark('maps_open_latency', false, { error: String(error) });
+              }
             }}
           >
             <SpotImage source={{ uri: mapUrl }} style={styles.map} />
@@ -591,11 +660,17 @@ export default function SpotDetail() {
           {coords ? (
             <Pressable
               onPress={() => {
+                const markId = startPerfMark('maps_open_latency');
                 const eventPayload = { event: 'map_open' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
                 recordPlaceEvent(eventPayload);
                 recordPlaceEventRemote(eventPayload);
-                if (!mapsUrl) return;
-                void openExternalLink(mapsUrl);
+                if (!mapsUrl) {
+                  void endPerfMark(markId, false, { reason: 'missing_url' });
+                  return;
+                }
+                void openExternalLink(mapsUrl)
+                  .then(() => endPerfMark(markId, true))
+                  .catch((error) => endPerfMark(markId, false, { error: String(error) }));
               }}
               style={[styles.secondary, { borderColor: border }]}
             >

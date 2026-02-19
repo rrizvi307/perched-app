@@ -51,7 +51,7 @@ import {
 } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import { distanceBetween, geohashQueryBounds } from 'geofire-common';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -67,6 +67,8 @@ import {
   View,
 } from 'react-native';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 
 function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
   const toRad = (value: number) => (value * Math.PI) / 180;
@@ -78,6 +80,10 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
+
+const EXPLORE_REMOTE_CHECKIN_LIMIT = 140;
+const EXPLORE_SPOT_QUERY_LIMIT = 90;
+const EXPLORE_SPOT_FALLBACK_LIMIT = 140;
 
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
@@ -256,6 +262,7 @@ export default function Explore() {
   const [refreshToken, setRefreshToken] = useState(0);
 
   const [status, setStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'error' | 'success' } | null>(null);
+  const [isFocused, setIsFocused] = useState(true);
 
   const [friendIds, setFriendIds] = useState<string[]>(() => (demoMode ? [...DEMO_USER_IDS] : []));
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
@@ -266,6 +273,20 @@ export default function Explore() {
 
   const slowQueryNoticeRef = useRef(false);
   const mapViewRef = useRef<any>(null);
+  const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+  const firstItemMarkedRef = useRef(false);
+  const firstScrollMarkedRef = useRef(false);
+  const viewabilityConfigRef = useRef({ itemVisiblePercentThreshold: 50 });
+  const onViewableItemsChangedRef = useRef((info: any) => {
+    if (firstItemMarkedRef.current) return;
+    const visibleCount = Array.isArray(info?.viewableItems) ? info.viewableItems.length : 0;
+    if (!visibleCount) return;
+    firstItemMarkedRef.current = true;
+    void markPerfEvent('explore_first_item_rendered', { visibleCount });
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+  });
 
   const campusKey = user?.campus || null;
   const rawIntelFlag = (Constants.expoConfig as any)?.extra?.INTEL_V1_ENABLED;
@@ -291,6 +312,35 @@ export default function Explore() {
 
   const activeFilterCount = useMemo(() => getActiveFilterCount(filters), [filters]);
   const hasActiveFilterState = useMemo(() => hasActiveFilters(filters), [filters]);
+
+  useFocusEffect(
+    useCallback(() => {
+      setIsFocused(true);
+      return () => {
+        setIsFocused(false);
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    const markId = startPerfMark('screen_explore_mount');
+    let active = true;
+    void trackScreenLoad('explore').then((stop) => {
+      if (active) {
+        screenLoadStopRef.current = stop;
+      } else {
+        void stop();
+      }
+    });
+    void markPerfEvent('screen_explore_mounted');
+    return () => {
+      active = false;
+      void endPerfMark(markId, true);
+      const stop = screenLoadStopRef.current;
+      screenLoadStopRef.current = null;
+      if (stop) void stop();
+    };
+  }, []);
 
   const passesScope = useCallback(
     (item: any) => {
@@ -358,7 +408,7 @@ export default function Explore() {
           bounds.map((bound) => {
             let query: any = db.collection('spots').orderBy('geoHash').startAt(bound[0]).endAt(bound[1]);
             query = applyFirestoreFilters(query, safeFilters);
-            return query.limit(140).get();
+            return query.limit(EXPLORE_SPOT_QUERY_LIMIT).get();
           })
         );
 
@@ -370,7 +420,7 @@ export default function Explore() {
           });
         });
       } catch {
-        const fallback = await db.collection('spots').limit(260).get();
+        const fallback = await db.collection('spots').limit(EXPLORE_SPOT_FALLBACK_LIMIT).get();
         fallback.docs.forEach((doc: any) => {
           if (!merged.has(doc.id)) {
             merged.set(doc.id, { id: doc.id, ...doc.data() });
@@ -416,6 +466,7 @@ export default function Explore() {
   );
 
   useEffect(() => {
+    if (!isFocused) return;
     if (!intelV1Enabled || !loc) {
       setIntelSpots([]);
       setIntelFetched(false);
@@ -439,7 +490,7 @@ export default function Explore() {
     return () => {
       active = false;
     };
-  }, [intelV1Enabled, loc, filters, fetchNearbySpots]);
+  }, [isFocused, intelV1Enabled, loc, filters, fetchNearbySpots]);
 
   useEffect(() => {
     void (async () => {
@@ -457,7 +508,10 @@ export default function Explore() {
   }, [user, demoMode]);
 
   useEffect(() => {
+    if (!isFocused) return;
     let active = true;
+    const loadMarkId = startPerfMark('explore_load_latest');
+    let loadOk = true;
 
     void (async () => {
       setRefreshing(true);
@@ -483,7 +537,15 @@ export default function Explore() {
           return;
         }
 
-        const remote = await getCheckinsRemote(260);
+        const fetchMarkId = startPerfMark('explore_fetch_checkins');
+        let remote: any;
+        try {
+          remote = await getCheckinsRemote(EXPLORE_REMOTE_CHECKIN_LIMIT);
+          void endPerfMark(fetchMarkId, true, { limit: EXPLORE_REMOTE_CHECKIN_LIMIT });
+        } catch (error) {
+          void endPerfMark(fetchMarkId, false, { limit: EXPLORE_REMOTE_CHECKIN_LIMIT, error: String(error) });
+          throw error;
+        }
         const items = (remote.items || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
@@ -534,6 +596,7 @@ export default function Explore() {
         setLoading(false);
         void syncPendingCheckins(1);
       } catch {
+        loadOk = false;
         const local = await getCheckins();
         const fallback = (local || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
@@ -550,6 +613,7 @@ export default function Explore() {
       } finally {
         setRefreshing(false);
         if (active) setLoading(false);
+        void endPerfMark(loadMarkId, loadOk);
       }
     })();
 
@@ -557,6 +621,7 @@ export default function Explore() {
       active = false;
     };
   }, [
+    isFocused,
     demoMode,
     refreshToken,
     user,
@@ -839,6 +904,14 @@ export default function Explore() {
   }, [selectedSpot, selectedSpotIntelligence]);
 
   useEffect(() => {
+    if (loading || firstItemMarkedRef.current) return;
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+    void markPerfEvent('explore_initial_data_ready', { itemCount: listData.length });
+  }, [loading, listData.length]);
+
+  useEffect(() => {
     if (!selectedSpot || !selectedSpotKey || selectedSpotIntelligence) return;
     const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
     const name = selectedSpot?.name || '';
@@ -898,6 +971,13 @@ export default function Explore() {
         maxToRenderPerBatch={6}
         windowSize={8}
         removeClippedSubviews={Platform.OS !== 'web'}
+        onViewableItemsChanged={onViewableItemsChangedRef.current}
+        viewabilityConfig={viewabilityConfigRef.current}
+        onScrollBeginDrag={() => {
+          if (firstScrollMarkedRef.current) return;
+          firstScrollMarkedRef.current = true;
+          void markPerfEvent('explore_scroll_session_start');
+        }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => setRefreshToken((prev) => prev + 1)} />}
         ListHeaderComponent={
           <View style={styles.header}>
@@ -1045,6 +1125,8 @@ export default function Explore() {
               userLocation={loc}
               context={{ timeOfDay }}
               onSpotPress={(placeId, name) => {
+                startPerfMark('spot_navigation');
+                void markPerfEvent('spot_nav_start', { source: 'explore_recommendations' });
                 router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(name)}`);
               }}
             />
@@ -1202,13 +1284,21 @@ export default function Explore() {
               <Pressable
                 onPress={() => {
                   try {
+                    const markId = startPerfMark('maps_open_latency');
                     const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId;
                     const name = selectedSpot?.name || 'Spot';
                     const coords = selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location;
                     const url = buildGoogleMapsUrl({ placeId, coords, name });
-                    if (!url) return;
-                    void openExternalLink(url);
-                  } catch {}
+                    if (!url) {
+                      void endPerfMark(markId, false, { reason: 'missing_url' });
+                      return;
+                    }
+                    void openExternalLink(url)
+                      .then(() => endPerfMark(markId, true))
+                      .catch((error) => endPerfMark(markId, false, { error: String(error) }));
+                  } catch (error) {
+                    void endPerfMark('maps_open_latency', false, { error: String(error) });
+                  }
                 }}
                 style={[styles.sheetButton, { backgroundColor: highlight, borderColor: border }]}
               >
@@ -1220,6 +1310,8 @@ export default function Explore() {
               onPress={() => {
                 try {
                   const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
+                  startPerfMark('spot_navigation');
+                  void markPerfEvent('spot_nav_start', { source: 'explore_sheet' });
                   router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(selectedSpot.name || '')}`);
                   closeSpotSheet();
                 } catch {}

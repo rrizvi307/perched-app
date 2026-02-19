@@ -26,8 +26,10 @@ import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
 
 type Checkin = {
@@ -210,8 +212,11 @@ function FeedPhoto({
 	const localCacheRef = useRef<Checkin[]>([]);
 	const [remoteCursor, setRemoteCursor] = useState<any | null>(null);
 	const [hasMoreRemote, setHasMoreRemote] = useState(true);
-	const PAGE = 20;
+	const PAGE = 16;
 	const realtimeEnabled = isFirebaseConfigured();
+	const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+	const firstItemMarkedRef = useRef(false);
+	const firstScrollMarkedRef = useRef(false);
 
 	// call theme hooks once at top-level of component to avoid calling hooks inside renderItem
 	const text = useThemeColor({}, 'text');
@@ -240,6 +245,7 @@ function FeedPhoto({
 
 	const { user } = useAuth();
 	const router = useRouter();
+	const [isFocused, setIsFocused] = useState(true);
 	const [feedScope, setFeedScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
 		const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
 		const [blockedIds, setBlockedIds] = useState<string[]>([]);
@@ -269,12 +275,52 @@ function FeedPhoto({
 	const outgoingById = useMemo(() => new Set(outgoingRequests.map((r) => r.toId)), [outgoingRequests]);
 	const onlyCampus = feedScope === 'campus';
 	const onlyFriends = feedScope === 'friends';
+	const viewabilityConfigRef = useRef({ itemVisiblePercentThreshold: 50 });
+	const onViewableItemsChangedRef = useRef((info: any) => {
+		if (firstItemMarkedRef.current) return;
+		const visibleCount = Array.isArray(info?.viewableItems) ? info.viewableItems.length : 0;
+		if (!visibleCount) return;
+		firstItemMarkedRef.current = true;
+		void markPerfEvent('feed_first_item_rendered', { visibleCount });
+		const stop = screenLoadStopRef.current;
+		screenLoadStopRef.current = null;
+		if (stop) void stop();
+	});
+
+	useEffect(() => {
+		const markId = startPerfMark('screen_home_mount');
+		let active = true;
+		void trackScreenLoad('feed').then((stop) => {
+			if (active) {
+				screenLoadStopRef.current = stop;
+			} else {
+				void stop();
+			}
+		});
+		void markPerfEvent('screen_home_mounted');
+		return () => {
+			active = false;
+			void endPerfMark(markId, true);
+			const stop = screenLoadStopRef.current;
+			screenLoadStopRef.current = null;
+			if (stop) void stop();
+		};
+	}, []);
 
 	useEffect(() => {
 		if (feedScope === 'campus' && !user?.campus) {
 			setFeedScope('everyone');
 		}
 	}, [feedScope, user?.campus]);
+
+	useFocusEffect(
+		useCallback(() => {
+			setIsFocused(true);
+			return () => {
+				setIsFocused(false);
+			};
+		}, [])
+	);
 
 	useEffect(() => {
 		(async () => {
@@ -438,6 +484,8 @@ function FeedPhoto({
 		}, [resolvePhotoSrc]);
 
 		const loadLatest = useCallback(async () => {
+			const loadMarkId = startPerfMark('feed_load_latest');
+			let ok = true;
 			setRefreshing(true);
 			try {
 				const demo = isDemoMode();
@@ -457,7 +505,15 @@ function FeedPhoto({
 						setStatus(null);
 						return;
 					}
-					const res = await getCheckinsRemote(PAGE);
+				const fetchMarkId = startPerfMark('feed_fetch');
+				let res: any;
+				try {
+					res = await getCheckinsRemote(PAGE);
+					void endPerfMark(fetchMarkId, true, { limit: PAGE });
+				} catch (error) {
+					void endPerfMark(fetchMarkId, false, { limit: PAGE, error: String(error) });
+					throw error;
+				}
 				const pending = await pendingPromise;
 				const pendingSummary = summarizePending(pending);
 				setPendingCount(pendingSummary.count);
@@ -499,6 +555,7 @@ function FeedPhoto({
 				wasOfflineRef.current = false;
 			}
 			} catch {
+				ok = false;
 				try {
 					const pending = await getPendingCheckins();
 					const pendingSummary = summarizePending(pending);
@@ -519,12 +576,15 @@ function FeedPhoto({
 		} finally {
 				setRefreshing(false);
 				setInitialLoading(false);
+				void endPerfMark(loadMarkId, ok);
 			}
 			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
 
 		const loadMore = useCallback(async () => {
 			if (loadingMore || !hasMoreRemote) return;
 			setLoadingMore(true);
+			const markId = startPerfMark('feed_fetch_more');
+			let ok = true;
 			try {
 				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
 				if (res.items && res.items.length) {
@@ -534,9 +594,11 @@ function FeedPhoto({
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
 		} catch {
+			ok = false;
 			// no-op for local fallback
 		} finally {
 			setLoadingMore(false);
+			void endPerfMark(markId, ok, { limit: PAGE });
 		}
 	}, [loadingMore, remoteCursor, hasMoreRemote, filterExpired]);
 
@@ -653,6 +715,7 @@ function FeedPhoto({
 
 		// subscribe to global remote feed when not in friends-only mode
 		useEffect(() => {
+			if (!isFocused) return;
 			// cleanup previous
 			if (remoteUnsubRef.current) {
 				try { remoteUnsubRef.current(); } catch {}
@@ -684,10 +747,11 @@ function FeedPhoto({
 					remoteUnsubRef.current = null;
 				}
 			};
-		}, [onlyFriends, filterExpired, mergeRemoteWithLocal]);
+		}, [isFocused, onlyFriends, filterExpired, mergeRemoteWithLocal]);
 
 	// subscribe to friends-only feed when toggled on
 	useEffect(() => {
+		if (!isFocused) return;
 		if (!onlyFriends) return;
 		if (user && friendIds.length === 0) {
 			(async () => {
@@ -730,7 +794,7 @@ function FeedPhoto({
 					friendsUnsubRef.current = null;
 				}
 			};
-		}, [onlyFriends, friendIds, user, filterExpired, mergeRemoteWithLocal]);
+		}, [isFocused, onlyFriends, friendIds, user, filterExpired, mergeRemoteWithLocal]);
 
 	const visibleItems = useMemo(() => {
 		let out = items;
@@ -845,6 +909,14 @@ function FeedPhoto({
 			};
 		}, [collapsedItems, reactionByCheckin, loadReactionsForCheckin]);
 
+	useEffect(() => {
+		if (initialLoading || firstItemMarkedRef.current) return;
+		const stop = screenLoadStopRef.current;
+		screenLoadStopRef.current = null;
+		if (stop) void stop();
+		void markPerfEvent('feed_initial_data_ready', { itemCount: collapsedItems.length });
+	}, [initialLoading, collapsedItems.length]);
+
 	return (
 		<ThemedView style={styles.container}>
 			<Atmosphere />
@@ -857,6 +929,13 @@ function FeedPhoto({
 				windowSize={7}
 				updateCellsBatchingPeriod={40}
 				removeClippedSubviews={Platform.OS !== 'web'}
+				onViewableItemsChanged={onViewableItemsChangedRef.current}
+				viewabilityConfig={viewabilityConfigRef.current}
+				onScrollBeginDrag={() => {
+					if (firstScrollMarkedRef.current) return;
+					firstScrollMarkedRef.current = true;
+					void markPerfEvent('feed_scroll_session_start');
+				}}
 				ListHeaderComponent={
 					<View style={styles.header}>
 						<View style={[styles.heroCard, { backgroundColor: card, borderColor: border }]}>
@@ -973,6 +1052,8 @@ function FeedPhoto({
 											<Pressable
 												key={`${placeId || name}-${index}`}
 												onPress={() => {
+													startPerfMark('spot_navigation');
+													void markPerfEvent('spot_nav_start', { source: 'feed_trending' });
 													router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(name)}`);
 												}}
 												style={({ pressed }) => [
@@ -1215,6 +1296,8 @@ function FeedPhoto({
 									onPress={() => {
 										const placeId = (item as any).spotPlaceId;
 										const name = item.spotName || item.spot || '';
+										startPerfMark('spot_navigation');
+										void markPerfEvent('spot_nav_start', { source: 'feed_card' });
 										router.push(`/spot?placeId=${encodeURIComponent(placeId || '')}&name=${encodeURIComponent(name)}`);
 									}}
 								>

@@ -21,14 +21,25 @@ import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken } from '@/services/firebaseClient';
 import { AppHeader } from '@/components/ui/app-header';
+import { devLog } from '@/services/logger';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
 };
 
+const APP_LAUNCH_MARK_ID = startPerfMark('app_launch_total');
+
 export default function RootLayout() {
-  initErrorReporting();
-  initAnalytics();
+  useEffect(() => {
+    const initMarkId = startPerfMark('app_init_services');
+    try {
+      initErrorReporting();
+      initAnalytics();
+    } finally {
+      void endPerfMark(initMarkId, true);
+    }
+  }, []);
 
   useEffect(() => {
     // Initialize deep linking
@@ -57,6 +68,7 @@ function InnerApp() {
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
   const notificationsInitializedForUser = useRef<string | null>(null);
+  const interactiveMarked = useRef(false);
   const { showToast } = useToast();
   const lightNavTheme = {
     ...DefaultTheme,
@@ -91,8 +103,48 @@ function InnerApp() {
   }
 
   useEffect(() => {
-    void ensureDemoModeReady(user?.id);
+    let canceled = false;
+    if (Platform.OS === 'web') {
+      const timer = setTimeout(() => {
+        if (!canceled) {
+          void ensureDemoModeReady(user?.id);
+        }
+      }, 200);
+      return () => {
+        canceled = true;
+        clearTimeout(timer);
+      };
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (!canceled) {
+        void ensureDemoModeReady(user?.id);
+      }
+    });
+    return () => {
+      canceled = true;
+      task.cancel();
+    };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (interactiveMarked.current) return;
+    const markInteractive = () => {
+      if (interactiveMarked.current) return;
+      interactiveMarked.current = true;
+      void endPerfMark(APP_LAUNCH_MARK_ID, true);
+      void markPerfEvent('app_launch_interactive');
+    };
+
+    if (Platform.OS === 'web') {
+      const id = requestAnimationFrame(markInteractive);
+      return () => cancelAnimationFrame(id);
+    }
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(markInteractive);
+    });
+    return () => task.cancel();
+  }, []);
 
   useEffect(() => {
     if (!user?.id || isDemoMode()) return;
@@ -146,17 +198,22 @@ function InnerApp() {
     const userId = user?.id;
     if (!userId || isDemoMode()) return;
     const runSync = async () => {
+      const markId = startPerfMark('app_pending_sync');
       try {
         const res = await syncPendingCheckins(5);
         if (res.synced > 0) {
           showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
         }
         await syncPendingProfileUpdates(5);
-      } catch {}
+        void endPerfMark(markId, true);
+      } catch (error) {
+        void endPerfMark(markId, false, { error: String(error) });
+      }
     };
 
     // Initialize push notifications
     const setupNotifications = async () => {
+      const markId = startPerfMark('app_notifications_setup');
       try {
         if (notificationsInitializedForUser.current === userId) return;
         notificationsInitializedForUser.current = userId;
@@ -168,16 +225,22 @@ function InnerApp() {
         }
         // Schedule weekly recap
         await scheduleWeeklyRecap();
+        void endPerfMark(markId, true);
       } catch (error) {
         notificationsInitializedForUser.current = null;
-        console.error('Failed to setup notifications:', error);
+        devLog('Failed to setup notifications:', error);
+        void endPerfMark(markId, false, { error: String(error) });
       }
     };
 
     const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(() => {
       void runSync();
-      void setupNotifications();
     });
+    const notificationsTimer = Platform.OS === 'web'
+      ? null
+      : setTimeout(() => {
+        void setupNotifications();
+      }, 1200);
 
     if (Platform.OS === 'web') {
       void runSync();
@@ -206,6 +269,7 @@ function InnerApp() {
 
       return () => {
         initialTask?.cancel?.();
+        if (notificationsTimer) clearTimeout(notificationsTimer);
         sub.remove();
         notificationSubscription.remove();
       };

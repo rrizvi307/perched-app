@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
-import { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator } from 'react-native';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
@@ -11,6 +11,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
 import {
   findUserByEmail,
   findUserByHandle,
@@ -21,6 +22,9 @@ import {
 } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { devLog } from '@/services/logger';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 
 interface UserResult {
   id: string;
@@ -37,6 +41,7 @@ interface UserResult {
  */
 export default function FindFriendsScreen() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -45,6 +50,8 @@ export default function FindFriendsScreen() {
   const [campusSuggestions, setCampusSuggestions] = useState<UserResult[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+  const firstDataMarkedRef = useRef(false);
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -54,8 +61,11 @@ export default function FindFriendsScreen() {
   const success = useThemeColor({}, 'success');
 
   const loadCampusSuggestions = useCallback(async () => {
+    const markId = startPerfMark('find_friends_load_suggestions');
+    let ok = true;
     if (!user?.id) {
       setLoadingSuggestions(false);
+      void endPerfMark(markId, true);
       return;
     }
 
@@ -63,6 +73,7 @@ export default function FindFriendsScreen() {
       const campus = user.campus || user.campusOrCity;
       if (!campus) {
         setLoadingSuggestions(false);
+        void endPerfMark(markId, true);
         return;
       }
 
@@ -89,22 +100,55 @@ export default function FindFriendsScreen() {
 
       setCampusSuggestions(suggestions);
     } catch (error) {
-      console.error('Failed to load campus suggestions:', error);
+      ok = false;
+      devLog('Failed to load campus suggestions:', error);
     } finally {
       setLoadingSuggestions(false);
+      void endPerfMark(markId, ok);
     }
   }, [user?.id, user?.campus, user?.campusOrCity]);
+
+  useEffect(() => {
+    const markId = startPerfMark('screen_find_friends_mount');
+    let active = true;
+    void trackScreenLoad('find_friends').then((stop) => {
+      if (active) {
+        screenLoadStopRef.current = stop;
+      } else {
+        void stop();
+      }
+    });
+    void markPerfEvent('screen_find_friends_mounted');
+    return () => {
+      active = false;
+      void endPerfMark(markId, true);
+      const stop = screenLoadStopRef.current;
+      screenLoadStopRef.current = null;
+      if (stop) void stop();
+    };
+  }, []);
 
   // Load campus suggestions on mount
   useEffect(() => {
     void loadCampusSuggestions();
   }, [loadCampusSuggestions]);
 
+  useEffect(() => {
+    if (loadingSuggestions || firstDataMarkedRef.current) return;
+    firstDataMarkedRef.current = true;
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+    void markPerfEvent('find_friends_first_data_ready', { suggestions: campusSuggestions.length });
+  }, [loadingSuggestions, campusSuggestions.length]);
+
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !user?.id) return;
 
     setSearching(true);
     setHasSearched(true);
+    const markId = startPerfMark('find_friends_search');
+    let ok = true;
 
     try {
       const query = searchQuery.trim();
@@ -149,10 +193,12 @@ export default function FindFriendsScreen() {
 
       void logEvent('friend_search', user.id, { query: query.includes('@') ? 'email' : 'handle' });
     } catch (error) {
-      console.error('Search failed:', error);
+      ok = false;
+      devLog('Search failed:', error);
       setSearchResults([]);
     } finally {
       setSearching(false);
+      void endPerfMark(markId, ok, { queryLength: searchQuery.trim().length });
     }
   }, [searchQuery, user?.id]);
 
@@ -174,8 +220,8 @@ export default function FindFriendsScreen() {
 
       void logEvent('friend_request_sent', user.id, { toUserId: targetUser.id, source: 'find_friends' });
     } catch (error) {
-      console.error('Failed to send friend request:', error);
-      Alert.alert('Error', 'Failed to send friend request. Please try again.');
+      devLog('Failed to send friend request:', error);
+      showToast('Failed to send friend request. Please try again.', 'error');
     } finally {
       setSendingTo(null);
     }
