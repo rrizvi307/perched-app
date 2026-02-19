@@ -10,6 +10,7 @@
  */
 
 import admin from 'firebase-admin';
+import crypto from 'crypto';
 
 type SeedUser = {
   email: string;
@@ -34,6 +35,7 @@ type SeedSpot = {
   tags: string[];
   campus: string;
   city: string;
+  photoSources: string[];
 };
 
 const TARGET_USERS: SeedUser[] = [
@@ -76,6 +78,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Wi-Fi', 'Quiet', 'Outlets'],
     campus: 'Rice University',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=1200&q=80',
+      'https://images.unsplash.com/photo-1445116572660-236099ec97a0?w=1200&q=80',
+    ],
   },
   {
     name: 'Catalina Coffee',
@@ -85,6 +91,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Wi-Fi', 'Social', 'Bright'],
     campus: 'Rice University',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1559496417-e7f25cb247f3?w=1200&q=80',
+      'https://images.unsplash.com/photo-1511920170033-f8396924c348?w=1200&q=80',
+    ],
   },
   {
     name: 'Boomtown Coffee',
@@ -94,6 +104,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Wi-Fi', 'Outlets', 'Focus'],
     campus: 'University of Houston',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=1200&q=80',
+      'https://images.unsplash.com/photo-1493857671505-72967e2e2760?w=1200&q=80',
+    ],
   },
   {
     name: 'Agora',
@@ -103,6 +117,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Late-night', 'Social', 'Seating'],
     campus: 'Rice University',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1521017432531-fbd92d768814?w=1200&q=80',
+      'https://images.unsplash.com/photo-1485182708500-e8f1f318ba72?w=1200&q=80',
+    ],
   },
   {
     name: 'Common Bond',
@@ -112,6 +130,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Wi-Fi', 'Brunch', 'Bright'],
     campus: 'Rice University',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1559925393-8be0ec4767c8?w=1200&q=80',
+      'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=1200&q=80',
+    ],
   },
   {
     name: 'MD Anderson Library',
@@ -121,6 +143,10 @@ const HOUSTON_SPOTS: SeedSpot[] = [
     tags: ['Quiet', 'Study', 'Seating'],
     campus: 'University of Houston',
     city: 'Houston',
+    photoSources: [
+      'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=1200&q=80',
+      'https://images.unsplash.com/photo-1507842217343-583bb7270b66?w=1200&q=80',
+    ],
   },
 ];
 
@@ -144,6 +170,119 @@ function initAdmin(): admin.firestore.Firestore {
     admin.initializeApp();
   }
   return admin.firestore();
+}
+
+function resolveStorageBucketName(): string {
+  const envBucket = (process.env.FIREBASE_STORAGE_BUCKET || '').trim();
+  if (envBucket) return envBucket;
+  const projectCandidates = [
+    (process.env.FIREBASE_PROJECT_ID || '').trim(),
+    (process.env.GCLOUD_PROJECT || '').trim(),
+    String(admin.app().options.projectId || '').trim(),
+    'spot-app-ce2d8',
+  ].filter((value) => value.length > 0);
+  if (projectCandidates.length > 0) return `${projectCandidates[0]}.firebasestorage.app`;
+  throw new Error('Unable to resolve Firebase Storage bucket. Set FIREBASE_STORAGE_BUCKET or FIREBASE_PROJECT_ID.');
+}
+
+function contentTypeToExt(contentType: string): string {
+  const normalized = contentType.toLowerCase();
+  if (normalized.includes('png')) return 'png';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('heic')) return 'heic';
+  return 'jpg';
+}
+
+function buildDownloadUrl(bucketName: string, objectPath: string, token: string): string {
+  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+}
+
+function readStorageToken(metadata: any): string | null {
+  const raw = typeof metadata?.metadata?.firebaseStorageDownloadTokens === 'string'
+    ? metadata.metadata.firebaseStorageDownloadTokens
+    : '';
+  const token = raw
+    .split(',')
+    .map((part: string) => part.trim())
+    .find((part: string) => part.length > 0);
+  return token || null;
+}
+
+async function mirrorPhotoToStorage(bucket: any, sourceUrl: string, keyPrefix: string): Promise<string> {
+  const hash = crypto.createHash('sha1').update(sourceUrl).digest('hex').slice(0, 16);
+  const tokenSeed = crypto.randomUUID();
+  let ext = 'jpg';
+  let objectPath = `seed/checkins/${keyPrefix}-${hash}.${ext}`;
+  let file = bucket.file(objectPath);
+
+  try {
+    const [exists] = await file.exists();
+    if (exists) {
+      const [metadata] = await file.getMetadata();
+      const existingToken = readStorageToken(metadata);
+      if (existingToken) return buildDownloadUrl(bucket.name, objectPath, existingToken);
+      await file.setMetadata({
+        metadata: {
+          ...(metadata.metadata || {}),
+          firebaseStorageDownloadTokens: tokenSeed,
+          sourceUrl,
+        },
+      });
+      return buildDownloadUrl(bucket.name, objectPath, tokenSeed);
+    }
+  } catch {}
+
+  const response = await fetch(sourceUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch seed photo (${response.status}): ${sourceUrl}`);
+  }
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  ext = contentTypeToExt(contentType);
+  objectPath = `seed/checkins/${keyPrefix}-${hash}.${ext}`;
+  file = bucket.file(objectPath);
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const token = crypto.randomUUID();
+
+  await file.save(buffer, {
+    resumable: false,
+    contentType,
+    metadata: {
+      cacheControl: 'public,max-age=31536000,immutable',
+      metadata: {
+        firebaseStorageDownloadTokens: token,
+        sourceUrl,
+      },
+    },
+  });
+
+  return buildDownloadUrl(bucket.name, objectPath, token);
+}
+
+async function buildSpotPhotoMap(bucket: any): Promise<Map<string, string[]>> {
+  const sourceCache = new Map<string, string>();
+  const spotMap = new Map<string, string[]>();
+
+  for (const spot of HOUSTON_SPOTS) {
+    const mirrored: string[] = [];
+    for (const sourceUrl of spot.photoSources) {
+      const cached = sourceCache.get(sourceUrl);
+      if (cached) {
+        mirrored.push(cached);
+        continue;
+      }
+      const uploaded = await mirrorPhotoToStorage(bucket, sourceUrl, spot.placeId);
+      sourceCache.set(sourceUrl, uploaded);
+      mirrored.push(uploaded);
+    }
+    if (!mirrored.length) {
+      throw new Error(`No mirrored photos available for spot ${spot.placeId}`);
+    }
+    spotMap.set(spot.placeId, mirrored);
+  }
+
+  return spotMap;
 }
 
 async function resolveUsers(db: admin.firestore.Firestore): Promise<ResolvedUser[]> {
@@ -188,13 +327,18 @@ function buildCreatedAt(index: number, total: number): { createdAtMs: number; cr
 
 async function seed(): Promise<void> {
   const db = initAdmin();
+  const bucketName = resolveStorageBucketName();
+  const bucket = admin.storage().bucket(bucketName);
   const users = await resolveUsers(db);
+  const spotPhotos = await buildSpotPhotoMap(bucket);
   const total = 12;
   const batch = db.batch();
 
   for (let i = 0; i < total; i++) {
     const user = users[i % users.length];
     const spot = HOUSTON_SPOTS[i % HOUSTON_SPOTS.length];
+    const photoOptions = spotPhotos.get(spot.placeId) || [];
+    const photoUrl = photoOptions[i % Math.max(1, photoOptions.length)] || null;
     const { createdAt, createdAtMs } = buildCreatedAt(i, total);
     const docId = `beta-public-${String(i + 1).padStart(3, '0')}`;
 
@@ -212,6 +356,8 @@ async function seed(): Promise<void> {
         spotLatLng: { lat: spot.lat, lng: spot.lng },
         caption: CAPTIONS[i % CAPTIONS.length],
         tags: spot.tags,
+        photoUrl,
+        photoPending: false,
         campusOrCity: spot.campus,
         city: spot.city,
         campus: spot.campus,
@@ -238,4 +384,3 @@ seed()
     console.error('Failed to seed public Houston check-ins:', error);
     process.exit(1);
   });
-

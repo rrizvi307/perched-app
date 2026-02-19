@@ -5,16 +5,22 @@
  * Or: npx tsx scripts/seedFirestore.ts
  */
 
-import { initializeApp, cert, ServiceAccount } from 'firebase-admin/app';
+import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { getStorage, Bucket } from 'firebase-admin/storage';
+import crypto from 'crypto';
 
 // Initialize Firebase Admin (uses Application Default Credentials in cloud, or service account locally)
 // For local development, set GOOGLE_APPLICATION_CREDENTIALS env variable to your service account key
+const projectId = process.env.FIREBASE_PROJECT_ID || 'spot-app-ce2d8';
+const configuredBucket = process.env.FIREBASE_STORAGE_BUCKET || `${projectId}.firebasestorage.app`;
 const app = initializeApp({
-  projectId: 'spot-app-ce2d8',
+  projectId,
+  storageBucket: configuredBucket,
 });
 
 const db = getFirestore(app);
+const storage = getStorage(app);
 
 // Demo users - Houston-based (Rice, UH, local professionals)
 const DEMO_USERS = [
@@ -295,6 +301,135 @@ const DEMO_CAPTIONS = [
   '', // Some without captions
 ];
 
+const mirroredSpotPhotoUrls = new Map<string, string[]>();
+
+function resolveBucketCandidates(): string[] {
+  const envBucket = (process.env.FIREBASE_STORAGE_BUCKET || '').trim();
+  const candidates = [
+    envBucket,
+    configuredBucket,
+    `${projectId}.firebasestorage.app`,
+    `${projectId}.appspot.com`,
+  ].filter((value) => typeof value === 'string' && value.trim().length > 0);
+  return Array.from(new Set(candidates));
+}
+
+async function resolveBucket(): Promise<Bucket> {
+  const candidates = resolveBucketCandidates();
+  let lastErr: unknown = null;
+  for (const name of candidates) {
+    try {
+      const bucket = storage.bucket(name);
+      await bucket.getMetadata();
+      return bucket;
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  if (lastErr) {
+    throw new Error(`Unable to access Firebase Storage bucket. Tried: ${candidates.join(', ')}`);
+  }
+  throw new Error('Unable to resolve Firebase Storage bucket.');
+}
+
+function contentTypeToExt(contentType: string): string {
+  const normalized = contentType.toLowerCase();
+  if (normalized.includes('png')) return 'png';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('heic')) return 'heic';
+  return 'jpg';
+}
+
+function readDownloadToken(metadata: any): string | null {
+  const raw = typeof metadata?.metadata?.firebaseStorageDownloadTokens === 'string'
+    ? metadata.metadata.firebaseStorageDownloadTokens
+    : '';
+  const token = raw
+    .split(',')
+    .map((part: string) => part.trim())
+    .find((part: string) => part.length > 0);
+  return token || null;
+}
+
+function buildDownloadUrl(bucketName: string, objectPath: string, token: string): string {
+  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+}
+
+async function mirrorPhotoToStorage(bucket: Bucket, sourceUrl: string, seedKey: string): Promise<string> {
+  const hash = crypto.createHash('sha1').update(sourceUrl).digest('hex').slice(0, 16);
+  let objectPath = `seed/demo-checkins/${seedKey}-${hash}.jpg`;
+  let file = bucket.file(objectPath);
+  const tokenSeed = crypto.randomUUID();
+
+  try {
+    const [exists] = await file.exists();
+    if (exists) {
+      const [metadata] = await file.getMetadata();
+      const existingToken = readDownloadToken(metadata);
+      if (existingToken) return buildDownloadUrl(bucket.name, objectPath, existingToken);
+      await file.setMetadata({
+        metadata: {
+          ...(metadata.metadata || {}),
+          firebaseStorageDownloadTokens: tokenSeed,
+          sourceUrl,
+        },
+      });
+      return buildDownloadUrl(bucket.name, objectPath, tokenSeed);
+    }
+  } catch {}
+
+  const response = await fetch(sourceUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch seed image (${response.status}): ${sourceUrl}`);
+  }
+
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const ext = contentTypeToExt(contentType);
+  objectPath = `seed/demo-checkins/${seedKey}-${hash}.${ext}`;
+  file = bucket.file(objectPath);
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const token = crypto.randomUUID();
+
+  await file.save(buffer, {
+    resumable: false,
+    contentType,
+    metadata: {
+      cacheControl: 'public,max-age=31536000,immutable',
+      metadata: {
+        firebaseStorageDownloadTokens: token,
+        sourceUrl,
+      },
+    },
+  });
+
+  return buildDownloadUrl(bucket.name, objectPath, token);
+}
+
+async function prepareMirroredDemoPhotos(): Promise<void> {
+  console.log('Mirroring demo photos to Firebase Storage...');
+  const bucket = await resolveBucket();
+  const sourceCache = new Map<string, string>();
+
+  for (const spot of DEMO_SPOTS) {
+    const mirrored: string[] = [];
+    for (const sourceUrl of spot.photos) {
+      const cached = sourceCache.get(sourceUrl);
+      if (cached) {
+        mirrored.push(cached);
+        continue;
+      }
+      const uploadUrl = await mirrorPhotoToStorage(bucket, sourceUrl, spot.placeId);
+      sourceCache.set(sourceUrl, uploadUrl);
+      mirrored.push(uploadUrl);
+    }
+    mirroredSpotPhotoUrls.set(spot.placeId, mirrored);
+  }
+
+  console.log(`Mirrored ${sourceCache.size} unique demo images to ${bucket.name}`);
+}
+
 function randomElement<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -338,8 +473,10 @@ async function seedCheckins() {
     const user = randomElement(DEMO_USERS);
     const spot = randomElement(DEMO_SPOTS);
     const caption = randomElement(DEMO_CAPTIONS);
-    // Use spot-specific photo
-    const photo = randomElement(spot.photos);
+    // Use Firebase Storage mirrored spot photos
+    const spotPhotoPool = mirroredSpotPhotoUrls.get(spot.placeId);
+    const photoChoices = spotPhotoPool && spotPhotoPool.length > 0 ? spotPhotoPool : spot.photos;
+    const photo = randomElement(photoChoices);
     const hoursAgo = Math.random() * 20; // Within last 20 hours
     const createdAt = generateTimestamp(hoursAgo);
     const expiresAt = new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
@@ -364,6 +501,7 @@ async function seedCheckins() {
       spotLatLng: spot.location,
       spotAddress: spot.address,
       photoUrl: photo,
+      photoPending: false,
       caption,
       tags: spot.tags,
       campus: user.campus,
@@ -452,6 +590,7 @@ async function main() {
     await clearDemoData();
   }
 
+  await prepareMirroredDemoPhotos();
   await seedUsers();
   await seedCheckins();
   await seedFriendRequests();
