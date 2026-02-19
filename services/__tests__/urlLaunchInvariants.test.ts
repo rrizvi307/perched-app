@@ -120,10 +120,11 @@ describe('url launch invariants', () => {
   });
 
   it('keeps required wired screens on the guarded opener', () => {
-    expect((read('app/(tabs)/explore.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(1);
-    expect((read('app/spot.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect((read('app/(tabs)/explore.tsx').match(/openInMaps\(/g) || []).length).toBeGreaterThanOrEqual(1);
+    expect((read('app/spot.tsx').match(/openInMaps\(/g) || []).length).toBeGreaterThanOrEqual(1);
     expect(read('app/settings.tsx')).toMatch(/router\.push\('\/support'\)/);
-    expect((read('app/support.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(3);
+    expect((read('app/support.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(1);
+    expect((read('app/support.tsx').match(/openLinkWithFeedback\(/g) || []).length).toBeGreaterThanOrEqual(3);
     expect((read('app/(tabs)/profile.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(3);
     expect((read('components/external-link.tsx').match(/openExternalLink\(/g) || []).length).toBeGreaterThanOrEqual(1);
   });

@@ -11,14 +11,13 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
 import { getCheckinsRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
-import { buildGoogleMapsUrl } from '@/services/mapsLinks';
-import { openExternalLink } from '@/services/externalLinks';
+import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
 import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spotUtils';
 import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -175,13 +174,25 @@ export default function SpotDetail() {
     });
     return scores;
   }, [visibleCheckins]);
-  const mapsUrl = useMemo(() => {
-    return buildGoogleMapsUrl({
-      placeId,
-      coords,
-      name: displayName,
-    });
-  }, [placeId, coords, displayName]);
+  const mapsInput = useMemo(() => ({
+    placeId,
+    coords,
+    name: displayName,
+  }), [placeId, coords, displayName]);
+
+  const handleOpenMaps = useCallback(async (source: 'spot_map_card' | 'spot_map_button') => {
+    const markId = startPerfMark('maps_open_latency', { source });
+    try {
+      const result = await openInMaps(mapsInput);
+      void endPerfMark(markId, result.opened, { source, reason: result.reason });
+      if (!result.opened && result.reason !== 'cancelled') {
+        showToast('Unable to open Maps on this device.', 'warning');
+      }
+    } catch (error) {
+      void endPerfMark(markId, false, { source, error: String(error) });
+      showToast('Unable to open Maps right now.', 'warning');
+    }
+  }, [mapsInput, showToast]);
 
   function formatTime(input: string | { seconds?: number } | undefined) {
     return formatCheckinClock(input);
@@ -613,18 +624,7 @@ export default function SpotDetail() {
         {mapUrl ? (
           <Pressable
             onPress={() => {
-              try {
-                const markId = startPerfMark('maps_open_latency');
-                if (!mapsUrl) {
-                  void endPerfMark(markId, false, { reason: 'missing_url' });
-                  return;
-                }
-                void openExternalLink(mapsUrl)
-                  .then(() => endPerfMark(markId, true))
-                  .catch((error) => endPerfMark(markId, false, { error: String(error) }));
-              } catch (error) {
-                void endPerfMark('maps_open_latency', false, { error: String(error) });
-              }
+              void handleOpenMaps('spot_map_card');
             }}
           >
             <SpotImage source={{ uri: mapUrl }} style={styles.map} />
@@ -660,17 +660,10 @@ export default function SpotDetail() {
           {coords ? (
             <Pressable
               onPress={() => {
-                const markId = startPerfMark('maps_open_latency');
                 const eventPayload = { event: 'map_open' as const, ts: Date.now(), userId: user?.id, placeId: placeId || null, name: displayName, category };
                 recordPlaceEvent(eventPayload);
                 recordPlaceEventRemote(eventPayload);
-                if (!mapsUrl) {
-                  void endPerfMark(markId, false, { reason: 'missing_url' });
-                  return;
-                }
-                void openExternalLink(mapsUrl)
-                  .then(() => endPerfMark(markId, true))
-                  .catch((error) => endPerfMark(markId, false, { error: String(error) }));
+                void handleOpenMaps('spot_map_button');
               }}
               style={[styles.secondary, { borderColor: border }]}
             >

@@ -37,8 +37,7 @@ import {
 import { requestForegroundLocation } from '@/services/location';
 import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
 import { buildPlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
-import { buildGoogleMapsUrl } from '@/services/mapsLinks';
-import { openExternalLink } from '@/services/externalLinks';
+import { openInMaps } from '@/services/mapsLinks';
 import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
@@ -1282,22 +1281,20 @@ export default function Explore() {
               </Pressable>
 
               <Pressable
-                onPress={() => {
+                onPress={async () => {
+                  const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId;
+                  const name = selectedSpot?.name || 'Spot';
+                  const coords = selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location;
+                  const markId = startPerfMark('maps_open_latency', { source: 'explore_sheet_open_maps' });
                   try {
-                    const markId = startPerfMark('maps_open_latency');
-                    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId;
-                    const name = selectedSpot?.name || 'Spot';
-                    const coords = selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location;
-                    const url = buildGoogleMapsUrl({ placeId, coords, name });
-                    if (!url) {
-                      void endPerfMark(markId, false, { reason: 'missing_url' });
-                      return;
+                    const result = await openInMaps({ placeId, coords, name });
+                    void endPerfMark(markId, result.opened, { source: 'explore_sheet_open_maps', reason: result.reason });
+                    if (!result.opened && result.reason !== 'cancelled') {
+                      showToast('Unable to open Maps on this device.', 'warning');
                     }
-                    void openExternalLink(url)
-                      .then(() => endPerfMark(markId, true))
-                      .catch((error) => endPerfMark(markId, false, { error: String(error) }));
                   } catch (error) {
-                    void endPerfMark('maps_open_latency', false, { error: String(error) });
+                    void endPerfMark(markId, false, { source: 'explore_sheet_open_maps', error: String(error) });
+                    showToast('Unable to open Maps right now.', 'warning');
                   }
                 }}
                 style={[styles.sheetButton, { backgroundColor: highlight, borderColor: border }]}

@@ -269,12 +269,30 @@ function FeedPhoto({
 	const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
 	const [lastSelfCheckinAt, setLastSelfCheckinAt] = useState<string | null>(null);
 	const [reactionByCheckin, setReactionByCheckin] = useState<Record<string, ReactionSummary>>({});
+	const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
+	const actionLocksRef = useRef<Record<string, true>>({});
 	const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
 	const blockedIdSet = useMemo(() => new Set(blockedIds), [blockedIds]);
 	const incomingById = useMemo(() => new Set(incomingRequests.map((r) => r.fromId)), [incomingRequests]);
 	const outgoingById = useMemo(() => new Set(outgoingRequests.map((r) => r.toId)), [outgoingRequests]);
 	const onlyCampus = feedScope === 'campus';
 	const onlyFriends = feedScope === 'friends';
+	const beginAction = useCallback((key: string): boolean => {
+		if (!key || actionLocksRef.current[key]) return false;
+		actionLocksRef.current[key] = true;
+		setPendingActions((prev) => ({ ...prev, [key]: true }));
+		return true;
+	}, []);
+	const endAction = useCallback((key: string) => {
+		if (!key) return;
+		delete actionLocksRef.current[key];
+		setPendingActions((prev) => {
+			if (!prev[key]) return prev;
+			const next = { ...prev };
+			delete next[key];
+			return next;
+		});
+	}, []);
 	const viewabilityConfigRef = useRef({ itemVisiblePercentThreshold: 50 });
 	const onViewableItemsChangedRef = useRef((info: any) => {
 		if (firstItemMarkedRef.current) return;
@@ -1185,6 +1203,15 @@ function FeedPhoto({
 								drinkPriceLabel ? `Price: ${drinkPriceLabel}` : null,
 								drinkQualityLabel ? `Quality: ${drinkQualityLabel}` : null,
 							].filter(Boolean) as string[];
+							const profileActionKey = `profile:${item.userId || 'none'}:${reactionCheckinId}`;
+							const closeActionKey = `close:${item.userId || 'none'}:${reactionCheckinId}`;
+							const reportActionKey = `report:${reactionCheckinId}`;
+							const blockActionKey = `block:${item.userId || 'none'}`;
+							const profilePending = !!pendingActions[profileActionKey];
+							const closePending = !!pendingActions[closeActionKey];
+							const reportPending = !!pendingActions[reportActionKey];
+							const blockPending = !!pendingActions[blockActionKey];
+							const targetIsBlocked = !!(item.userId && blockedIds.includes(item.userId));
 							return (
 							<PolishedCard
 								variant="elevated"
@@ -1193,8 +1220,28 @@ function FeedPhoto({
 								pressable={false}
 								style={styles.card}
 							>
-							<View style={styles.cardHeader}>
-								<View style={styles.avatarRow}>
+								<View style={styles.cardHeader}>
+									<Pressable
+										hitSlop={8}
+										style={({ pressed }) => [styles.avatarRow, pressed ? { opacity: 0.75 } : null]}
+										onPress={() => {
+											if (profilePending) return;
+											if (!item.userId) {
+												showToast('Profile unavailable for this check-in.', 'warning');
+												return;
+											}
+											if (!beginAction(profileActionKey)) return;
+											try {
+												router.push(`/profile-view?uid=${encodeURIComponent(item.userId)}`);
+											} catch (error) {
+												devLog('profile open failed', error);
+												showToast('Unable to open profile right now.', 'error');
+											} finally {
+												endAction(profileActionKey);
+											}
+										}}
+										disabled={profilePending}
+									>
 									{item.userPhotoUrl ? (
 										<SpotImage source={{ uri: item.userPhotoUrl }} style={styles.avatar} />
 									) : (
@@ -1215,7 +1262,7 @@ function FeedPhoto({
 												<Text style={{ color: muted, fontSize: 12 }}>{time}</Text>
 											{remaining ? <Text style={{ color: muted, fontSize: 11 }}>{remaining}</Text> : null}
 										</View>
-								</View>
+								</Pressable>
 								{user && item.userId && item.userId !== user.id ? (
 									<View style={styles.cardActions}>
 										<Pressable
@@ -1264,24 +1311,34 @@ function FeedPhoto({
 													: 'Add'}
 											</Text>
 										</Pressable>
-										<Pressable
-											onPress={async () => {
-												if (!user) return;
-												try {
-													const targetId = item.userId!;
-													const isClose = (await getCloseFriends(user.id)).includes(targetId);
-													await setCloseFriendRemote(user.id, targetId, !isClose);
-													await logEvent('user_closefriend_toggled', user.id, { target: targetId, close: !isClose });
-												} catch (e) {
-													devLog('toggle close friend failed', e);
-												}
-											}}
-											style={styles.closeButton}
-										>
-											<Text style={{ color: muted, fontSize: 12 }}>Close</Text>
-										</Pressable>
-									</View>
-								) : null}
+											<Pressable
+												hitSlop={8}
+												onPress={async () => {
+													if (!user) return;
+													if (!beginAction(closeActionKey)) return;
+													try {
+														const targetId = item.userId!;
+														const isClose = (await getCloseFriends(user.id)).includes(targetId);
+														await setCloseFriendRemote(user.id, targetId, !isClose);
+														await logEvent('user_closefriend_toggled', user.id, { target: targetId, close: !isClose });
+														showToast(!isClose ? 'Added to close friends.' : 'Removed from close friends.', 'success');
+													} catch (e) {
+														devLog('toggle close friend failed', e);
+														showToast('Unable to update close friend right now.', 'error');
+													} finally {
+														endAction(closeActionKey);
+													}
+												}}
+												style={({ pressed }) => [
+													styles.closeButton,
+													pressed ? { opacity: 0.6 } : null,
+												]}
+												disabled={closePending}
+											>
+												<Text style={{ color: muted, fontSize: 12 }}>{closePending ? 'Saving…' : 'Close'}</Text>
+											</Pressable>
+										</View>
+									) : null}
 							</View>
 
 							<FeedPhoto
@@ -1336,6 +1393,7 @@ function FeedPhoto({
 								<View style={[styles.cardDivider, { backgroundColor: border }]} />
 								<View style={styles.cardFooter}>
 									<Pressable
+										hitSlop={8}
 										onPress={async () => {
 											try {
 													const message = `${item.spot}${(item as any).caption ? '\n' + (item as any).caption : ''}\nSee on Perched.`;
@@ -1353,7 +1411,9 @@ function FeedPhoto({
 										<Text style={{ color: muted }}>Share</Text>
 									</Pressable>
 									<Pressable
+										hitSlop={8}
 										onPress={async () => {
+											if (!beginAction(reportActionKey)) return;
 											try {
 												await logEvent('checkin_reported', user?.id, { id: item.id });
 												try {
@@ -1364,36 +1424,55 @@ function FeedPhoto({
 													await reportUserRemote(user.id, item.userId, 'reported_from_feed');
 												}
 												setItems((prev) => prev.filter((p: any) => p.id !== item.id));
-											} catch {
-												// ignore
+												showToast('Report submitted. This check-in was hidden from your feed.', 'success');
+											} catch (error) {
+												devLog('report action failed', error);
+												showToast('Unable to submit report right now.', 'error');
+											} finally {
+												endAction(reportActionKey);
 											}
 										}}
 										style={({ pressed }) => [
 											styles.footerButton,
 											pressed ? { opacity: 0.6 } : null,
 										]}
+										disabled={reportPending}
 									>
-										<Text style={{ color: muted }}>Report</Text>
+										<Text style={{ color: muted }}>{reportPending ? 'Reporting…' : 'Report'}</Text>
 									</Pressable>
 									{user && item.userId && item.userId !== user.id ? (
 										<Pressable
+											hitSlop={8}
 											onPress={async () => {
+												if (!beginAction(blockActionKey)) return;
 												try {
-													if (blockedIds.includes(item.userId)) {
+													if (targetIsBlocked) {
 														await unblockUserRemote(user.id, item.userId);
+														setBlockedIds((prev) => prev.filter((id) => id !== item.userId));
+														showToast('User unblocked.', 'success');
 													} else {
 														await blockUserRemote(user.id, item.userId);
+														setBlockedIds((prev) => (prev.includes(item.userId) ? prev : [...prev, item.userId]));
+														setItems((prev) => prev.filter((p: any) => p.userId !== item.userId));
+														showToast('User blocked and hidden from your feed.', 'success');
 													}
 													await refreshFriendRequests();
-													setItems((prev) => prev.filter((p: any) => p.userId !== item.userId));
-												} catch {}
+												} catch (error) {
+													devLog('block action failed', error);
+													showToast('Unable to update block status right now.', 'error');
+												} finally {
+													endAction(blockActionKey);
+												}
 											}}
 											style={({ pressed }) => [
 												styles.footerButton,
 												pressed ? { opacity: 0.6 } : null,
 											]}
+											disabled={blockPending}
 										>
-											<Text style={{ color: muted }}>{blockedIds.includes(item.userId) ? 'Unblock' : 'Block'}</Text>
+											<Text style={{ color: muted }}>
+												{blockPending ? 'Saving…' : targetIsBlocked ? 'Unblock' : 'Block'}
+											</Text>
 										</Pressable>
 									) : null}
 								</View>
@@ -1500,7 +1579,7 @@ const styles = StyleSheet.create({
 	cardImage: { width: '100%', aspectRatio: 1 },
 	cardContent: { padding: tokens.space.s18 },
 	cardHeader: { padding: tokens.space.s16, paddingBottom: tokens.space.s10 },
-		avatarRow: { flexDirection: 'row', alignItems: 'center' },
+		avatarRow: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
 		nameRow: { flexDirection: 'row', alignItems: 'center' },
 		liveDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
 		avatar: { width: 46, height: 46, borderRadius: 23 },
@@ -1512,7 +1591,7 @@ const styles = StyleSheet.create({
 		borderWidth: 1,
 		marginRight: tokens.space.s10,
 	},
-	closeButton: { padding: tokens.space.s8 },
+		closeButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
 	spot: { fontSize: tokens.type.body.fontSize, fontWeight: '700' as any },
 	metricChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
 	metricChip: {
@@ -1523,7 +1602,7 @@ const styles = StyleSheet.create({
 	},
 	date: { fontSize: tokens.type.small.fontSize, opacity: 0.6, marginTop: 8 },
 	cardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
-	footerButton: { marginLeft: tokens.space.s12 },
+	footerButton: { marginLeft: tokens.space.s12, minWidth: 44, minHeight: 44, paddingHorizontal: 8, justifyContent: 'center', alignItems: 'center' },
 	empty: { marginTop: tokens.space.s20, alignItems: 'flex-start' },
 	emptyCta: {
 		paddingHorizontal: tokens.space.s16,

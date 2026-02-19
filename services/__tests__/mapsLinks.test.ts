@@ -1,4 +1,4 @@
-import { buildGoogleMapsUrl } from '../mapsLinks';
+import { buildGoogleMapsUrl, buildAppleMapsUrl } from '../mapsLinks';
 
 describe('buildGoogleMapsUrl', () => {
   it('uses coordinates when available', () => {
@@ -29,5 +29,41 @@ describe('buildGoogleMapsUrl', () => {
   it('returns null when input has no usable query', () => {
     expect(buildGoogleMapsUrl({})).toBeNull();
     expect(buildGoogleMapsUrl({ name: '   ' })).toBeNull();
+  });
+});
+
+describe('buildAppleMapsUrl', () => {
+  it('uses coordinates and name', () => {
+    const url = buildAppleMapsUrl({
+      coords: { lat: 29.7604, lng: -95.3698 },
+      name: 'Catalina Coffee',
+    });
+    expect(url).toBe(
+      'https://maps.apple.com/?ll=29.7604,-95.3698&q=Catalina%20Coffee'
+    );
+  });
+
+  it('uses coordinates without name', () => {
+    const url = buildAppleMapsUrl({
+      coords: { lat: 29.7604, lng: -95.3698 },
+    });
+    expect(url).toBe('https://maps.apple.com/?ll=29.7604,-95.3698');
+  });
+
+  it('falls back to name only when no coordinates', () => {
+    const url = buildAppleMapsUrl({ name: 'Catalina Coffee Houston' });
+    expect(url).toBe(
+      'https://maps.apple.com/?q=Catalina%20Coffee%20Houston'
+    );
+  });
+
+  it('ignores placeId (not supported by Apple Maps)', () => {
+    const url = buildAppleMapsUrl({ placeId: 'abc123' });
+    expect(url).toBeNull();
+  });
+
+  it('returns null when input has no usable data', () => {
+    expect(buildAppleMapsUrl({})).toBeNull();
+    expect(buildAppleMapsUrl({ name: '   ' })).toBeNull();
   });
 });

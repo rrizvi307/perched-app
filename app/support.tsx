@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view';
 import { Body, H1, Label } from '@/components/ui/typography';
+import { useToast } from '@/contexts/ToastContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { openExternalLink } from '@/services/externalLinks';
 import { gapStyle } from '@/utils/layout';
@@ -11,19 +12,35 @@ export default function Support() {
   const muted = useThemeColor({}, 'muted');
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
+  const { showToast } = useToast();
   const supportEmail = ((Constants.expoConfig as any)?.extra?.SUPPORT_EMAIL as string) || '';
   const instagramUrl = ((Constants.expoConfig as any)?.extra?.INSTAGRAM_URL as string) || '';
   const tiktokUrl = ((Constants.expoConfig as any)?.extra?.TIKTOK_URL as string) || '';
 
+  async function openLinkWithFeedback(url: string, label: string) {
+    const opened = await openExternalLink(url);
+    if (!opened) {
+      showToast(`Unable to open ${label}.`, 'warning');
+    }
+    return opened;
+  }
+
   async function emailSupport(subject: string) {
-    if (!supportEmail) return;
+    if (!supportEmail) {
+      showToast('Support email is not configured.', 'warning');
+      return;
+    }
     const mailto = `mailto:${supportEmail}?subject=${encodeURIComponent(subject)}`;
-    await openExternalLink(mailto);
+    await openLinkWithFeedback(mailto, 'email app');
   }
 
   function SocialIcon({ label, onPress }: { label: string; onPress: () => void }) {
     return (
-      <Pressable onPress={onPress} style={[styles.iconButton, { borderColor: border }]}>
+      <Pressable
+        hitSlop={8}
+        onPress={onPress}
+        style={({ pressed }) => [styles.iconButton, { borderColor: border }, pressed ? { opacity: 0.65 } : null]}
+      >
         <Text style={{ color: text, fontWeight: '800', letterSpacing: 1 }}>{label}</Text>
       </Pressable>
     );
@@ -44,15 +61,15 @@ export default function Support() {
           <>
             <View style={styles.iconRow}>
               <SocialIcon label="@" onPress={() => emailSupport('Support request')} />
-              <Pressable onPress={() => emailSupport('Support request')} style={styles.iconLabel}>
+              <Pressable hitSlop={8} onPress={() => emailSupport('Support request')} style={styles.iconLabel}>
                 <Text style={{ color: muted }}>Support</Text>
               </Pressable>
               <SocialIcon label="BUG" onPress={() => emailSupport('Bug report')} />
-              <Pressable onPress={() => emailSupport('Bug report')} style={styles.iconLabel}>
+              <Pressable hitSlop={8} onPress={() => emailSupport('Bug report')} style={styles.iconLabel}>
                 <Text style={{ color: muted }}>Report bug</Text>
               </Pressable>
               <SocialIcon label="DEL" onPress={() => emailSupport('Account deletion request')} />
-              <Pressable onPress={() => emailSupport('Account deletion request')} style={styles.iconLabel}>
+              <Pressable hitSlop={8} onPress={() => emailSupport('Account deletion request')} style={styles.iconLabel}>
                 <Text style={{ color: muted }}>Delete</Text>
               </Pressable>
             </View>
@@ -65,16 +82,16 @@ export default function Support() {
           <View style={styles.iconRow}>
             {instagramUrl ? (
               <>
-                <SocialIcon label="IG" onPress={() => { void openExternalLink(instagramUrl); }} />
-                <Pressable onPress={() => { void openExternalLink(instagramUrl); }} style={styles.iconLabel}>
+                <SocialIcon label="IG" onPress={() => { void openLinkWithFeedback(instagramUrl, 'Instagram'); }} />
+                <Pressable hitSlop={8} onPress={() => { void openLinkWithFeedback(instagramUrl, 'Instagram'); }} style={styles.iconLabel}>
                   <Text style={{ color: muted }}>Instagram</Text>
                 </Pressable>
               </>
             ) : null}
             {tiktokUrl ? (
               <>
-                <SocialIcon label="TT" onPress={() => { void openExternalLink(tiktokUrl); }} />
-                <Pressable onPress={() => { void openExternalLink(tiktokUrl); }} style={styles.iconLabel}>
+                <SocialIcon label="TT" onPress={() => { void openLinkWithFeedback(tiktokUrl, 'TikTok'); }} />
+                <Pressable hitSlop={8} onPress={() => { void openLinkWithFeedback(tiktokUrl, 'TikTok'); }} style={styles.iconLabel}>
                   <Text style={{ color: muted }}>TikTok</Text>
                 </Pressable>
               </>
