@@ -1,9 +1,38 @@
-import { createCheckinRemote, ensureFirebase, getCheckinByClientId, updateCheckinRemote, uploadPhotoToStorage, updateUserRemote } from '@/services/firebaseClient';
+import { createCheckinRemote, ensureFirebase, getCheckinByClientId, getCheckinById, updateCheckinRemote, uploadPhotoToStorage, updateUserRemote } from '@/services/firebaseClient';
 import { getPendingCheckins, pruneInvalidPendingCheckins, removePendingCheckin, updateCheckinLocalByClientId, getPendingProfileUpdates, removePendingProfileUpdate, updatePendingCheckin } from '@/storage/local';
 import { publishCheckin } from '@/services/feedEvents';
+import { logEvent } from '@/services/logEvent';
 
 const inFlight = new Set<string>();
 const profileInFlight = new Set<string>();
+
+async function resolveRemoteCheckinForPending(item: any): Promise<{ id: string; data: any } | null> {
+  const remoteId = typeof item?.remoteId === 'string' && item.remoteId ? item.remoteId : '';
+  if (remoteId) {
+    try {
+      const fetched = await getCheckinById(remoteId);
+      if (fetched) return { id: fetched.id, data: fetched };
+      return { id: remoteId, data: null };
+    } catch {
+      return { id: remoteId, data: null };
+    }
+  }
+  const clientId = typeof item?.clientId === 'string' ? item.clientId : '';
+  if (!clientId) return null;
+  try {
+    return await getCheckinByClientId(clientId);
+  } catch {
+    return null;
+  }
+}
+
+async function clearRemotePhotoPending(item: any): Promise<void> {
+  const existing = await resolveRemoteCheckinForPending(item);
+  if (!existing?.id) return;
+  try {
+    await updateCheckinRemote(existing.id, { photoPending: false });
+  } catch {}
+}
 
 async function localFileExists(uri: string): Promise<boolean> {
   if (!uri || typeof uri !== 'string') return false;
@@ -55,11 +84,15 @@ export async function syncPendingCheckins(limit = 5) {
       const attempts = typeof item.attempts === 'number' ? item.attempts : 0;
       // Check-ins are ephemeral; if an upload is still stuck after ~24h, drop it to avoid permanent banners.
       if (!queuedAt || Date.now() - queuedAt > 24 * 60 * 60 * 1000) {
+        await clearRemotePhotoPending(item);
+        void logEvent('photo_sync_dropped', item.userId, { reason: 'ttl', age: queuedAt ? Date.now() - queuedAt : null, attempts, lastError: item.lastError || null });
         await removePendingCheckin(item.clientId);
         inFlight.delete(item.clientId);
         continue;
       }
       if (attempts >= 10) {
+        await clearRemotePhotoPending(item);
+        void logEvent('photo_sync_dropped', item.userId, { reason: 'retry_limit', attempts, lastError: item.lastError || null });
         await removePendingCheckin(item.clientId);
         inFlight.delete(item.clientId);
         continue;
@@ -71,9 +104,24 @@ export async function syncPendingCheckins(limit = 5) {
       if (photoUrl && !photoUrl.startsWith('http')) {
         const exists = await localFileExists(photoUrl);
         if (!exists) {
+          void logEvent('photo_file_missing', item.userId, { photoUrl, remoteId: item.remoteId || null });
           try {
-            const existing = await getCheckinByClientId(item.clientId);
+            const existing = await resolveRemoteCheckinForPending(item);
             if (existing?.id) {
+              const remotePhoto = existing.data?.photoUrl;
+              // If remote already has a valid URL, don't wipe it — just clean up pending
+              if (remotePhoto && typeof remotePhoto === 'string' && remotePhoto.startsWith('http')) {
+                const updated = await updateCheckinLocalByClientId(item.clientId, {
+                  photoUrl: remotePhoto, image: remotePhoto, photoPending: false,
+                });
+                if (updated) publishCheckin(updated);
+                await updateCheckinRemote(existing.id, { photoPending: false });
+                await removePendingCheckin(item.clientId);
+                inFlight.delete(item.clientId);
+                synced += 1;
+                continue;
+              }
+              // Photo truly lost — mark unavailable
               await updateCheckinRemote(existing.id, { photoPending: false });
               const updated = await updateCheckinLocalByClientId(item.clientId, { photoUrl: null as any, image: null as any, photoPending: false });
               if (updated) publishCheckin(updated);
@@ -99,7 +147,7 @@ export async function syncPendingCheckins(limit = 5) {
       });
 
       const remoteId = typeof item.remoteId === 'string' && item.remoteId ? item.remoteId : null;
-      const existing = remoteId ? { id: remoteId, data: null } : await getCheckinByClientId(item.clientId);
+      const existing = await resolveRemoteCheckinForPending(item);
       if (existing) {
         if (!remoteId) {
           await updatePendingCheckin(item.clientId, { remoteId: existing.id });
@@ -119,6 +167,13 @@ export async function syncPendingCheckins(limit = 5) {
             }
           } catch (e) {
             lastError = `Photo upload failed. ${formatSyncError(e)}`;
+            void logEvent('photo_upload_failed', item.userId, {
+              phase: 'update_existing',
+              checkinId: existing.id,
+              clientId: item.clientId,
+              attempts: (typeof item.attempts === 'number' ? item.attempts : 0) + 1,
+              error: formatSyncError(e),
+            });
           }
           // keep pending if upload failed
           await updatePendingCheckin(item.clientId, { lastError: lastError || 'Photo upload failed. Check Firebase Storage + rules.' });
@@ -143,6 +198,13 @@ export async function syncPendingCheckins(limit = 5) {
           if (uploaded) nextPhoto = uploaded;
         } catch (e) {
           lastError = `Photo upload failed. ${formatSyncError(e)}`;
+          void logEvent('photo_upload_failed', item.userId, {
+            phase: 'create_new',
+            remoteId: item.remoteId || null,
+            clientId: item.clientId,
+            attempts: (typeof item.attempts === 'number' ? item.attempts : 0) + 1,
+            error: formatSyncError(e),
+          });
         }
         if (nextPhoto && typeof nextPhoto === 'string' && !nextPhoto.startsWith('http')) {
           // allow remote check-in to exist without a photo while upload retries

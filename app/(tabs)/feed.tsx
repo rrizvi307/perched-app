@@ -167,23 +167,81 @@ function FeedPhoto({
 	muted: string;
 	pending?: boolean;
 }) {
+	const MAX_AUTO_RETRIES = 2;
+	const [attempt, setAttempt] = useState(0);
 	const [failed, setFailed] = useState(false);
-	if (!uri || failed) {
+	const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	useEffect(() => {
+		setAttempt(0);
+		setFailed(false);
+		if (retryTimerRef.current) {
+			clearTimeout(retryTimerRef.current);
+			retryTimerRef.current = null;
+		}
+	}, [uri, itemId]);
+
+	useEffect(() => {
+		return () => {
+			if (retryTimerRef.current) {
+				clearTimeout(retryTimerRef.current);
+				retryTimerRef.current = null;
+			}
+		};
+	}, []);
+
+	const resolvedUri = useMemo(() => {
+		if (!uri) return null;
+		if (attempt <= 0) return uri;
+		const join = uri.includes('?') ? '&' : '?';
+		return `${uri}${join}_r=${attempt}`;
+	}, [uri, attempt]);
+
+	const scheduleAutoRetry = () => {
+		if (retryTimerRef.current) return;
+		retryTimerRef.current = setTimeout(() => {
+			retryTimerRef.current = null;
+			setAttempt((prev) => prev + 1);
+		}, 1000);
+	};
+
+	const handleImageError = () => {
+		devLog('feed photo load failed', { id: itemId || null, uri: uri || null, attempt });
+		if (pending) return;
+		if (attempt < MAX_AUTO_RETRIES) {
+			scheduleAutoRetry();
+			return;
+		}
+		setFailed(true);
+	};
+
+	if (!resolvedUri || failed) {
 		return (
 			<View style={[styles.cardImage, { backgroundColor: background, alignItems: 'center', justifyContent: 'center' }]}>
-				<Text style={{ color: muted, fontWeight: '600' }}>{pending ? 'Photo uploading…' : 'Photo unavailable'}</Text>
+				{pending ? (
+					<Text style={{ color: muted, fontWeight: '600' }}>Photo uploading…</Text>
+				) : (
+					<Pressable
+						onPress={() => {
+							setFailed(false);
+							setAttempt((prev) => prev + 1);
+						}}
+						hitSlop={8}
+						style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+					>
+						<Text style={{ color: muted, fontWeight: '600' }}>Photo unavailable</Text>
+						<Text style={{ color: muted, fontSize: 12, marginTop: 4, textAlign: 'center' }}>Tap to retry</Text>
+					</Pressable>
+				)}
 			</View>
 		);
 	}
 	return (
 		<SpotImage
-			source={uri}
+			source={resolvedUri}
 			contentFit="cover"
 			style={[styles.cardImage, { backgroundColor: background }]}
-			onError={() => {
-				devLog('feed photo load failed', { id: itemId || null, uri: uri || null });
-				setFailed(true);
-			}}
+			onError={handleImageError}
 		/>
 	);
 }
