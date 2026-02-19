@@ -66,6 +66,195 @@ function logRequest(
 
 const db = admin.firestore();
 
+const API_KEY_HASH_COLLECTION = 'apiKeyHashes';
+const API_KEY_CACHE_TTL_MS = 60 * 1000;
+const apiKeyCache = new Map<string, { ts: number; docId: string; data: any }>();
+
+const B2B_SPOT_CHECKIN_LIMIT = 60;
+const B2B_NEARBY_SPOT_SCAN_LIMIT = 100;
+const B2B_NEARBY_CANDIDATE_LIMIT = 40;
+const B2B_NEARBY_BATCH_QUERY_LIMIT = 250;
+const B2B_NEARBY_IN_MAX = 10;
+const B2B_NEARBY_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+const BACKEND_PERF_COLLECTION = 'backendPerformanceMetrics';
+
+function isBackendPerfEnabled(): boolean {
+  const value = String(process.env.BACKEND_PERF_METRICS_ENABLED || '').toLowerCase().trim();
+  return ['1', 'true', 'yes', 'on'].includes(value);
+}
+
+async function recordBackendPerf(
+  operation: string,
+  durationMs: number,
+  ok: boolean,
+  metadata?: Record<string, any>,
+) {
+  if (!isBackendPerfEnabled()) return;
+  try {
+    await db.collection(BACKEND_PERF_COLLECTION).add({
+      operation,
+      durationMs: Math.max(0, Number(durationMs) || 0),
+      ok,
+      timestamp: Date.now(),
+      ...metadata,
+    });
+  } catch {
+    // Never fail request path due to telemetry.
+  }
+}
+
+function hashApiKey(apiKey: string): string {
+  return crypto.createHash('sha256').update(apiKey).digest('hex');
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (!Array.isArray(items) || size <= 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function toFiniteNumber(value: any): number | null {
+  const num = typeof value === 'number' ? value : null;
+  if (num === null || !Number.isFinite(num)) return null;
+  return num;
+}
+
+function normalizeBoundedMetric(value: any, min = 1, max = 5): number | null {
+  const num = toFiniteNumber(value);
+  if (num === null) return null;
+  if (num < min || num > max) return null;
+  return num;
+}
+
+function normalizeNoiseMetric(value: any): number | null {
+  const numeric = normalizeBoundedMetric(value, 1, 5);
+  if (numeric !== null) return numeric;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'quiet') return 2;
+  if (normalized === 'moderate') return 3;
+  if (normalized === 'lively' || normalized === 'loud') return 4;
+  return null;
+}
+
+function normalizeBusynessMetric(value: any): number | null {
+  const numeric = normalizeBoundedMetric(value, 1, 5);
+  if (numeric !== null) return numeric;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'empty') return 1;
+  if (normalized === 'some') return 3;
+  if (normalized === 'packed') return 5;
+  return null;
+}
+
+function normalizeWifiMetric(value: any): number | null {
+  const numeric = normalizeBoundedMetric(value, 1, 5);
+  if (numeric !== null) return numeric;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (['bad', 'poor', 'unusable', 'slow'].includes(normalized)) return 1;
+  if (['ok', 'decent', 'average', 'moderate'].includes(normalized)) return 3;
+  if (['fast', 'great', 'excellent', 'blazing'].includes(normalized)) return 5;
+  return null;
+}
+
+function readSpotCoords(spot: any): { lat: number; lng: number } | null {
+  const rawLat = spot?.location?.latitude ?? spot?.location?.lat;
+  const rawLng = spot?.location?.longitude ?? spot?.location?.lng;
+  const lat = toFiniteNumber(rawLat);
+  const lng = toFiniteNumber(rawLng);
+  if (lat === null || lng === null) return null;
+  return { lat, lng };
+}
+
+function toMillis(value: any): number | null {
+  const direct = toFiniteNumber(value);
+  if (direct !== null) return direct;
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.toMillis === 'function') {
+    try {
+      const ms = value.toMillis();
+      return toFiniteNumber(ms);
+    } catch {
+      return null;
+    }
+  }
+  const seconds = toFiniteNumber(value.seconds);
+  const nanos = toFiniteNumber(value.nanoseconds);
+  if (seconds === null) return null;
+  return Math.floor(seconds * 1000 + (nanos ?? 0) / 1_000_000);
+}
+
+function readCheckinTimeMs(checkin: any): number | null {
+  return toMillis(checkin?.createdAt ?? checkin?.timestamp);
+}
+
+type ApiKeyLookup = {
+  docId: string;
+  ref: FirebaseFirestore.DocumentReference;
+  data: any;
+};
+
+async function resolveApiKeyRecord(apiKey: string): Promise<ApiKeyLookup | null> {
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!key) return null;
+
+  const cached = apiKeyCache.get(key);
+  const now = Date.now();
+  if (cached && now - cached.ts < API_KEY_CACHE_TTL_MS) {
+    return {
+      docId: cached.docId,
+      ref: db.collection('apiKeys').doc(cached.docId),
+      data: cached.data,
+    };
+  }
+
+  const keyHash = hashApiKey(key);
+
+  try {
+    const hashDoc = await db.collection(API_KEY_HASH_COLLECTION).doc(keyHash).get();
+    const partnerId = asId(hashDoc.data()?.partnerId);
+    if (partnerId) {
+      const keyDoc = await db.collection('apiKeys').doc(partnerId).get();
+      if (keyDoc.exists) {
+        const keyData = keyDoc.data() || {};
+        if (keyData.key === key) {
+          apiKeyCache.set(key, { ts: now, docId: keyDoc.id, data: keyData });
+          return { docId: keyDoc.id, ref: keyDoc.ref, data: keyData };
+        }
+      }
+    }
+  } catch {
+    // Fall through to legacy query.
+  }
+
+  const keysSnapshot = await db.collection('apiKeys').where('key', '==', key).limit(1).get();
+  if (keysSnapshot.empty) return null;
+
+  const keyDoc = keysSnapshot.docs[0];
+  const keyData = keyDoc.data() || {};
+  apiKeyCache.set(key, { ts: now, docId: keyDoc.id, data: keyData });
+
+  // Self-heal hash lookup index for subsequent fast lookups.
+  void db.collection(API_KEY_HASH_COLLECTION).doc(keyHash).set(
+    {
+      partnerId: keyDoc.id,
+      updatedAt: Date.now(),
+    },
+    { merge: true },
+  ).catch(() => {});
+
+  return { docId: keyDoc.id, ref: keyDoc.ref, data: keyData };
+}
+
 function asId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -1210,6 +1399,7 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
 
     const keyData = {
       key: apiKey,
+      keyHash: hashApiKey(apiKey),
       partnerId,
       partnerName,
       tier: tier || 'free',
@@ -1222,7 +1412,17 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
       updatedAt: Date.now(),
     };
 
-    await db.collection('apiKeys').doc(partnerId).set(keyData);
+    const batch = db.batch();
+    const keyRef = db.collection('apiKeys').doc(partnerId);
+    const hashRef = db.collection(API_KEY_HASH_COLLECTION).doc(keyData.keyHash);
+    batch.set(keyRef, keyData);
+    batch.set(hashRef, {
+      partnerId,
+      updatedAt: Date.now(),
+    }, { merge: true });
+    await batch.commit();
+
+    apiKeyCache.set(apiKey, { ts: Date.now(), docId: partnerId, data: keyData });
 
     console.log(`Generated API key for partner: ${partnerId}`);
     return { success: true, apiKey, tier: keyData.tier, rateLimit: keyData.rateLimit };
@@ -1258,25 +1458,31 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
   // Validate API key
   const apiKey = req.get('X-API-Key') || '';
   if (!apiKey) {
+    void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, { statusCode: 401, reason: 'missing_api_key' });
     res.status(401).json({ error: 'Missing API key', traceId });
     return;
   }
 
   try {
     // Get API key data
-    const keysSnapshot = await db.collection('apiKeys').where('key', '==', apiKey).limit(1).get();
-
-    if (keysSnapshot.empty) {
+    const keyRecord = await resolveApiKeyRecord(apiKey);
+    if (!keyRecord) {
       logRequest(traceId, 'b2bGetSpotData', 'unknown', Date.now() - startTime, 401, { error: 'Invalid API key' });
+      void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, { statusCode: 401, reason: 'invalid_api_key' });
       res.status(401).json({ error: 'Invalid API key', traceId });
       return;
     }
 
-    const keyDoc = keysSnapshot.docs[0];
-    const keyData = keyDoc.data();
+    const keyDocRef = keyRecord.ref;
+    const keyData = keyRecord.data;
 
     if (!keyData.active) {
       logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, Date.now() - startTime, 403, { error: 'API key inactive' });
+      void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, {
+        statusCode: 403,
+        reason: 'api_key_inactive',
+        partnerId: keyData.partnerId,
+      });
       res.status(403).json({ error: 'API key inactive', traceId });
       return;
     }
@@ -1284,6 +1490,11 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
     // Check endpoint permission
     if (!keyData.permissions?.spotData) {
       logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, Date.now() - startTime, 403, { error: 'Permission denied' });
+      void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, {
+        statusCode: 403,
+        reason: 'missing_permission',
+        partnerId: keyData.partnerId,
+      });
       res.status(403).json({ error: 'Forbidden: spotData permission required', traceId });
       return;
     }
@@ -1293,14 +1504,14 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
 
     try {
       await db.runTransaction(async (transaction) => {
-        const freshKeyDoc = await transaction.get(keyDoc.ref);
+        const freshKeyDoc = await transaction.get(keyDocRef);
         const freshData = freshKeyDoc.data()!;
 
         const hoursSinceReset = (now - (freshData.lastResetAt || 0)) / (1000 * 60 * 60);
 
         if (hoursSinceReset >= 1) {
           // Reset usage counter
-          transaction.update(keyDoc.ref, {
+          transaction.update(keyDocRef, {
             currentUsage: 1,
             lastResetAt: now,
           });
@@ -1311,7 +1522,7 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
             throw new Error('RATE_LIMIT_EXCEEDED');
           }
           // Increment usage
-          transaction.update(keyDoc.ref, {
+          transaction.update(keyDocRef, {
             currentUsage: admin.firestore.FieldValue.increment(1),
           });
           return { currentUsage: freshData.currentUsage + 1, rateLimit: freshData.rateLimit };
@@ -1322,6 +1533,11 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
         const hoursSinceReset = (now - (keyData.lastResetAt || 0)) / (1000 * 60 * 60);
         const retryAfter = Math.ceil(3600 - (hoursSinceReset * 3600));
         logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, Date.now() - startTime, 429, { error: 'Rate limit exceeded', retryAfter });
+        void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, {
+          statusCode: 429,
+          reason: 'rate_limit',
+          partnerId: keyData.partnerId,
+        });
         res.status(429).json({ error: 'Rate limit exceeded', retryAfter, traceId });
         return;
       }
@@ -1337,6 +1553,11 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
       spotId = validated.spotId;
     } catch (error: any) {
       logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, Date.now() - startTime, 400, { error: error.message });
+      void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, {
+        statusCode: 400,
+        reason: 'invalid_input',
+        partnerId: keyData.partnerId,
+      });
       res.status(400).json({ error: error.message, traceId });
       return;
     }
@@ -1346,6 +1567,11 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
 
     if (!spotDoc.exists) {
       logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, Date.now() - startTime, 404, { error: 'Spot not found', spotId });
+      void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, {
+        statusCode: 404,
+        reason: 'spot_not_found',
+        partnerId: keyData.partnerId,
+      });
       res.status(404).json({ error: 'Spot not found', traceId });
       return;
     }
@@ -1357,7 +1583,7 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
       .collection('checkins')
       .where('spotPlaceId', '==', spotId)
       .orderBy('createdAt', 'desc')
-      .limit(100)
+      .limit(B2B_SPOT_CHECKIN_LIMIT)
       .get();
 
     let totalWifi = 0;
@@ -1369,16 +1595,19 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
 
     checkinsSnapshot.forEach((doc: any) => {
       const checkin = doc.data();
-      if (typeof checkin.wifiQuality === 'number') {
-        totalWifi += checkin.wifiQuality;
+      const wifi = normalizeWifiMetric(checkin.wifiSpeed ?? checkin.wifiQuality);
+      const noise = normalizeNoiseMetric(checkin.noiseLevel ?? checkin.noise);
+      const busyness = normalizeBusynessMetric(checkin.busyness);
+      if (wifi !== null) {
+        totalWifi += wifi;
         wifiCount++;
       }
-      if (typeof checkin.noise === 'number') {
-        totalNoise += checkin.noise;
+      if (noise !== null) {
+        totalNoise += noise;
         noiseCount++;
       }
-      if (typeof checkin.busyness === 'number') {
-        totalBusyness += checkin.busyness;
+      if (busyness !== null) {
+        totalBusyness += busyness;
         busynessCount++;
       }
     });
@@ -1396,6 +1625,12 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
 
     // Log structured request
     logRequest(traceId, 'b2bGetSpotData', keyData.partnerId, responseTimeMs, 200, { spotId, checkins: checkinsSnapshot.size });
+    void recordBackendPerf('b2b_spot_data', responseTimeMs, true, {
+      statusCode: 200,
+      partnerId: keyData.partnerId,
+      spotId,
+      checkins: checkinsSnapshot.size,
+    });
 
     // Log usage metrics to Firestore
     await db.collection('b2bMetrics').add({
@@ -1422,6 +1657,7 @@ export const b2bGetSpotData = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     logger.error('Error in b2bGetSpotData', { traceId, error, stack: (error as Error).stack });
     logRequest(traceId, 'b2bGetSpotData', 'unknown', Date.now() - startTime, 500, { error: String(error) });
+    void recordBackendPerf('b2b_spot_data', Date.now() - startTime, false, { statusCode: 500, reason: 'internal_error' });
     res.status(500).json({ error: 'Internal server error', traceId });
   }
 });
@@ -1452,25 +1688,31 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
   // Validate API key
   const apiKey = req.get('X-API-Key') || '';
   if (!apiKey) {
+    void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, { statusCode: 401, reason: 'missing_api_key' });
     res.status(401).json({ error: 'Missing API key', traceId });
     return;
   }
 
   try {
     // Get API key data
-    const keysSnapshot = await db.collection('apiKeys').where('key', '==', apiKey).limit(1).get();
-
-    if (keysSnapshot.empty) {
+    const keyRecord = await resolveApiKeyRecord(apiKey);
+    if (!keyRecord) {
       logRequest(traceId, 'b2bGetNearbySpots', 'unknown', Date.now() - startTime, 401, { error: 'Invalid API key' });
+      void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, { statusCode: 401, reason: 'invalid_api_key' });
       res.status(401).json({ error: 'Invalid API key', traceId });
       return;
     }
 
-    const keyDoc = keysSnapshot.docs[0];
-    const keyData = keyDoc.data();
+    const keyDocRef = keyRecord.ref;
+    const keyData = keyRecord.data;
 
     if (!keyData.active) {
       logRequest(traceId, 'b2bGetNearbySpots', keyData.partnerId, Date.now() - startTime, 403, { error: 'API key inactive' });
+      void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, {
+        statusCode: 403,
+        reason: 'api_key_inactive',
+        partnerId: keyData.partnerId,
+      });
       res.status(403).json({ error: 'API key inactive', traceId });
       return;
     }
@@ -1478,6 +1720,11 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
     // Check endpoint permission
     if (!keyData.permissions?.nearbySpots) {
       logRequest(traceId, 'b2bGetNearbySpots', keyData.partnerId, Date.now() - startTime, 403, { error: 'Permission denied' });
+      void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, {
+        statusCode: 403,
+        reason: 'missing_permission',
+        partnerId: keyData.partnerId,
+      });
       res.status(403).json({ error: 'Forbidden: nearbySpots permission required', traceId });
       return;
     }
@@ -1487,14 +1734,14 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
 
     try {
       await db.runTransaction(async (transaction) => {
-        const freshKeyDoc = await transaction.get(keyDoc.ref);
+        const freshKeyDoc = await transaction.get(keyDocRef);
         const freshData = freshKeyDoc.data()!;
 
         const hoursSinceReset = (now - (freshData.lastResetAt || 0)) / (1000 * 60 * 60);
 
         if (hoursSinceReset >= 1) {
           // Reset usage counter
-          transaction.update(keyDoc.ref, {
+          transaction.update(keyDocRef, {
             currentUsage: 1,
             lastResetAt: now,
           });
@@ -1505,7 +1752,7 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
             throw new Error('RATE_LIMIT_EXCEEDED');
           }
           // Increment usage
-          transaction.update(keyDoc.ref, {
+          transaction.update(keyDocRef, {
             currentUsage: admin.firestore.FieldValue.increment(1),
           });
           return { currentUsage: freshData.currentUsage + 1, rateLimit: freshData.rateLimit };
@@ -1516,6 +1763,11 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
         const hoursSinceReset = (now - (keyData.lastResetAt || 0)) / (1000 * 60 * 60);
         const retryAfter = Math.ceil(3600 - (hoursSinceReset * 3600));
         logRequest(traceId, 'b2bGetNearbySpots', keyData.partnerId, Date.now() - startTime, 429, { error: 'Rate limit exceeded', retryAfter });
+        void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, {
+          statusCode: 429,
+          reason: 'rate_limit',
+          partnerId: keyData.partnerId,
+        });
         res.status(429).json({ error: 'Rate limit exceeded', retryAfter, traceId });
         return;
       }
@@ -1533,64 +1785,99 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
       radius = validated.radius;
     } catch (error: any) {
       logRequest(traceId, 'b2bGetNearbySpots', keyData.partnerId, Date.now() - startTime, 400, { error: error.message });
+      void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, {
+        statusCode: 400,
+        reason: 'invalid_input',
+        partnerId: keyData.partnerId,
+      });
       res.status(400).json({ error: error.message, traceId });
       return;
     }
 
-    // Simple geohash-based query (in production, use proper geospatial queries)
-    // For now, just get all spots and filter by distance
-    const spotsSnapshot = await db.collection('spots').limit(100).get();
-
-    const nearbySpots: any[] = [];
-    const spotIds: string[] = [];
+    // Basic distance filter (bounded scan)
+    const spotsSnapshot = await db.collection('spots').limit(B2B_NEARBY_SPOT_SCAN_LIMIT).get();
+    const nearbyCandidates: Array<{ id: string; name: string; location: { lat: number; lng: number }; distance: number }> = [];
 
     spotsSnapshot.forEach((doc: any) => {
       const spot = doc.data();
-      const spotLat = spot.location?.latitude || spot.location?.lat;
-      const spotLng = spot.location?.longitude || spot.location?.lng;
-
-      if (typeof spotLat === 'number' && typeof spotLng === 'number') {
-        const distance = calculateDistance(lat, lng, spotLat, spotLng);
-        if (distance <= radius) {
-          nearbySpots.push({ id: doc.id, ...spot, distance });
-          spotIds.push(doc.id);
-        }
-      }
+      const coords = readSpotCoords(spot);
+      if (!coords) return;
+      const distance = calculateDistance(lat, lng, coords.lat, coords.lng);
+      if (distance > radius) return;
+      nearbyCandidates.push({
+        id: doc.id,
+        name: spot.name || 'Unknown Spot',
+        location: coords,
+        distance,
+      });
     });
 
-    // Get busyness data for each spot
-    const spotsWithBusyness = await Promise.all(
-      nearbySpots.map(async (spot) => {
-        const checkinsSnapshot = await db
+    // Keep nearest candidates to cap aggregation work.
+    nearbyCandidates.sort((a, b) => a.distance - b.distance);
+    const cappedCandidates = nearbyCandidates.slice(0, B2B_NEARBY_CANDIDATE_LIMIT);
+
+    type SpotAgg = { totalBusyness: number; busynessCount: number; recentCheckins: number };
+    const windowStart = now - B2B_NEARBY_WINDOW_MS;
+    const bySpot = new Map<string, SpotAgg>();
+    const candidateIds = cappedCandidates.map((spot) => spot.id);
+
+    // Batch load checkins by spot groups to remove N+1 queries.
+    for (const chunk of chunkArray(candidateIds, B2B_NEARBY_IN_MAX)) {
+      if (!chunk.length) continue;
+      const chunkSet = new Set(chunk);
+
+      let checkinsSnapshot: FirebaseFirestore.QuerySnapshot;
+      try {
+        checkinsSnapshot = await db
           .collection('checkins')
-          .where('spotPlaceId', '==', spot.id)
-          .where('createdAt', '>=', now - 2 * 60 * 60 * 1000) // Last 2 hours
+          .where('spotPlaceId', 'in', chunk)
+          .orderBy('createdAt', 'desc')
+          .limit(B2B_NEARBY_BATCH_QUERY_LIMIT)
           .get();
+      } catch {
+        // Fallback for datasets that still rely on legacy timestamp field.
+        checkinsSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', 'in', chunk)
+          .orderBy('timestamp', 'desc')
+          .limit(B2B_NEARBY_BATCH_QUERY_LIMIT)
+          .get();
+      }
 
-        let totalBusyness = 0;
-        let busynessCount = 0;
+      checkinsSnapshot.forEach((doc: any) => {
+        const checkin = doc.data();
+        const spotId = asId(checkin.spotPlaceId || checkin.spotId);
+        if (!chunkSet.has(spotId)) return;
+        const checkinTimeMs = readCheckinTimeMs(checkin);
+        if (checkinTimeMs !== null && checkinTimeMs < windowStart) return;
 
-        checkinsSnapshot.forEach((doc: any) => {
-          const checkin = doc.data();
-          if (typeof checkin.busyness === 'number') {
-            totalBusyness += checkin.busyness;
-            busynessCount++;
-          }
-        });
+        const agg = bySpot.get(spotId) || { totalBusyness: 0, busynessCount: 0, recentCheckins: 0 };
+        agg.recentCheckins += 1;
 
-        return {
-          id: spot.id,
-          name: spot.name,
-          location: { lat: spot.location?.latitude || spot.location?.lat, lng: spot.location?.longitude || spot.location?.lng },
-          distance: spot.distance,
-          busyness: busynessCount > 0 ? totalBusyness / busynessCount : null,
-          recentCheckins: checkinsSnapshot.size,
-        };
-      })
-    );
+        const busyness = normalizeBusynessMetric(checkin.busyness);
+        if (busyness !== null) {
+          agg.totalBusyness += busyness;
+          agg.busynessCount += 1;
+        }
+        bySpot.set(spotId, agg);
+      });
+    }
+
+    const spotsWithBusyness = cappedCandidates.map((spot) => {
+      const agg = bySpot.get(spot.id);
+      return {
+        id: spot.id,
+        name: spot.name,
+        location: spot.location,
+        distance: spot.distance,
+        busyness: agg && agg.busynessCount > 0 ? agg.totalBusyness / agg.busynessCount : null,
+        recentCheckins: agg?.recentCheckins || 0,
+      };
+    });
 
     // Sort by busyness (lower = better)
     spotsWithBusyness.sort((a, b) => {
+      if (a.busyness === null && b.busyness === null) return a.distance - b.distance;
       if (a.busyness === null) return 1;
       if (b.busyness === null) return -1;
       return a.busyness - b.busyness;
@@ -1602,6 +1889,12 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
 
     // Log structured request
     logRequest(traceId, 'b2bGetNearbySpots', keyData.partnerId, responseTimeMs, 200, { lat, lng, radius, spotsFound: spotsWithBusyness.length });
+    void recordBackendPerf('b2b_nearby_spots', responseTimeMs, true, {
+      statusCode: 200,
+      partnerId: keyData.partnerId,
+      spotsFound: spotsWithBusyness.length,
+      candidatesScanned: spotsSnapshot.size,
+    });
 
     // Log usage metrics to Firestore
     await db.collection('b2bMetrics').add({
@@ -1620,6 +1913,7 @@ export const b2bGetNearbySpots = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     logger.error('Error in b2bGetNearbySpots', { traceId, error, stack: (error as Error).stack });
     logRequest(traceId, 'b2bGetNearbySpots', 'unknown', Date.now() - startTime, 500, { error: String(error) });
+    void recordBackendPerf('b2b_nearby_spots', Date.now() - startTime, false, { statusCode: 500, reason: 'internal_error' });
     res.status(500).json({ error: 'Internal server error', traceId });
   }
 });
@@ -2071,11 +2365,18 @@ export const updateSpotDisplayData = functions.firestore
       // Calculate live aggregation
       const liveData = aggregateLiveDataFromCheckins(recentCheckins.docs.map(d => d.data()));
 
-      // Get total check-in count (all-time)
-      const totalCount = await db.collection('checkins')
-        .where('spotPlaceId', '==', spotId)
-        .get()
-        .then(snap => snap.size);
+      // Get total check-in count (all-time) via aggregation query.
+      // Fallback to previous value + 1 if aggregation is unavailable.
+      let totalCount = Math.max(1, (toFiniteNumber(spotData?.live?.checkinCount) || 0) + 1);
+      try {
+        const countSnap = await db.collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .count()
+          .get();
+        totalCount = Number(countSnap.data().count || totalCount);
+      } catch {
+        // Keep fallback value.
+      }
 
       liveData.checkinCount = totalCount;
 
