@@ -55,7 +55,6 @@ import {
   getLastKnownLocation,
   getLocationEnabled,
   saveLastKnownLocation,
-  seedDemoNetwork,
   setPermissionPrimerSeen,
 } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
@@ -76,7 +75,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
+import { DEMO_USER_IDS, isCloudDemoCheckin, isDemoMode } from '@/services/demoMode';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { trackScreenLoad } from '@/services/perfMonitor';
 
@@ -563,25 +562,6 @@ export default function Explore() {
       setLoading(true);
 
       try {
-        if (demoMode) {
-          await seedDemoNetwork(user?.id);
-          const local = await getCheckins();
-          const scoped = (local || []).filter((item: any) => {
-            if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
-            if (user && blockedIdSet.has(item.userId)) return false;
-            if (!passesScope(item)) return false;
-            if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
-            if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
-            return true;
-          });
-
-          if (!active) return;
-          setSpots(buildSpotsFromCheckins(scoped, loc || mapFocus || mapCenter));
-          setStatus(null);
-          setLoading(false);
-          return;
-        }
-
         const fetchMarkId = startPerfMark('explore_fetch_checkins');
         let remote: any;
         try {
@@ -593,6 +573,7 @@ export default function Explore() {
         }
         const items = (remote.items || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
+          if (demoMode && isCloudDemoCheckin(item) && !item?.photoPending && !item?.photoUrl) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
@@ -610,8 +591,15 @@ export default function Explore() {
         if (!active) return;
         setSpots(remoteSpots);
         setStatus(null);
-        // If remote is empty or only far-away data, try local + nearby spots fallback
+        // If remote is empty or only far-away data, try local + nearby spots fallback.
+        // In demo mode, avoid local demo fallbacks to keep cloud as source of truth.
         if (items.length === 0 || !hasNearbyRemote) {
+          if (demoMode) {
+            if (active) {
+              setStatus({ message: 'No cloud demo data found yet. Seed demo check-ins in Firebase.', tone: 'warning' });
+            }
+            return;
+          }
           const local = await getCheckins();
           const localScoped = (local || []).filter((item: any) => {
             if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
@@ -642,6 +630,12 @@ export default function Explore() {
         void syncPendingCheckins(1);
       } catch {
         loadOk = false;
+        if (demoMode) {
+          if (!active) return;
+          setSpots([]);
+          setStatus({ message: 'Demo mode uses cloud data only. Connect to load seeded demo spots.', tone: 'warning' });
+          return;
+        }
         const local = await getCheckins();
         const fallback = (local || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;

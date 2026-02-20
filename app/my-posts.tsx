@@ -11,7 +11,7 @@ import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } fr
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { getCheckinsForUserRemote } from '@/services/firebaseClient';
-import { getCheckins, seedDemoNetwork } from '@/storage/local';
+import { getCheckins } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { resolvePhotoUri } from '@/services/photoSources';
@@ -64,14 +64,6 @@ export default function MyPostsScreen() {
     if (!user?.id) return;
     setRefreshing(true);
     try {
-      if (isDemoMode()) {
-        try {
-          await seedDemoNetwork(user.id);
-        } catch {}
-        const local = await getCheckins();
-        setItems(local.filter((c: any) => c?.userId === user.id));
-        return;
-      }
       const res = await getCheckinsForUserRemote(user.id, 240);
       const remote = Array.isArray(res) ? res : (res?.items ?? []);
       const local = await getCheckins();
@@ -81,6 +73,10 @@ export default function MyPostsScreen() {
       const merged = [...remote, ...mineLocal.filter((c: any) => !remoteKeys.has(keyOf(c)))];
       setItems(merged);
     } catch {
+      if (isDemoMode()) {
+        setItems([]);
+        return;
+      }
       const local = await getCheckins();
       setItems(local.filter((c: any) => c?.userId === user.id));
     } finally {

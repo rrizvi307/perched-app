@@ -1,11 +1,13 @@
 import { View, Text, Pressable, StyleSheet, Switch, ScrollView, Alert } from 'react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { IconSymbol } from './ui/icon-symbol';
 import { PolishedCard } from './ui/polished-card';
 import { PremiumButton } from './ui/premium-button';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { seedDemoFeed, clearDemoData, getDemoStats } from '@/services/demoDataManager';
-import { isDemoMode, setDemoMode } from '@/services/demoMode';
+import { getCheckinsRemote, isFirebaseConfigured } from '@/services/firebaseClient';
+import { getCheckins, resetDemoNetwork } from '@/storage/local';
+import { isCloudDemoCheckin, isDemoMode, setDemoMode } from '@/services/demoMode';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface DemoControlPanelProps {
   onClose: () => void;
@@ -16,6 +18,7 @@ interface DemoControlPanelProps {
  * Access via: Triple-tap the settings icon or add /demo route
  */
 export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
+  const { user } = useAuth();
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
@@ -23,24 +26,44 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
   const border = useThemeColor({}, 'border');
 
   const [demoEnabled, setDemoEnabled] = useState(isDemoMode());
-  const [stats, setStats] = useState({ checkinsCount: 0, usersCount: 0 });
+  const [stats, setStats] = useState({ cloudCheckins: 0, brokenPhotos: 0, localLegacy: 0 });
   const [loading, setLoading] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<'ready' | 'empty' | 'unavailable'>('unavailable');
+
+  const loadStats = useCallback(async () => {
+    const local = await getCheckins().catch(() => []);
+    const localLegacy = (local || []).filter((item: any) => {
+      const id = String(item?.id || '');
+      return id.startsWith('demo-c') || id.startsWith('demo-self-') || item?.__demo === true;
+    }).length;
+
+    if (!isFirebaseConfigured() || !user?.id) {
+      setCloudStatus('unavailable');
+      setStats({ cloudCheckins: 0, brokenPhotos: 0, localLegacy });
+      return;
+    }
+
+    const remote = await getCheckinsRemote(120).catch(() => ({ items: [] as any[] }));
+    const items = Array.isArray(remote?.items) ? remote.items : [];
+    const cloudDemo = items.filter((item: any) => isCloudDemoCheckin(item));
+    const brokenPhotos = cloudDemo.filter((item: any) => {
+      const photoUrl = typeof item?.photoUrl === 'string' ? item.photoUrl : '';
+      return !photoUrl.startsWith('https://');
+    }).length;
+    setCloudStatus(cloudDemo.length > 0 ? 'ready' : 'empty');
+    setStats({ cloudCheckins: cloudDemo.length, brokenPhotos, localLegacy });
+  }, [user?.id]);
 
   useEffect(() => {
-    loadStats();
-  }, []);
-
-  const loadStats = async () => {
-    const demoStats = await getDemoStats();
-    setStats(demoStats);
-  };
+    void loadStats();
+  }, [loadStats]);
 
   const handleToggleDemo = async (value: boolean) => {
     if (value) {
       // Enable demo mode
       Alert.alert(
         'Enable Demo Mode',
-        'This will populate your feed with realistic demo data. Perfect for filming and presentations.',
+        'Demo mode now uses cloud-seeded Firebase data only. Local demo seeding is disabled.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -49,7 +72,6 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
             onPress: async () => {
               setLoading(true);
               await setDemoMode(true);
-              await seedDemoFeed();
               setDemoEnabled(true);
               await loadStats();
               setLoading(false);
@@ -61,7 +83,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
       // Disable demo mode
       Alert.alert(
         'Disable Demo Mode',
-        'This will remove all demo data and return to your real data.',
+        'This will turn off demo mode and clear legacy local demo rows.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -70,7 +92,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
             onPress: async () => {
               setLoading(true);
               await setDemoMode(false);
-              await clearDemoData();
+              await resetDemoNetwork();
               setDemoEnabled(false);
               await loadStats();
               setLoading(false);
@@ -83,8 +105,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
 
   const handleRefreshDemo = async () => {
     setLoading(true);
-    await clearDemoData();
-    await seedDemoFeed();
+    await resetDemoNetwork();
     await loadStats();
     setLoading(false);
   };
@@ -124,7 +145,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
           {demoEnabled && (
             <View style={[styles.banner, { backgroundColor: success, opacity: 0.1, marginTop: 12 }]}>
               <Text style={[styles.bannerText, { color: success }]}>
-                ✓ Demo data is active. Great for filming!
+                ✓ Cloud demo mode active. Feed reads Firebase demo data.
               </Text>
             </View>
           )}
@@ -137,21 +158,25 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
             <View style={styles.statsGrid}>
               <View style={styles.statItem}>
                 <Text style={[styles.statValue, { color: primary }]}>
-                  {stats.checkinsCount}
+                  {stats.cloudCheckins}
                 </Text>
                 <Text style={[styles.statLabel, { color: muted }]}>
-                  Check-ins
+                  Cloud check-ins
                 </Text>
               </View>
               <View style={styles.statItem}>
                 <Text style={[styles.statValue, { color: primary }]}>
-                  {stats.usersCount}
+                  {stats.brokenPhotos}
                 </Text>
                 <Text style={[styles.statLabel, { color: muted }]}>
-                  Demo Users
+                  Broken photos
                 </Text>
               </View>
             </View>
+            <Text style={[styles.tipText, { color: muted, marginTop: 10 }]}>
+              Cloud status: {cloudStatus === 'ready' ? 'ready' : cloudStatus === 'empty' ? 'no cloud demo seed found' : 'unavailable'}
+            </Text>
+            <Text style={[styles.tipText, { color: muted }]}>Legacy local demo rows: {stats.localLegacy}</Text>
 
             <PremiumButton
               onPress={handleRefreshDemo}
@@ -207,8 +232,8 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
           <PremiumButton
             onPress={async () => {
               Alert.alert(
-                'Clear All Data',
-                'This will remove ALL data (including your real data). Only use for fresh testing.',
+                'Clear Legacy Demo Rows',
+                'Removes local demo rows created by old seeding paths. Cloud demo data remains in Firebase.',
                 [
                   { text: 'Cancel', style: 'cancel' },
                   {
@@ -216,12 +241,10 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
                     style: 'destructive',
                     onPress: async () => {
                       setLoading(true);
-                      await clearDemoData();
-                      await setDemoMode(false);
-                      setDemoEnabled(false);
+                      await resetDemoNetwork();
                       await loadStats();
                       setLoading(false);
-                      Alert.alert('Success', 'All data cleared. Fresh start!');
+                      Alert.alert('Success', 'Legacy local demo rows cleared.');
                     },
                   },
                 ]
@@ -232,7 +255,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
             icon="trash.fill"
             fullWidth
           >
-            Clear All Data (Fresh Start)
+            Clear Legacy Local Demo Rows
           </PremiumButton>
         </PolishedCard>
 
@@ -241,7 +264,7 @@ export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
           <Text style={[styles.tipsTitle, { color: text }]}>💡 Tips for Demo Filming</Text>
           <Text style={[styles.tipText, { color: muted }]}>
             • Enable demo mode before recording{'\n'}
-            • Use Refresh Demo Data for variety{'\n'}
+            • Cloud seed must exist in Firebase{'\n'}
             • Toggle campus filter to show features{'\n'}
             • Demo friends appear automatically{'\n'}
             • Disable after filming for real testing

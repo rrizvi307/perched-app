@@ -29,7 +29,7 @@ import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { getUserStats } from '@/services/gamification';
-import { getCheckins, getPermissionPrimerSeen, getSavedSpots, seedDemoNetwork, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
+import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { isPhoneLike, normalizePhone } from '@/utils/phone';
 import { openExternalLink } from '@/services/externalLinks';
@@ -141,16 +141,6 @@ export default function ProfileScreen() {
   const loadCheckins = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (isDemoMode()) {
-        try {
-          await seedDemoNetwork(user?.id);
-        } catch {}
-        const local = await getCheckins();
-        const mine = local.filter((c: any) => c.userId === user?.id);
-        setCheckins(mine);
-        setStatus(null);
-        return;
-      }
       const remoteRes = await getCheckinsForUserRemote(user?.id || '', 180);
       const remote = Array.isArray(remoteRes) ? remoteRes : (remoteRes && (remoteRes.items ?? [])) as any[];
       const mineRemote = remote.filter((c: any) => c.userId === user?.id);
@@ -167,6 +157,12 @@ export default function ProfileScreen() {
         wasOfflineRef.current = false;
       }
     } catch {
+      if (isDemoMode()) {
+        setCheckins([]);
+        setStatus({ message: 'Demo mode uses cloud data only. Connect to refresh.', tone: 'warning' });
+        wasOfflineRef.current = true;
+        return;
+      }
       const local = await getCheckins();
       const mine = local.filter((c: any) => c.id?.startsWith(user?.id || 'local-') || c.userId === user?.id);
       setCheckins(mine);

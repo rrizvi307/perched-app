@@ -7,7 +7,7 @@ import { PolishedCard } from '@/components/ui/polished-card';
 import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ReactionBar } from '@/components/ui/reaction-bar';
-import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins, seedDemoNetwork } from '@/storage/local';
+import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
 import { tokens } from '@/constants/tokens';
@@ -19,7 +19,7 @@ import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
-import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
+import { DEMO_USER_IDS, isCloudDemoCheckin, isDemoMode } from '@/services/demoMode';
 import { getReactions, type ReactionType } from '@/services/social';
 import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
 import SpotImage from '@/components/ui/spot-image';
@@ -559,30 +559,16 @@ function FeedPhoto({
 		}
 		}, [resolvePhotoSrc]);
 
-		const loadLatest = useCallback(async () => {
-			const loadMarkId = startPerfMark('feed_load_latest');
-			let ok = true;
-			setRefreshing(true);
-			try {
-				const demo = isDemoMode();
-				await pruneInvalidPendingCheckins().catch(() => {});
-				const pendingPromise = getPendingCheckins().catch(() => []);
-					if (demo) {
-						try { await seedDemoNetwork(user?.id); } catch {}
-						const pending = await pendingPromise;
-						const pendingSummary = summarizePending(pending);
-					setPendingCount(pendingSummary.count);
-					setPendingUploading(pendingSummary.uploading);
-					setPendingError(pendingSummary.error);
-					const data = await getCheckins().catch(() => []);
-					setItems(filterExpired(data as any));
-					setRemoteCursor(null);
-					setHasMoreRemote(false);
-						setStatus(null);
-						return;
-					}
-				const fetchMarkId = startPerfMark('feed_fetch');
-				let res: any;
+			const loadLatest = useCallback(async () => {
+				const loadMarkId = startPerfMark('feed_load_latest');
+				let ok = true;
+				setRefreshing(true);
+				try {
+					const demo = isDemoMode();
+					await pruneInvalidPendingCheckins().catch(() => {});
+					const pendingPromise = getPendingCheckins().catch(() => []);
+					const fetchMarkId = startPerfMark('feed_fetch');
+					let res: any;
 				try {
 					res = await getCheckinsRemote(PAGE);
 					void endPerfMark(fetchMarkId, true, { limit: PAGE });
@@ -605,16 +591,16 @@ function FeedPhoto({
 							setPendingError(nextSummary.error);
 						} catch {}
 					});
-				}
-				const cleaned = filterExpired(res.items as any);
-				let merged = await mergeRemoteWithLocal(cleaned);
-				if (merged.length < 2 && process.env.NODE_ENV !== 'production' && isDemoMode()) {
-					try {
-						await seedDemoNetwork(user?.id);
-					merged = await mergeRemoteWithLocal(cleaned);
-				} catch {}
-			}
-			setItems(mergeUniqueCheckins([], merged as any));
+					}
+					const cleaned = filterExpired(res.items as any);
+					let merged = await mergeRemoteWithLocal(cleaned);
+					if (demo) {
+						merged = merged.filter((item: any) => {
+							if (!isCloudDemoCheckin(item)) return true;
+							return !!resolvePhotoSrc(item) || !!item?.photoPending;
+						});
+					}
+				setItems(mergeUniqueCheckins([], merged as any));
 			if (user) {
 				const selfRemote = merged.filter((c: any) => c.userId === user.id);
 				if (selfRemote.length) {
@@ -630,8 +616,8 @@ function FeedPhoto({
 				showToast('Back online. Feed updated.', 'success');
 				wasOfflineRef.current = false;
 			}
-			} catch {
-				ok = false;
+				} catch {
+					ok = false;
 				try {
 					const pending = await getPendingCheckins();
 					const pendingSummary = summarizePending(pending);
@@ -639,10 +625,16 @@ function FeedPhoto({
 					setPendingUploading(pendingSummary.uploading);
 					setPendingError(pendingSummary.error);
 				} catch {}
-				const data = await getCheckins();
-				setItems(mergeUniqueCheckins([], filterExpired(data as any) as any));
-				setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
-				wasOfflineRef.current = true;
+					const data = await getCheckins();
+					const fallback = mergeUniqueCheckins([], filterExpired(data as any) as any);
+					if (isDemoMode()) {
+						setItems([]);
+						setStatus({ message: 'Demo feed requires cloud data. Check network or reseed cloud demo posts.', tone: 'warning' });
+					} else {
+						setItems(fallback);
+						setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
+					}
+					wasOfflineRef.current = true;
 				try {
 					const init = getFirebaseInitError();
 					if (init) {
@@ -654,7 +646,7 @@ function FeedPhoto({
 				setInitialLoading(false);
 				void endPerfMark(loadMarkId, ok);
 			}
-			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
+			}, [filterExpired, mergeRemoteWithLocal, resolvePhotoSrc, showToast, summarizePending, user]);
 
 		const loadMore = useCallback(async () => {
 			if (loadingMore || !hasMoreRemote) return;
@@ -680,15 +672,18 @@ function FeedPhoto({
 
 	useEffect(() => {
 		(async () => {
-			// show local items first for instant UX
-			const local = await getCheckins();
-			localCacheRef.current = local as Checkin[];
-			setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
-			if (user) {
-				const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
-				if (selfLocal.length) {
-					const sorted = [...selfLocal].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
-					setLastSelfCheckinAt(sorted[0]?.createdAt || null);
+			const demoMode = isDemoMode();
+			if (!demoMode) {
+				// show local items first for instant UX
+				const local = await getCheckins();
+				localCacheRef.current = local as Checkin[];
+				setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
+				if (user) {
+					const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
+					if (selfLocal.length) {
+						const sorted = [...selfLocal].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
+						setLastSelfCheckinAt(sorted[0]?.createdAt || null);
+					}
 				}
 			}
 			// defer network refresh to keep first paint fast
@@ -893,9 +888,10 @@ function FeedPhoto({
 
 			// filter expired posts (live window)
 			// sanitize items for privacy: exact locations visible only to friends/owner
-			const sanitized = out.map((it: any) => {
-				if (user && blockedIdSet.has(it.userId)) return null;
-			if (!it.visibility) return it;
+				const sanitized = out.map((it: any) => {
+					if (user && blockedIdSet.has(it.userId)) return null;
+					if (isDemoMode() && isCloudDemoCheckin(it) && !it?.photoPending && !resolvePhotoSrc(it)) return null;
+				if (!it.visibility) return it;
 			if (it.visibility === 'friends') {
 				const allowed = user && (friendIdSet.has(it.userId) || it.userId === user.id);
 				if (!allowed) return null; // hide entirely
@@ -910,8 +906,8 @@ function FeedPhoto({
 			return it;
 		}).filter(Boolean);
 
-		return sanitized.filter(Boolean) as Checkin[];
-	}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet]);
+			return sanitized.filter(Boolean) as Checkin[];
+		}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet, resolvePhotoSrc]);
 
 		const collapsedItems = useMemo(() => {
 			const toTs = (value: any) => toMillis(value) || 0;
