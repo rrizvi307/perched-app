@@ -15,6 +15,7 @@
     "check:all": "npm run check:app && npm --prefix functions run build && npm --prefix functions test -- --runInBand",
     "preflight": "node ./scripts/release-preflight.js",
     "preflight:release": "node ./scripts/release-preflight.js",
+    "appstore:preflight": "node ./scripts/appstore-review-preflight.js",
     "demo:seed:cloud": "node ./scripts/seed-cloud-demo-feed.js",
     "demo:audit": "node ./scripts/audit-demo-photos.js",
     "test": "jest",
