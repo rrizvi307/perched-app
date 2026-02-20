@@ -35,6 +35,7 @@ import { notifyAchievementUnlocked, scheduleStreakReminder } from '@/services/sm
 import { safeImpact, safeNotification } from '@/utils/haptics';
 import { trackCheckinForRating, promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
 import { toNumericNoiseLevel } from '@/services/checkinUtils';
+import { DISCOVERY_INTENT_OPTIONS, sanitizeDiscoveryIntents, type DiscoveryIntent } from '@/services/discoveryIntents';
 
 function dmsToDeg(value: any, ref?: string) {
 	if (!value) return null;
@@ -72,6 +73,7 @@ export default function CheckinScreen() {
 	const [hasPermission, setHasPermission] = useState<boolean | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
+	const [visitIntent, setVisitIntent] = useState<DiscoveryIntent[]>([]);
 	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [drinkPrice, setDrinkPrice] = useState<1 | 2 | 3 | null>(null); // 1=$, 2=$$, 3=$$$
@@ -214,6 +216,7 @@ export default function CheckinScreen() {
 						if (check.caption) setCaption(check.caption);
 						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
+						if (Array.isArray(check.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(check.visitIntent));
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
 					// Load metrics from edit mode
 					const convertedNoise = toNumericNoiseLevel(check.noiseLevel ?? null);
@@ -234,6 +237,7 @@ export default function CheckinScreen() {
 							if (found.caption) setCaption(found.caption);
 							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
+							if (Array.isArray(found.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(found.visitIntent));
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 							// Load metrics from edit mode (local fallback)
 							const convertedNoiseLocal = toNumericNoiseLevel(found.noiseLevel ?? null);
@@ -332,6 +336,7 @@ export default function CheckinScreen() {
 						setCaptured(true);
 					}
 					if (Array.isArray(draft.tags)) setSelectedTags(draft.tags);
+					if (Array.isArray(draft.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(draft.visitIntent));
 					if (draft.placeId || draft.location) {
 						setPlaceInfo({
 							placeId: draft.placeId,
@@ -376,6 +381,7 @@ export default function CheckinScreen() {
 			(caption && caption.trim().length) ||
 			image ||
 			(selectedTags && selectedTags.length) ||
+			(visitIntent && visitIntent.length) ||
 			placeInfo ||
 			detectedPlace
 		);
@@ -393,6 +399,7 @@ export default function CheckinScreen() {
 					caption,
 					image,
 					tags: selectedTags,
+					visitIntent,
 					placeId: placeInfo?.placeId || detectedPlace?.placeId,
 					location: placeInfo?.location || detectedPlace?.location,
 					noiseLevel,
@@ -405,7 +412,7 @@ export default function CheckinScreen() {
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
+	}, [spot, caption, image, selectedTags, visitIntent, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -529,6 +536,17 @@ export default function CheckinScreen() {
 		});
 	}
 
+	function toggleVisitIntent(intent: DiscoveryIntent) {
+		setVisitIntent((prev) => {
+			if (prev.includes(intent)) return prev.filter((entry) => entry !== intent);
+			if (prev.length >= 2) {
+				showToast('Pick up to 2 intents.', 'info');
+				return prev;
+			}
+			return [...prev, intent];
+		});
+	}
+
 	function resetDraftState() {
 		setSpot('');
 		setCaption('');
@@ -536,6 +554,7 @@ export default function CheckinScreen() {
 		setImageExif(null);
 		setCaptured(false);
 		setSelectedTags([]);
+		setVisitIntent([]);
 		setPlaceInfo(null);
 		setDetectedPlace(null);
 		setDetectedCandidates([]);
@@ -620,6 +639,7 @@ export default function CheckinScreen() {
 						spotLatLng: activePlace?.location,
 						caption,
 						tags: selectedTags,
+						visitIntent: visitIntent.slice(0, 2),
 						visibility,
 						// Utility metrics
 						noiseLevel: noiseLevel ?? null,
@@ -679,6 +699,7 @@ export default function CheckinScreen() {
 				photoUrl: persistedImage,
 				caption,
 				tags: selectedTags,
+				visitIntent: visitIntent.slice(0, 2),
 				userId: uid,
 				userName: displayName,
 				userHandle: user?.handle,
@@ -706,6 +727,7 @@ export default function CheckinScreen() {
 				spotLatLng: activePlace?.location,
 				caption: caption || '',
 				tags: selectedTags,
+				visitIntent: visitIntent.slice(0, 2),
 				photoUrl: persistedImage,
 				campusOrCity: user?.campusOrCity || user?.city,
 				city: user?.city,
@@ -1017,6 +1039,38 @@ export default function CheckinScreen() {
 							})}
 						</View>
 						<Text style={{ color: muted, marginBottom: 8 }}>Pick up to {MAX_TAGS} tags to describe the vibe.</Text>
+
+						<Text style={{ color: muted, fontWeight: '600', marginBottom: 6 }}>Why are you here?</Text>
+						<View style={styles.tagRow}>
+							{DISCOVERY_INTENT_OPTIONS.map((intent) => {
+								const active = visitIntent.includes(intent.key as DiscoveryIntent);
+								return (
+									<Pressable
+										key={intent.key}
+										onPress={() => toggleVisitIntent(intent.key as DiscoveryIntent)}
+										style={({ pressed }) => [
+											styles.tagChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.12) : 'transparent',
+											},
+										]}
+									>
+										<Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '600' }}>
+											{intent.emoji} {intent.shortLabel}
+										</Text>
+									</Pressable>
+								);
+							})}
+						</View>
+						<Text style={{ color: muted, marginBottom: 10 }}>
+							{visitIntent.length
+								? visitIntent
+										.map((key) => DISCOVERY_INTENT_OPTIONS.find((option) => option.key === key)?.hint)
+										.filter(Boolean)
+										.join(' • ')
+								: 'Choose up to 2 intents to improve recommendations for everyone.'}
+						</Text>
 
 						{/* Spot Intel Section - Utility Metrics */}
 						<View style={{ marginTop: 16, marginBottom: 8 }}>

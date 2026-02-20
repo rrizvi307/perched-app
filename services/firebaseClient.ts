@@ -708,7 +708,7 @@ export async function uploadPhotoToStorage(uri: string, userId?: string) {
   throw lastErr || new Error('Photo upload failed.');
 }
 
-export async function createCheckinRemote({ userId, userName, userHandle, userPhotoUrl, spotName, caption, photoUrl, photoPending, campusOrCity, city, campus, visibility, spotPlaceId, spotLatLng, clientId, tags }: any) {
+export async function createCheckinRemote({ userId, userName, userHandle, userPhotoUrl, spotName, caption, photoUrl, photoPending, campusOrCity, city, campus, visibility, spotPlaceId, spotLatLng, clientId, tags, visitIntent }: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
 
@@ -727,6 +727,7 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
     spotLatLng: spotLatLng || null,
     caption: caption || '',
     tags: Array.isArray(tags) ? tags : [],
+    visitIntent: Array.isArray(visitIntent) ? visitIntent.slice(0, 2) : [],
     photoUrl: photoUrl || null,
     photoPending: !!photoPending,
     campusOrCity: campusOrCity || city || null,

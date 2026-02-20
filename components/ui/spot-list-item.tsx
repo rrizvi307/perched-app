@@ -1,6 +1,7 @@
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { PlaceIntelligence } from '@/services/placeIntelligence';
+import { getDiscoveryIntentMeta, type DiscoveryIntentFilter } from '@/services/discoveryIntents';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
 import React from 'react';
@@ -16,6 +17,9 @@ type SpotListItemProps = {
   maxSpotCount: number;
   showRanks: boolean;
   intelligence?: PlaceIntelligence | null;
+  activeIntent?: DiscoveryIntentFilter;
+  intentScore?: number | null;
+  intentReason?: string | null;
   onScorePress?: () => void;
   onPress: () => void;
   describeSpot: (name?: string, address?: string) => string;
@@ -33,6 +37,9 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   maxSpotCount,
   showRanks,
   intelligence,
+  activeIntent = 'any',
+  intentScore = null,
+  intentReason = null,
   onScorePress,
   onPress,
   describeSpot,
@@ -63,6 +70,8 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         : '#F97316'
     : muted;
   const smartHighlight = intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null;
+  const intentMeta = getDiscoveryIntentMeta(activeIntent);
+  const intentPercent = typeof intentScore === 'number' ? Math.round(intentScore * 100) : null;
 
   return (
     <Pressable
@@ -118,6 +127,22 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             <Text style={{ color: text, fontSize: 11, fontWeight: '600' }} numberOfLines={1}>
               {smartHighlight}
             </Text>
+          </View>
+        ) : null}
+        {activeIntent !== 'any' ? (
+          <View style={styles.intentRow}>
+            {intentPercent !== null ? (
+              <View style={[styles.intentBadge, { backgroundColor: withAlpha(accent, 0.18), borderColor: withAlpha(accent, 0.45) }]}>
+                <Text style={{ color: accent, fontSize: 10, fontWeight: '800' }}>
+                  {intentMeta.emoji} {intentPercent}% {intentMeta.shortLabel.toLowerCase()} match
+                </Text>
+              </View>
+            ) : null}
+            {intentReason ? (
+              <Text style={{ color: muted, fontSize: 11 }} numberOfLines={1}>
+                {intentReason}
+              </Text>
+            ) : null}
           </View>
         ) : null}
         {/* Distance and walk time - prominent display */}
@@ -309,6 +334,9 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     prevProps.intelligence?.bestTime === nextProps.intelligence?.bestTime &&
     (prevProps.intelligence?.highlights?.[0] || '') === (nextProps.intelligence?.highlights?.[0] || '') &&
     (prevProps.intelligence?.useCases?.[0] || '') === (nextProps.intelligence?.useCases?.[0] || '') &&
+    prevProps.activeIntent === nextProps.activeIntent &&
+    prevProps.intentScore === nextProps.intentScore &&
+    prevProps.intentReason === nextProps.intentReason &&
     prevProps.onScorePress === nextProps.onScorePress &&
     prevProps.tags.length === nextProps.tags.length &&
     prevProps.item.openNow === nextProps.item.openNow
@@ -367,6 +395,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     maxWidth: '100%',
+  },
+  intentRow: {
+    marginTop: 6,
+    gap: 4,
+  },
+  intentBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   metricsRow: {
     flexDirection: 'row',

@@ -12,6 +12,7 @@ import { parseCheckinTimestamp } from './schemaHelpers';
 import { withErrorBoundary } from './errorBoundary';
 import { devLog } from './logger';
 import { getUserPreferenceScores } from '@/storage/local';
+import { inferIntentsFromCheckin, scoreSpotForIntent, type DiscoveryIntent } from './discoveryIntents';
 
 export interface SpotRecommendation {
   placeId: string;
@@ -64,12 +65,13 @@ export async function getPersonalizedRecommendations(
     timeOfDay?: 'morning' | 'afternoon' | 'evening';
     weather?: 'sunny' | 'rainy' | 'cloudy';
     currentSpotId?: string; // Recommend similar spots
+    intent?: DiscoveryIntent;
   }
 ): Promise<SpotRecommendation[]> {
   return withErrorBoundary('recommendations_personalized', async () => {
     const startedAt = Date.now();
     // Check cache first
-    const cacheKey = `${RECOMMENDATIONS_CACHE_KEY}_${userId}_${userLocation.lat.toFixed(2)}_${userLocation.lng.toFixed(2)}`;
+    const cacheKey = `${RECOMMENDATIONS_CACHE_KEY}_${userId}_${userLocation.lat.toFixed(2)}_${userLocation.lng.toFixed(2)}_${context?.timeOfDay || 'any'}_${context?.weather || 'any'}_${context?.intent || 'any'}`;
     const cached = await AsyncStorage.getItem(cacheKey);
     if (cached) {
       const { recommendations, timestamp } = JSON.parse(cached);
@@ -88,8 +90,9 @@ export async function getPersonalizedRecommendations(
     // Score each spot
     const scoredSpots = await Promise.all(
       candidateSpots.map(async (spot) => {
-        const score = await calculateSpotScore(spot, userId, preferences, context);
-        const reasons = generateRecommendationReasons(spot, preferences, context);
+        const intentSignal = context?.intent ? scoreSpotForIntent(spot, context.intent) : null;
+        const score = await calculateSpotScore(spot, userId, preferences, context, intentSignal);
+        const reasons = generateRecommendationReasons(spot, preferences, context, intentSignal);
         const timePatterns = await getSpotTimePatterns(spot.placeId);
         const currentHour = new Date().getHours();
         const currentDay = new Date().getDay();
@@ -408,7 +411,7 @@ async function getSpotTimePatterns(placeId: string): Promise<TimePattern[]> {
 
     return timePatterns;
   } catch (error) {
-    console.error('Failed to get spot time patterns:', error);
+    devLog('Failed to get spot time patterns:', error);
     return [];
   }
 }
@@ -420,7 +423,12 @@ async function calculateSpotScore(
   spot: any,
   userId: string,
   preferences: UserPreferences,
-  context?: any
+  context?: {
+    timeOfDay?: 'morning' | 'afternoon' | 'evening';
+    weather?: 'sunny' | 'rainy' | 'cloudy';
+    intent?: DiscoveryIntent;
+  },
+  intentSignal?: { score: number; reasons: string[] } | null
 ): Promise<number> {
   let score = 50; // Base score
 
@@ -485,6 +493,15 @@ async function calculateSpotScore(
     score += Math.min(spot.checkinCount / 10, 10); // Up to +10 for popularity
   }
 
+  // Intent-aware blend for broader coffee discovery use cases.
+  if (context?.intent && intentSignal) {
+    const intentScore = Math.max(0, Math.min(100, intentSignal.score * 100));
+    score = score * 0.75 + intentScore * 0.25;
+    if (intentSignal.score < 0.18) {
+      score -= 8;
+    }
+  }
+
   return Math.max(0, Math.min(100, score));
 }
 
@@ -494,9 +511,18 @@ async function calculateSpotScore(
 function generateRecommendationReasons(
   spot: any,
   preferences: UserPreferences,
-  context?: any
+  context?: {
+    timeOfDay?: 'morning' | 'afternoon' | 'evening';
+    weather?: 'sunny' | 'rainy' | 'cloudy';
+    intent?: DiscoveryIntent;
+  },
+  intentSignal?: { score: number; reasons: string[] } | null
 ): string[] {
   const reasons: string[] = [];
+
+  if (context?.intent && intentSignal) {
+    reasons.push(...intentSignal.reasons.slice(0, 2));
+  }
 
   if (preferences.preferredNoiseLevel && spot.avgNoiseLevel) {
     const spotNoise = spot.avgNoiseLevel;
@@ -531,7 +557,8 @@ function generateRecommendationReasons(
     reasons.push('Very popular with students');
   }
 
-  return reasons.length > 0 ? reasons : ['Based on your activity'];
+  const deduped = Array.from(new Set(reasons));
+  return deduped.length > 0 ? deduped : ['Based on your activity'];
 }
 
 /**
@@ -681,26 +708,91 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
 
       if (distance <= radiusKm) {
         const placeId = data.spotPlaceId;
+        if (!placeId) return;
         if (!spotsMap.has(placeId)) {
           spotsMap.set(placeId, {
             placeId,
-            name: data.spotName,
+            name: data.spotName || 'Unknown',
             distance,
-            avgNoiseLevel: data.noiseLevel,
-            avgBusyness: data.busyness,
-            avgWifiSpeed: data.wifiSpeed,
-            topOutletAvailability: data.outlets,
-            category: data.spotType,
-            checkinCount: 1,
+            category: data.spotType || data.category || 'cafe',
+            checkinCount: 0,
+            _noiseSum: 0,
+            _noiseCount: 0,
+            _busynessSum: 0,
+            _busynessCount: 0,
+            _wifiSum: 0,
+            _wifiCount: 0,
+            _outletCounts: {} as Record<string, number>,
+            intentScores: {} as Record<string, number>,
           });
-        } else {
-          const spot = spotsMap.get(placeId);
-          spot.checkinCount += 1;
         }
+        const spot = spotsMap.get(placeId);
+        spot.checkinCount += 1;
+        if (distance < spot.distance) spot.distance = distance;
+
+        const noiseValue = typeof data.noiseLevel === 'number'
+          ? data.noiseLevel
+          : data.noiseLevel === 'quiet'
+            ? 2
+            : data.noiseLevel === 'moderate'
+              ? 3
+              : data.noiseLevel === 'lively' || data.noiseLevel === 'loud'
+                ? 4
+                : null;
+        if (typeof noiseValue === 'number') {
+          spot._noiseSum += noiseValue;
+          spot._noiseCount += 1;
+        }
+
+        const busynessValue = typeof data.busyness === 'number'
+          ? data.busyness
+          : data.busyness === 'empty'
+            ? 1
+            : data.busyness === 'some'
+              ? 3
+              : data.busyness === 'packed'
+                ? 5
+                : null;
+        if (typeof busynessValue === 'number') {
+          spot._busynessSum += busynessValue;
+          spot._busynessCount += 1;
+        }
+
+        if (typeof data.wifiSpeed === 'number') {
+          spot._wifiSum += data.wifiSpeed;
+          spot._wifiCount += 1;
+        }
+
+        if (typeof data.outletAvailability === 'string') {
+          const outletKey = data.outletAvailability.trim().toLowerCase();
+          if (outletKey) {
+            spot._outletCounts[outletKey] = (spot._outletCounts[outletKey] || 0) + 1;
+          }
+        }
+
+        const intents = inferIntentsFromCheckin(data);
+        intents.forEach((intent) => {
+          spot.intentScores[intent] = (spot.intentScores[intent] || 0) + 1;
+        });
       }
     });
 
-    const spots = Array.from(spotsMap.values());
+    const spots = Array.from(spotsMap.values()).map((spot) => {
+      const outletEntries = Object.entries(spot._outletCounts || {}) as [string, number][];
+      const topOutletAvailability = outletEntries.sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+      return {
+        placeId: spot.placeId,
+        name: spot.name,
+        distance: spot.distance,
+        category: spot.category,
+        checkinCount: spot.checkinCount,
+        avgNoiseLevel: spot._noiseCount ? spot._noiseSum / spot._noiseCount : null,
+        avgBusyness: spot._busynessCount ? spot._busynessSum / spot._busynessCount : null,
+        avgWifiSpeed: spot._wifiCount ? spot._wifiSum / spot._wifiCount : null,
+        topOutletAvailability,
+        intentScores: spot.intentScores,
+      };
+    });
     candidateSpotsMemoryCache.set(cacheKey, { ts: Date.now(), spots });
     while (candidateSpotsMemoryCache.size > 30) {
       const oldestKey = candidateSpotsMemoryCache.keys().next().value;
@@ -714,7 +806,7 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
       devLog('getCandidateSpots permission-denied; returning empty list');
       return [];
     }
-    console.error('Failed to get candidate spots:', error);
+    devLog('Failed to get candidate spots:', error);
     return [];
   }
 }
@@ -748,6 +840,6 @@ export async function clearRecommendationsCache(userId: string): Promise<void> {
     );
     await AsyncStorage.multiRemove(cacheKeys);
   } catch (error) {
-    console.warn('Failed to clear recommendations cache:', error);
+    devLog('Failed to clear recommendations cache:', error);
   }
 }

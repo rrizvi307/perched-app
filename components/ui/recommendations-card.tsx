@@ -15,6 +15,7 @@ import {
   getCollaborativeRecommendations,
   type SpotRecommendation,
 } from '@/services/recommendations';
+import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 
@@ -23,6 +24,7 @@ interface RecommendationsCardProps {
   context?: {
     timeOfDay?: 'morning' | 'afternoon' | 'evening';
     weather?: 'sunny' | 'rainy' | 'cloudy';
+    intent?: DiscoveryIntent;
   };
   onSpotPress?: (placeId: string, name: string) => void;
   variant?: 'personalized' | 'collaborative';

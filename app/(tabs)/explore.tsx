@@ -41,6 +41,13 @@ import { openInMaps } from '@/services/mapsLinks';
 import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
+  DISCOVERY_INTENT_FILTER_OPTIONS,
+  getDiscoveryIntentMeta,
+  inferIntentsFromCheckin,
+  scoreSpotForIntent,
+  type DiscoveryIntentFilter,
+} from '@/services/discoveryIntents';
+import {
   getCheckins,
   getLastKnownLocation,
   getLocationEnabled,
@@ -60,6 +67,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -129,6 +137,10 @@ function aggregateSpotMetrics(checkins: any[]) {
   const twoHoursMs = 2 * 60 * 60 * 1000;
   const noiseValues: number[] = [];
   const busynessValues: number[] = [];
+  const wifiValues: number[] = [];
+  const drinkQualityValues: number[] = [];
+  const outletCounts: Record<string, number> = {};
+  const intentScores: Record<string, number> = {};
   const hereNowUsers = new Set<string>();
 
   checkins.forEach((item) => {
@@ -153,6 +165,19 @@ function aggregateSpotMetrics(checkins: any[]) {
 
     if (typeof noise === 'number') noiseValues.push(noise);
     if (typeof busy === 'number') busynessValues.push(busy);
+    if (typeof item.wifiSpeed === 'number') wifiValues.push(item.wifiSpeed);
+    if (typeof item.drinkQuality === 'number') drinkQualityValues.push(item.drinkQuality);
+    if (typeof item.outletAvailability === 'string') {
+      const normalizedOutlet = item.outletAvailability.trim().toLowerCase();
+      if (normalizedOutlet) outletCounts[normalizedOutlet] = (outletCounts[normalizedOutlet] || 0) + 1;
+    }
+
+    const intents = inferIntentsFromCheckin(item);
+    intents.forEach((intent) => {
+      const key = String(intent).trim();
+      if (!key) return;
+      intentScores[key] = (intentScores[key] || 0) + 1;
+    });
 
     const ts = item.createdAt?.seconds
       ? item.createdAt.seconds * 1000
@@ -174,6 +199,14 @@ function aggregateSpotMetrics(checkins: any[]) {
     avgBusyness: busynessValues.length
       ? Math.round((busynessValues.reduce((sum, value) => sum + value, 0) / busynessValues.length) * 10) / 10
       : null,
+    avgWifiSpeed: wifiValues.length
+      ? Math.round((wifiValues.reduce((sum, value) => sum + value, 0) / wifiValues.length) * 10) / 10
+      : null,
+    avgDrinkQuality: drinkQualityValues.length
+      ? Math.round((drinkQualityValues.reduce((sum, value) => sum + value, 0) / drinkQualityValues.length) * 10) / 10
+      : null,
+    topOutletAvailability: Object.entries(outletCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+    intentScores,
     hereNowCount: hereNowUsers.size,
   };
 }
@@ -243,6 +276,7 @@ export default function Explore() {
 
   const [query, setQuery] = useState('');
   const deferredQuery = React.useDeferredValue(query);
+  const [selectedIntent, setSelectedIntent] = useState<DiscoveryIntentFilter>('any');
 
   const [scope, setScope] = useState<'everyone' | 'friends' | 'campus'>('everyone');
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -651,15 +685,24 @@ export default function Explore() {
     });
   }, [loc, mapFocus]);
 
-  const displaySpots = useMemo(() => {
-    if (intelV1Enabled && intelFetched) return normalizeSpotsForExplore(intelSpots);
-    return normalizeSpotsForExplore(spots);
+  const displaySpots = useMemo<any[]>(() => {
+    if (intelV1Enabled && intelFetched) return normalizeSpotsForExplore(intelSpots) as any[];
+    return normalizeSpotsForExplore(spots) as any[];
   }, [intelV1Enabled, intelFetched, intelSpots, spots]);
 
   const filteredSpots = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
 
-    const list = displaySpots.filter((spot) => {
+    const list = displaySpots
+      .map((spot: any) => {
+        const intentSignal = scoreSpotForIntent(spot, selectedIntent);
+        return {
+          ...spot,
+          intentScore: intentSignal.score,
+          intentReasons: intentSignal.reasons,
+        };
+      })
+      .filter((spot: any) => {
       const name = String(spot?.name || '').toLowerCase();
       if (q && !name.includes(q)) return false;
 
@@ -694,6 +737,10 @@ export default function Explore() {
     });
 
     list.sort((a: any, b: any) => {
+      if (selectedIntent !== 'any') {
+        const intentDelta = (b.intentScore || 0) - (a.intentScore || 0);
+        if (Math.abs(intentDelta) > 0.01) return intentDelta;
+      }
       const distA = a.distance ?? Infinity;
       const distB = b.distance ?? Infinity;
       if (distA !== distB) return distA - distB;
@@ -701,7 +748,7 @@ export default function Explore() {
     });
 
     return list;
-  }, [displaySpots, deferredQuery, filters]);
+  }, [displaySpots, deferredQuery, filters, selectedIntent]);
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
   const listData = useMemo(() => (deferredQuery.trim() ? filteredSpots : filteredSpots.slice(0, 12)), [filteredSpots, deferredQuery]);
@@ -994,6 +1041,37 @@ export default function Explore() {
               style={[styles.searchInput, { borderColor: border, backgroundColor: card, color: text }]}
             />
 
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.intentRow}
+              style={styles.intentScroll}
+            >
+              {DISCOVERY_INTENT_FILTER_OPTIONS.map((option) => {
+                const active = selectedIntent === option.key;
+                return (
+                  <Pressable
+                    key={option.key}
+                    onPress={() => setSelectedIntent(option.key)}
+                    style={({ pressed }) => [
+                      styles.intentChip,
+                      {
+                        borderColor: border,
+                        backgroundColor: active ? primary : pressed ? highlight : card,
+                      },
+                    ]}
+                  >
+                    <Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '700', fontSize: 12 }}>
+                      {option.emoji} {option.shortLabel}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Text style={{ color: muted, fontSize: 12, marginTop: 6, marginBottom: 6 }}>
+              {getDiscoveryIntentMeta(selectedIntent).hint}
+            </Text>
+
             {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
 
             {user ? (
@@ -1043,7 +1121,7 @@ export default function Explore() {
 
             <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
               {filteredSpots.length
-                ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}`
+                ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}${selectedIntent !== 'any' ? ` • ranked for ${getDiscoveryIntentMeta(selectedIntent).shortLabel.toLowerCase()}` : ''}`
                 : 'No spots match current filters.'}
             </Text>
 
@@ -1122,7 +1200,7 @@ export default function Explore() {
 
             <RecommendationsCard
               userLocation={loc}
-              context={{ timeOfDay }}
+              context={{ timeOfDay, intent: selectedIntent !== 'any' ? selectedIntent : undefined }}
               onSpotPress={(placeId, name) => {
                 startPerfMark('spot_navigation');
                 void markPerfEvent('spot_nav_start', { source: 'explore_recommendations' });
@@ -1146,6 +1224,9 @@ export default function Explore() {
               maxSpotCount={maxSpotCount}
               showRanks={!deferredQuery.trim()}
               intelligence={intelligence}
+              activeIntent={selectedIntent}
+              intentScore={typeof item?.intentScore === 'number' ? item.intentScore : null}
+              intentReason={Array.isArray(item?.intentReasons) ? item.intentReasons[0] : null}
               onPress={() => openSpotSheet(item)}
               onScorePress={() => {
                 const scoreKey = spotKey(item?.example?.spotPlaceId || item?.placeId || '', item?.name || '');
@@ -1354,6 +1435,19 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 15,
     marginBottom: 10,
+  },
+  intentScroll: {
+    marginTop: 2,
+  },
+  intentRow: {
+    paddingRight: 12,
+    gap: 8,
+  },
+  intentChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   scopeRow: {
     marginTop: 10,

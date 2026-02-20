@@ -32,6 +32,18 @@ type Checkin = {
   expiresAt?: string;
   createdAt: string;
   tags?: string[];
+  visitIntent?: (
+    | 'hangout_friends'
+    | 'date_night'
+    | 'coffee_quality'
+    | 'pastry_snack'
+    | 'aesthetic_photos'
+    | 'quick_pickup'
+    | 'deep_work'
+    | 'quiet_reading'
+    | 'group_study'
+    | 'late_night_open'
+  )[];
   // Utility metrics
   wifiSpeed?: 1 | 2 | 3 | 4 | 5; // 1=unusable, 5=blazing fast
   noiseLevel?: 'quiet' | 'moderate' | 'lively' | 1 | 2 | 3 | 4 | 5; // Legacy string or new 1-5 scale (1=silent, 5=loud)
