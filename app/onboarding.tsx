@@ -6,13 +6,23 @@ import Logo from '@/components/logo';
 import { getPermissionPrimerSeen, setOnboardingComplete, setOnboardingProfile, setPermissionPrimerSeen } from '@/storage/local';
 import { requestForegroundLocation } from '@/services/location';
 import { reverseGeocodeCity } from '@/services/googleMaps';
+import { DISCOVERY_INTENT_OPTIONS, type DiscoveryIntent } from '@/services/discoveryIntents';
 import { withAlpha } from '@/utils/colors';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type OnboardingStep = 'welcome' | 'permissions';
+type OnboardingStep = 'welcome' | 'permissions' | 'taste';
+
+const AMBIANCE_OPTIONS: { key: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic'; label: string }[] = [
+  { key: 'cozy', label: 'Cozy' },
+  { key: 'modern', label: 'Modern' },
+  { key: 'rustic', label: 'Rustic' },
+  { key: 'bright', label: 'Bright' },
+  { key: 'intimate', label: 'Intimate' },
+  { key: 'energetic', label: 'Energetic' },
+];
 
 export default function Onboarding() {
   const router = useRouter();
@@ -28,6 +38,8 @@ export default function Onboarding() {
   const [loading, setLoading] = useState(false);
   const [locationEnabled, setLocationEnabled] = useState<boolean | null>(null);
   const [detectedCity, setDetectedCity] = useState<string>('');
+  const [coffeeIntents, setCoffeeIntents] = useState<DiscoveryIntent[]>([]);
+  const [ambiancePreference, setAmbiancePreference] = useState<'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null>(null);
 
   const permissionLabel = useMemo(() => {
     if (locationEnabled === true) return detectedCity ? `Location on · ${detectedCity}` : 'Location on';
@@ -64,12 +76,22 @@ export default function Onboarding() {
         city: detectedCity || undefined,
         campusOrCity: detectedCity || undefined,
         campusType: detectedCity ? 'city' : undefined,
+        coffeeIntents: coffeeIntents.slice(0, 3),
+        ambiancePreference,
       });
       await setOnboardingComplete(true);
       router.replace('/signup');
     } finally {
       setLoading(false);
     }
+  }
+
+  function toggleIntent(intent: DiscoveryIntent) {
+    setCoffeeIntents((prev) => {
+      if (prev.includes(intent)) return prev.filter((entry) => entry !== intent);
+      if (prev.length >= 3) return prev;
+      return [...prev, intent];
+    });
   }
 
   return (
@@ -103,7 +125,7 @@ export default function Onboarding() {
               <Text style={styles.primaryButtonText}>Continue</Text>
             </Pressable>
           </View>
-        ) : (
+        ) : step === 'permissions' ? (
           <View style={styles.section}>
             <Label style={{ color: muted, marginBottom: 8 }}>Permissions</Label>
             <H1 style={{ color: text }}>Enable location</H1>
@@ -140,6 +162,86 @@ export default function Onboarding() {
             </View>
 
             <Pressable
+              onPress={() => setStep('taste')}
+              disabled={loading}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                {
+                  backgroundColor: pressed ? withAlpha(primary, 0.85) : primary,
+                  opacity: loading ? 0.6 : 1,
+                },
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>{loading ? 'Loading…' : 'Continue'}</Text>
+            </Pressable>
+
+            <Pressable onPress={() => setStep('welcome')} style={styles.linkButton}>
+              <Text style={{ color: muted, fontWeight: '600' }}>Back</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.section}>
+            <Label style={{ color: muted, marginBottom: 8 }}>Personalize</Label>
+            <H1 style={{ color: text }}>What brings you to coffee shops?</H1>
+            <Body style={{ color: muted, marginTop: 10 }}>
+              Pick what matters most. This helps us rank better spots from day one.
+            </Body>
+
+            <View style={[styles.infoCard, { borderColor: border, backgroundColor: card }]}>
+              <Text style={[styles.infoTitle, { color: text }]}>Coffee intents (pick up to 3)</Text>
+              <View style={styles.chipWrap}>
+                {DISCOVERY_INTENT_OPTIONS.map((intent) => {
+                  const intentKey = intent.key as DiscoveryIntent;
+                  const active = coffeeIntents.includes(intentKey);
+                  return (
+                    <Pressable
+                      key={intent.key}
+                      onPress={() => toggleIntent(intentKey)}
+                      style={({ pressed }) => [
+                        styles.chip,
+                        {
+                          borderColor: border,
+                          backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.08) : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '700', fontSize: 12 }}>
+                        {intent.emoji} {intent.shortLabel}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
+                {coffeeIntents.length ? `${coffeeIntents.length}/3 selected` : 'Optional, but recommended'}
+              </Text>
+            </View>
+
+            <View style={[styles.infoCard, { borderColor: border, backgroundColor: card }]}>
+              <Text style={[styles.infoTitle, { color: text }]}>Preferred ambiance (optional)</Text>
+              <View style={styles.chipWrap}>
+                {AMBIANCE_OPTIONS.map((option) => {
+                  const active = ambiancePreference === option.key;
+                  return (
+                    <Pressable
+                      key={option.key}
+                      onPress={() => setAmbiancePreference((prev) => (prev === option.key ? null : option.key))}
+                      style={({ pressed }) => [
+                        styles.chip,
+                        {
+                          borderColor: border,
+                          backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.08) : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '700', fontSize: 12 }}>{option.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <Pressable
               onPress={finishOnboarding}
               disabled={loading}
               style={({ pressed }) => [
@@ -153,7 +255,7 @@ export default function Onboarding() {
               <Text style={styles.primaryButtonText}>{loading ? 'Finishing…' : 'Finish setup'}</Text>
             </Pressable>
 
-            <Pressable onPress={() => setStep('welcome')} style={styles.linkButton}>
+            <Pressable onPress={() => setStep('permissions')} style={styles.linkButton}>
               <Text style={{ color: muted, fontWeight: '600' }}>Back</Text>
             </Pressable>
           </View>
@@ -218,5 +320,17 @@ const styles = StyleSheet.create({
   linkButton: {
     marginTop: 12,
     alignItems: 'center',
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  chip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
 });

@@ -708,7 +708,27 @@ export async function uploadPhotoToStorage(uri: string, userId?: string) {
   throw lastErr || new Error('Photo upload failed.');
 }
 
-export async function createCheckinRemote({ userId, userName, userHandle, userPhotoUrl, spotName, caption, photoUrl, photoPending, campusOrCity, city, campus, visibility, spotPlaceId, spotLatLng, clientId, tags, visitIntent }: any) {
+export async function createCheckinRemote({
+  userId,
+  userName,
+  userHandle,
+  userPhotoUrl,
+  spotName,
+  caption,
+  photoUrl,
+  photoPending,
+  campusOrCity,
+  city,
+  campus,
+  visibility,
+  spotPlaceId,
+  spotLatLng,
+  clientId,
+  tags,
+  visitIntent,
+  photoTags,
+  ambiance,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
 
@@ -728,6 +748,8 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
     caption: caption || '',
     tags: Array.isArray(tags) ? tags : [],
     visitIntent: Array.isArray(visitIntent) ? visitIntent.slice(0, 2) : [],
+    photoTags: Array.isArray(photoTags) ? photoTags.slice(0, 3) : [],
+    ambiance: typeof ambiance === 'string' ? ambiance : null,
     photoUrl: photoUrl || null,
     photoPending: !!photoPending,
     campusOrCity: campusOrCity || city || null,
@@ -1546,7 +1568,20 @@ export async function setCloseFriendRemote(currentUserId: string, targetUserId: 
   invalidateUserFriendsCache([currentUserId, targetUserId]);
 }
 
-export async function createUserRemote({ userId, name, city, campus, campusOrCity, campusType, handle, email, photoUrl, phone }: any) {
+export async function createUserRemote({
+  userId,
+  name,
+  city,
+  campus,
+  campusOrCity,
+  campusType,
+  handle,
+  email,
+  photoUrl,
+  phone,
+  coffeeIntents,
+  ambiancePreference,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) return;
 
@@ -1565,6 +1600,8 @@ export async function createUserRemote({ userId, name, city, campus, campusOrCit
     email: email || null,
     phone: phone || null,
     phoneNormalized: normalizedPhone || null,
+    coffeeIntents: Array.isArray(coffeeIntents) ? coffeeIntents.slice(0, 3) : [],
+    ambiancePreference: typeof ambiancePreference === 'string' ? ambiancePreference : null,
     photoUrl: photoUrl || null,
     createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
@@ -1995,7 +2032,19 @@ export async function signInWithEmail({ email, password }: { email: string; pass
   return res.user;
 }
 
-export async function createAccountWithEmail({ email, password, name, city, campus, campusOrCity, handle, campusType, phone }: any) {
+export async function createAccountWithEmail({
+  email,
+  password,
+  name,
+  city,
+  campus,
+  campusOrCity,
+  handle,
+  campusType,
+  phone,
+  coffeeIntents,
+  ambiancePreference,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
   const auth = fb.auth();
@@ -2016,7 +2065,20 @@ export async function createAccountWithEmail({ email, password, name, city, camp
     // ignore
   }
   // create profile doc in background for faster UX
-  void createUserRemote({ userId: uid, name, city, campus, campusOrCity, campusType, handle, email, phone, photoUrl: res.user.photoURL || null });
+  void createUserRemote({
+    userId: uid,
+    name,
+    city,
+    campus,
+    campusOrCity,
+    campusType,
+    handle,
+    email,
+    phone,
+    coffeeIntents,
+    ambiancePreference,
+    photoUrl: res.user.photoURL || null,
+  });
   return res.user;
 }
 

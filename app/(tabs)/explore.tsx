@@ -44,9 +44,12 @@ import {
   DISCOVERY_INTENT_FILTER_OPTIONS,
   getDiscoveryIntentMeta,
   inferIntentsFromCheckin,
+  normalizeDiscoveryIntent,
   scoreSpotForIntent,
   type DiscoveryIntentFilter,
 } from '@/services/discoveryIntents';
+import { applyParsedQueryBoost, parseCoffeeQuery } from '@/services/vibeSearch';
+import { deriveVibeScoresFromSpot, intentToVibe } from '@/services/vibeScoring';
 import {
   getCheckins,
   getLastKnownLocation,
@@ -277,6 +280,15 @@ export default function Explore() {
   const [query, setQuery] = useState('');
   const deferredQuery = React.useDeferredValue(query);
   const [selectedIntent, setSelectedIntent] = useState<DiscoveryIntentFilter>('any');
+  const parsedQuery = useMemo(() => parseCoffeeQuery(deferredQuery), [deferredQuery]);
+  const rankingIntent = useMemo<DiscoveryIntentFilter>(() => {
+    if (selectedIntent !== 'any') return selectedIntent;
+    const onboardingIntent = Array.isArray(user?.coffeeIntents) ? user.coffeeIntents[0] : null;
+    const normalizedOnboardingIntent = normalizeDiscoveryIntent(onboardingIntent);
+    if (normalizedOnboardingIntent) return normalizedOnboardingIntent;
+    if (parsedQuery.suggestedIntent) return parsedQuery.suggestedIntent;
+    return 'any';
+  }, [selectedIntent, user?.coffeeIntents, parsedQuery.suggestedIntent]);
 
   const [scope, setScope] = useState<'everyone' | 'friends' | 'campus'>('everyone');
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -692,14 +704,35 @@ export default function Explore() {
 
   const filteredSpots = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
+    const derivedNoiseFilter =
+      filters.noiseLevel !== 'any'
+        ? filters.noiseLevel
+        : parsedQuery.filters.noiseLevel && parsedQuery.filters.noiseLevel !== 'any'
+          ? parsedQuery.filters.noiseLevel
+          : 'any';
+    const derivedOpenNowFilter = filters.openNow || parsedQuery.filters.openNow === true;
+    const derivedNotCrowdedFilter = filters.notCrowded || parsedQuery.filters.notCrowded === true;
+    const derivedHighRatedFilter = filters.highRated || parsedQuery.filters.highRated === true;
+    const derivedPriceLevels = filters.priceLevel.length > 0
+      ? filters.priceLevel
+      : Array.isArray(parsedQuery.filters.priceLevel)
+        ? parsedQuery.filters.priceLevel
+        : [];
+    const rankingVibe = intentToVibe(rankingIntent);
 
     const list = displaySpots
       .map((spot: any) => {
-        const intentSignal = scoreSpotForIntent(spot, selectedIntent);
+        const intentSignal = scoreSpotForIntent(spot, rankingIntent);
+        const queryBoost = applyParsedQueryBoost(spot, parsedQuery);
+        const vibeScores = deriveVibeScoresFromSpot(spot);
+        const vibeMatch = rankingVibe ? vibeScores[rankingVibe] : null;
         return {
           ...spot,
           intentScore: intentSignal.score,
-          intentReasons: intentSignal.reasons,
+          intentReasons: Array.from(new Set([...(intentSignal.reasons || []), ...(queryBoost.reasons || [])])),
+          queryBoost: queryBoost.boost,
+          vibeScores,
+          vibeMatch,
         };
       })
       .filter((spot: any) => {
@@ -709,23 +742,23 @@ export default function Explore() {
       const maxDistanceKm = Math.max(0.5, Math.min(5, filters.distance)) * 1.60934;
       if (typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance > maxDistanceKm) return false;
 
-      if (filters.openNow && spot?.openNow !== true) return false;
+      if (derivedOpenNowFilter && spot?.openNow !== true) return false;
 
-      if (filters.priceLevel.length > 0) {
+      if (derivedPriceLevels.length > 0) {
         const priceLevel = spot?.intel?.priceLevel || spot?.priceLevel || spot?.metadata?.priceLevel;
-        if (!priceLevel || !filters.priceLevel.includes(priceLevel)) return false;
+        if (!priceLevel || !derivedPriceLevels.includes(priceLevel)) return false;
       }
 
       const noiseLabel = String(spot?.display?.noise || spot?.live?.noise || spot?.intel?.inferredNoise || '').toLowerCase();
-      if (filters.noiseLevel !== 'any' && noiseLabel !== filters.noiseLevel) return false;
+      if (derivedNoiseFilter !== 'any' && noiseLabel !== derivedNoiseFilter) return false;
 
-      if (filters.notCrowded) {
+      if (derivedNotCrowdedFilter) {
         const busyness = String(spot?.display?.busyness || spot?.live?.busyness || '').toLowerCase();
         const busyScore = typeof spot?.avgBusyness === 'number' ? spot.avgBusyness : 3;
         if (busyness === 'packed' || busyScore > 3.5) return false;
       }
 
-      if (filters.highRated) {
+      if (derivedHighRatedFilter) {
         const rating = typeof spot?.intel?.avgRating === 'number' ? spot.intel.avgRating : spot?.rating || 0;
         if (rating < 4) return false;
       }
@@ -737,9 +770,18 @@ export default function Explore() {
     });
 
     list.sort((a: any, b: any) => {
-      if (selectedIntent !== 'any') {
+      if (rankingVibe) {
+        const vibeDelta = (b.vibeMatch || 0) - (a.vibeMatch || 0);
+        if (Math.abs(vibeDelta) > 0.5) return vibeDelta;
+      }
+      if (rankingIntent !== 'any') {
         const intentDelta = (b.intentScore || 0) - (a.intentScore || 0);
         if (Math.abs(intentDelta) > 0.01) return intentDelta;
+      }
+      const queryBoostDelta = (b.queryBoost || 0) - (a.queryBoost || 0);
+      if (Math.abs(queryBoostDelta) > 0.5) return queryBoostDelta;
+      if (typeof b.hereNowCount === 'number' && typeof a.hereNowCount === 'number' && b.hereNowCount !== a.hereNowCount) {
+        return b.hereNowCount - a.hereNowCount;
       }
       const distA = a.distance ?? Infinity;
       const distB = b.distance ?? Infinity;
@@ -748,7 +790,7 @@ export default function Explore() {
     });
 
     return list;
-  }, [displaySpots, deferredQuery, filters, selectedIntent]);
+  }, [displaySpots, deferredQuery, filters, parsedQuery, rankingIntent]);
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
   const listData = useMemo(() => (deferredQuery.trim() ? filteredSpots : filteredSpots.slice(0, 12)), [filteredSpots, deferredQuery]);
@@ -878,6 +920,12 @@ export default function Explore() {
                   hasWifi: spot.intel.hasWifi,
                   wifiConfidence: spot.intel.wifiConfidence,
                   goodForStudying: spot.intel.goodForStudying,
+                  goodForDates: spot.intel.goodForDates,
+                  goodForGroups: spot.intel.goodForGroups,
+                  instagramWorthy: spot.intel.instagramWorthy,
+                  foodQualitySignal: spot.intel.foodQualitySignal,
+                  aestheticVibe: spot.intel.aestheticVibe,
+                  musicAtmosphere: spot.intel.musicAtmosphere,
                 }
               : null,
           });
@@ -982,6 +1030,12 @@ export default function Explore() {
                   hasWifi: selectedSpot.intel.hasWifi,
                   wifiConfidence: selectedSpot.intel.wifiConfidence,
                   goodForStudying: selectedSpot.intel.goodForStudying,
+                  goodForDates: selectedSpot.intel.goodForDates,
+                  goodForGroups: selectedSpot.intel.goodForGroups,
+                  instagramWorthy: selectedSpot.intel.instagramWorthy,
+                  foodQualitySignal: selectedSpot.intel.foodQualitySignal,
+                  aestheticVibe: selectedSpot.intel.aestheticVibe,
+                  musicAtmosphere: selectedSpot.intel.musicAtmosphere,
                 }
               : null,
           });
@@ -1071,6 +1125,11 @@ export default function Explore() {
             <Text style={{ color: muted, fontSize: 12, marginTop: 6, marginBottom: 6 }}>
               {getDiscoveryIntentMeta(selectedIntent).hint}
             </Text>
+            {parsedQuery.matched ? (
+              <Text style={{ color: muted, fontSize: 12, marginBottom: 6 }}>
+                Interpreting query as: {parsedQuery.explanation.slice(0, 3).join(' • ')}
+              </Text>
+            ) : null}
 
             {status ? <StatusBanner message={status.message} tone={status.tone} /> : null}
 
@@ -1121,7 +1180,7 @@ export default function Explore() {
 
             <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
               {filteredSpots.length
-                ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}${selectedIntent !== 'any' ? ` • ranked for ${getDiscoveryIntentMeta(selectedIntent).shortLabel.toLowerCase()}` : ''}`
+                ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}${rankingIntent !== 'any' ? ` • ranked for ${getDiscoveryIntentMeta(rankingIntent).shortLabel.toLowerCase()}` : ''}`
                 : 'No spots match current filters.'}
             </Text>
 
@@ -1200,7 +1259,7 @@ export default function Explore() {
 
             <RecommendationsCard
               userLocation={loc}
-              context={{ timeOfDay, intent: selectedIntent !== 'any' ? selectedIntent : undefined }}
+              context={{ timeOfDay, intent: rankingIntent !== 'any' ? rankingIntent : undefined }}
               onSpotPress={(placeId, name) => {
                 startPerfMark('spot_navigation');
                 void markPerfEvent('spot_nav_start', { source: 'explore_recommendations' });
@@ -1224,7 +1283,7 @@ export default function Explore() {
               maxSpotCount={maxSpotCount}
               showRanks={!deferredQuery.trim()}
               intelligence={intelligence}
-              activeIntent={selectedIntent}
+              activeIntent={rankingIntent}
               intentScore={typeof item?.intentScore === 'number' ? item.intentScore : null}
               intentReason={Array.isArray(item?.intentReasons) ? item.intentReasons[0] : null}
               onPress={() => openSpotSheet(item)}

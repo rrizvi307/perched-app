@@ -62,6 +62,22 @@ export interface SpotIntel {
   goodForStudying: boolean;
   /** Derived: inferredNoise !== 'loud' && avgRating >= 4.0 */
   goodForMeetings: boolean;
+  /** Confidence that spot is date-friendly (0-1) */
+  dateFriendly?: number;
+  /** Dominant aesthetic vibe inferred from reviews */
+  aestheticVibe?: 'cozy' | 'modern' | 'rustic' | 'industrial' | 'classic' | null;
+  /** Confidence that food/pastries are strong (0-1) */
+  foodQualitySignal?: number;
+  /** Dominant music atmosphere from reviews */
+  musicAtmosphere?: 'none' | 'chill' | 'upbeat' | 'live' | 'unknown';
+  /** Confidence this place is photogenic (0-1) */
+  instagramWorthy?: number;
+  /** Seating comfort from review language */
+  seatingComfort?: 'comfortable' | 'basic' | 'mixed' | 'unknown';
+  /** Confidence for date suitability (0-1) */
+  goodForDates?: number;
+  /** Confidence for group suitability (0-1) */
+  goodForGroups?: number;
 
   // Provenance
   /** Data source identifier */
@@ -136,6 +152,14 @@ export function getDefaultIntel(): SpotIntel {
     wifiConfidence: 0,
     goodForStudying: false,
     goodForMeetings: false,
+    dateFriendly: 0,
+    aestheticVibe: null,
+    foodQualitySignal: 0,
+    musicAtmosphere: 'unknown',
+    instagramWorthy: 0,
+    seatingComfort: 'unknown',
+    goodForDates: 0,
+    goodForGroups: 0,
     source: 'manual',
     lastUpdated: Date.now(),
     reviewCount: 0,
@@ -217,6 +241,54 @@ export function validateSpotIntel(intel: Partial<SpotIntel>): { valid: boolean; 
   if (intel.wifiConfidence !== undefined) {
     if (intel.wifiConfidence < 0 || intel.wifiConfidence > 1) {
       errors.push(`wifiConfidence out of range: ${intel.wifiConfidence}`);
+    }
+  }
+
+  if (intel.dateFriendly !== undefined) {
+    if (intel.dateFriendly < 0 || intel.dateFriendly > 1) {
+      errors.push(`dateFriendly out of range: ${intel.dateFriendly}`);
+    }
+  }
+
+  if (intel.foodQualitySignal !== undefined) {
+    if (intel.foodQualitySignal < 0 || intel.foodQualitySignal > 1) {
+      errors.push(`foodQualitySignal out of range: ${intel.foodQualitySignal}`);
+    }
+  }
+
+  if (intel.instagramWorthy !== undefined) {
+    if (intel.instagramWorthy < 0 || intel.instagramWorthy > 1) {
+      errors.push(`instagramWorthy out of range: ${intel.instagramWorthy}`);
+    }
+  }
+
+  if (intel.goodForDates !== undefined) {
+    if (intel.goodForDates < 0 || intel.goodForDates > 1) {
+      errors.push(`goodForDates out of range: ${intel.goodForDates}`);
+    }
+  }
+
+  if (intel.goodForGroups !== undefined) {
+    if (intel.goodForGroups < 0 || intel.goodForGroups > 1) {
+      errors.push(`goodForGroups out of range: ${intel.goodForGroups}`);
+    }
+  }
+
+  if (intel.aestheticVibe !== undefined && intel.aestheticVibe !== null) {
+    if (!['cozy', 'modern', 'rustic', 'industrial', 'classic'].includes(intel.aestheticVibe)) {
+      errors.push(`Invalid aestheticVibe: ${intel.aestheticVibe}`);
+    }
+  }
+
+  if (intel.musicAtmosphere !== undefined && intel.musicAtmosphere !== null) {
+    if (!['none', 'chill', 'upbeat', 'live', 'unknown'].includes(intel.musicAtmosphere)) {
+      errors.push(`Invalid musicAtmosphere: ${intel.musicAtmosphere}`);
+    }
+  }
+
+  if (intel.seatingComfort !== undefined && intel.seatingComfort !== null) {
+    if (!['comfortable', 'basic', 'mixed', 'unknown'].includes(intel.seatingComfort)) {
+      errors.push(`Invalid seatingComfort: ${intel.seatingComfort}`);
     }
   }
 

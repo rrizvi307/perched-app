@@ -21,6 +21,14 @@ export interface ReviewNLPResult {
   wifiConfidence: number;
   goodForStudying: boolean;
   goodForMeetings: boolean;
+  dateFriendly: number; // 0-1 confidence
+  aestheticVibe: 'cozy' | 'modern' | 'rustic' | 'industrial' | 'classic' | null;
+  foodQualitySignal: number; // 0-1 confidence
+  musicAtmosphere: 'none' | 'chill' | 'upbeat' | 'live' | 'unknown';
+  instagramWorthy: number; // 0-1 confidence
+  seatingComfort: 'comfortable' | 'basic' | 'mixed' | 'unknown';
+  goodForDates: number; // 0-1 confidence
+  goodForGroups: number; // 0-1 confidence
   reviewCount: number;  // Number of reviews analyzed
   lastAnalyzed: number;  // Timestamp
 }
@@ -50,6 +58,14 @@ export async function analyzeReviews(
       wifiConfidence: 0,
       goodForStudying: false,
       goodForMeetings: false,
+      dateFriendly: 0,
+      aestheticVibe: null,
+      foodQualitySignal: 0,
+      musicAtmosphere: 'unknown',
+      instagramWorthy: 0,
+      seatingComfort: 'unknown',
+      goodForDates: 0,
+      goodForGroups: 0,
       reviewCount: 0,
       lastAnalyzed: Date.now(),
     };
@@ -107,6 +123,10 @@ export async function analyzeReviews(
     // Parse JSON response
     const parsed = JSON.parse(content);
 
+    const aestheticVibe = normalizeAestheticVibe(parsed.aestheticVibe);
+    const musicAtmosphere = normalizeMusicAtmosphere(parsed.musicAtmosphere);
+    const seatingComfort = normalizeSeatingComfort(parsed.seatingComfort);
+
     // Validate and normalize
     return {
       inferredNoise: normalizeNoiseLevel(parsed.noise),
@@ -115,6 +135,14 @@ export async function analyzeReviews(
       wifiConfidence: clamp(parsed.wifiConfidence || 0, 0, 1),
       goodForStudying: Boolean(parsed.goodForStudying),
       goodForMeetings: Boolean(parsed.goodForMeetings),
+      dateFriendly: clamp(parsed.dateFriendly || 0, 0, 1),
+      aestheticVibe,
+      foodQualitySignal: clamp(parsed.foodQualitySignal || 0, 0, 1),
+      musicAtmosphere,
+      instagramWorthy: clamp(parsed.instagramWorthy || 0, 0, 1),
+      seatingComfort,
+      goodForDates: clamp(parsed.goodForDates || 0, 0, 1),
+      goodForGroups: clamp(parsed.goodForGroups || 0, 0, 1),
       reviewCount: reviews.length,
       lastAnalyzed: Date.now(),
     };
@@ -145,7 +173,15 @@ Respond with JSON matching this exact schema:
   "hasWifi": true | false,
   "wifiConfidence": 0.0 to 1.0,
   "goodForStudying": true | false,
-  "goodForMeetings": true | false
+  "goodForMeetings": true | false,
+  "dateFriendly": 0.0 to 1.0,
+  "aestheticVibe": "cozy" | "modern" | "rustic" | "industrial" | "classic" | null,
+  "foodQualitySignal": 0.0 to 1.0,
+  "musicAtmosphere": "none" | "chill" | "upbeat" | "live" | "unknown",
+  "instagramWorthy": 0.0 to 1.0,
+  "seatingComfort": "comfortable" | "basic" | "mixed" | "unknown",
+  "goodForDates": 0.0 to 1.0,
+  "goodForGroups": 0.0 to 1.0
 }
 
 Guidelines:
@@ -159,6 +195,14 @@ Guidelines:
 - "wifiConfidence": How certain you are based on mentions
 - "goodForStudying": True if reviews mention "study", "work", "laptop", "quiet for work"
 - "goodForMeetings": True if reviews mention "meet", "meetings", "group work", "good for conversation"
+- "dateFriendly": Confidence this place is date-friendly
+- "aestheticVibe": Dominant aesthetic style if implied
+- "foodQualitySignal": Confidence food/pastry quality is strong
+- "musicAtmosphere": Dominant music style mentioned
+- "instagramWorthy": Confidence this place is photogenic
+- "seatingComfort": Comfort level implied by seating mentions
+- "goodForDates": Explicit confidence for date suitability
+- "goodForGroups": Explicit confidence for group suitability
 
 If no information is found, use null for noise and false for booleans with 0 confidence.`;
 }
@@ -173,6 +217,27 @@ function normalizeNoiseLevel(value: any): 'quiet' | 'moderate' | 'loud' | null {
   if (lower === 'moderate') return 'moderate';
   if (lower === 'loud') return 'loud';
   return null;
+}
+
+function normalizeAestheticVibe(value: any): ReviewNLPResult['aestheticVibe'] {
+  if (typeof value !== 'string') return null;
+  const lower = value.toLowerCase();
+  if (lower === 'cozy' || lower === 'modern' || lower === 'rustic' || lower === 'industrial' || lower === 'classic') return lower;
+  return null;
+}
+
+function normalizeMusicAtmosphere(value: any): ReviewNLPResult['musicAtmosphere'] {
+  if (typeof value !== 'string') return 'unknown';
+  const lower = value.toLowerCase();
+  if (lower === 'none' || lower === 'chill' || lower === 'upbeat' || lower === 'live') return lower;
+  return 'unknown';
+}
+
+function normalizeSeatingComfort(value: any): ReviewNLPResult['seatingComfort'] {
+  if (typeof value !== 'string') return 'unknown';
+  const lower = value.toLowerCase();
+  if (lower === 'comfortable' || lower === 'basic' || lower === 'mixed') return lower;
+  return 'unknown';
 }
 
 /**
@@ -209,6 +274,14 @@ function getEmptyResult(): ReviewNLPResult {
     wifiConfidence: 0,
     goodForStudying: false,
     goodForMeetings: false,
+    dateFriendly: 0,
+    aestheticVibe: null,
+    foodQualitySignal: 0,
+    musicAtmosphere: 'unknown',
+    instagramWorthy: 0,
+    seatingComfort: 'unknown',
+    goodForDates: 0,
+    goodForGroups: 0,
     reviewCount: 0,
     lastAnalyzed: Date.now(),
   };

@@ -16,6 +16,7 @@ import { normalizePhone } from '@/utils/phone';
 import { getForegroundLocationIfPermitted } from '@/services/location';
 import { getAndClearReferralCode } from '@/services/deepLinking';
 import { trackReferralSignup } from '@/services/shareInvite';
+import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import { useEffect, useRef, useState } from 'react';
 import { useRootNavigationState, useRouter } from 'expo-router';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -49,6 +50,8 @@ export default function SignUp() {
   const [detectingCity, setDetectingCity] = useState(false);
   const [geoBias, setGeoBias] = useState<{ lat: number; lng: number } | null>(null);
   const [referralCode, setReferralCode] = useState<string | null>(null);
+  const [coffeeIntentsPref, setCoffeeIntentsPref] = useState<DiscoveryIntent[]>([]);
+  const [ambiancePreference, setAmbiancePreference] = useState<'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null>(null);
   const { register, user, refreshUser } = useAuth();
   const fbAvailable = isFirebaseConfigured();
   const color = useThemeColor({}, 'text');
@@ -198,6 +201,8 @@ export default function SignUp() {
           campusType,
           handle: normalizedHandle,
           phone: normalizedPhone,
+          coffeeIntents: coffeeIntentsPref.slice(0, 3),
+          ambiancePreference,
         });
         // Track referral if user came from a referral link
         if (referralCode) {
@@ -243,7 +248,20 @@ export default function SignUp() {
         return;
       }
       const campusType = campus ? 'campus' : 'city';
-      await register(email.trim(), password, name || undefined, city || undefined, normalizedHandle, campusType, campus || undefined, normalizedPhone || undefined);
+      await register(
+        email.trim(),
+        password,
+        name || undefined,
+        city || undefined,
+        normalizedHandle,
+        campusType,
+        campus || undefined,
+        normalizedPhone || undefined,
+        {
+          coffeeIntents: coffeeIntentsPref.slice(0, 3),
+          ambiancePreference,
+        },
+      );
       // Referral tracking will be handled in useEffect when user state updates
     } catch (e) {
       devLog('register error', e);
@@ -263,6 +281,8 @@ export default function SignUp() {
         if (profile?.campus && !campus) setCampus(profile.campus);
         if (!city && profile?.campusType === 'city' && profile?.campusOrCity) setCity(profile.campusOrCity);
         if (!campus && profile?.campusType === 'campus' && profile?.campusOrCity) setCampus(profile.campusOrCity);
+        if (Array.isArray(profile?.coffeeIntents)) setCoffeeIntentsPref(profile.coffeeIntents.slice(0, 3));
+        if (typeof profile?.ambiancePreference === 'string') setAmbiancePreference(profile.ambiancePreference);
       } catch {}
     })();
   }, [campus, city, name]);

@@ -3,7 +3,10 @@ import { devLog } from '@/services/logger';
 import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
+import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import React, { createContext, useContext, useState } from 'react';
+
+type AmbiancePreference = 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null;
 
 type User = {
   id: string;
@@ -17,6 +20,8 @@ type User = {
   phone?: string;
   emailVerified?: boolean;
   photoUrl?: string | null;
+  coffeeIntents?: DiscoveryIntent[];
+  ambiancePreference?: AmbiancePreference;
   // Premium subscription fields
   premiumStatus?: {
     tier: 'free' | 'premium';
@@ -32,7 +37,20 @@ type User = {
 
 type AuthContextType = {
   user: User;
-  register: (email: string, password: string, name?: string, city?: string, handle?: string, campusType?: 'campus' | 'city', campus?: string, phone?: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    name?: string,
+    city?: string,
+    handle?: string,
+    campusType?: 'campus' | 'city',
+    campus?: string,
+    phone?: string,
+    preferences?: {
+      coffeeIntents?: DiscoveryIntent[];
+      ambiancePreference?: AmbiancePreference;
+    }
+  ) => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   createDemoUser: (email?: string, name?: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -96,6 +114,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             campusType: loc.campusType ?? cached?.campusType,
             phone: data?.phone || u.phoneNumber || cached?.phone || null,
             photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || null,
+            coffeeIntents: Array.isArray(data?.coffeeIntents)
+              ? data.coffeeIntents
+              : Array.isArray(cached?.coffeeIntents)
+                ? cached.coffeeIntents
+                : [],
+            ambiancePreference: data?.ambiancePreference ?? cached?.ambiancePreference ?? null,
           };
           // One-time cleanup: purge any demo data before rendering real user's feed
           if (!u.uid.startsWith('demo-')) {
@@ -117,6 +141,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (!data?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
             if (!data?.phone && cached?.phone) backfill.phone = cached.phone;
             if (!data?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
+            if (!Array.isArray(data?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
+            if (data?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
             if (!data?.email && u.email) backfill.email = u.email;
             if (Object.keys(backfill).length) {
               void (async () => {
@@ -191,7 +217,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
-  async function register(email: string, password: string, name?: string, city?: string, handle?: string, campusType?: 'campus' | 'city', campus?: string, phone?: string) {
+  async function register(
+    email: string,
+    password: string,
+    name?: string,
+    city?: string,
+    handle?: string,
+    campusType?: 'campus' | 'city',
+    campus?: string,
+    phone?: string,
+    preferences?: {
+      coffeeIntents?: DiscoveryIntent[];
+      ambiancePreference?: AmbiancePreference;
+    }
+  ) {
     try {
       devLog('register called', { email, name, city, campus, handle, fbConfigured: isFirebaseConfigured() });
       if (!isFirebaseConfigured()) {
@@ -199,7 +238,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           if (typeof window !== 'undefined' && window.localStorage) {
             const campusOrCity = campusType === 'campus' ? campus : city;
-            const u = { id: `local-${Date.now()}`, email, name, city, campus, campusOrCity, campusType: campusType || 'city', handle, phone, emailVerified: true };
+            const u = {
+              id: `local-${Date.now()}`,
+              email,
+              name,
+              city,
+              campus,
+              campusOrCity,
+              campusType: campusType || 'city',
+              handle,
+              phone,
+              coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
+              ambiancePreference: preferences?.ambiancePreference ?? null,
+              emailVerified: true,
+            };
             window.localStorage.setItem('spot_user_v1', JSON.stringify(u));
             // also keep a list of local users for debugging
             try {
@@ -220,20 +272,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Firebase not configured');
       }
 
-      const fb = getFirebaseOrThrow();
-
       const campusOrCity = campusType === 'campus' ? campus : city;
-      const created = await createAccountWithEmail({ email, password, name, city, campus, campusOrCity, handle, campusType: campusType || 'city', phone } as any);
+      const created = await createAccountWithEmail({
+        email,
+        password,
+        name,
+        city,
+        campus,
+        campusOrCity,
+        handle,
+        campusType: campusType || 'city',
+        phone,
+        coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
+        ambiancePreference: preferences?.ambiancePreference ?? null,
+      } as any);
       void (async () => {
         try {
-          await updateUserRemote(created.uid, { name, city, campus, campusOrCity, campusType: campusType || 'city', handle, phone, email });
+          await updateUserRemote(created.uid, {
+            name,
+            city,
+            campus,
+            campusOrCity,
+            campusType: campusType || 'city',
+            handle,
+            phone,
+            email,
+            coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
+            ambiancePreference: preferences?.ambiancePreference ?? null,
+          });
           await removePendingProfileUpdate(created.uid);
         } catch {
-          await enqueuePendingProfileUpdate(created.uid, { name, city, campus, campusOrCity, campusType: campusType || 'city', handle, phone, email });
+          await enqueuePendingProfileUpdate(created.uid, {
+            name,
+            city,
+            campus,
+            campusOrCity,
+            campusType: campusType || 'city',
+            handle,
+            phone,
+            email,
+            coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
+            ambiancePreference: preferences?.ambiancePreference ?? null,
+          });
         }
       })();
       // user needs to verify email before full access
-      const merged = { id: created.uid, email: created.email, emailVerified: false, name, city, campus, campusOrCity, handle, campusType: campusType || 'city', phone };
+      const merged = {
+        id: created.uid,
+        email: created.email,
+        emailVerified: false,
+        name,
+        city,
+        campus,
+        campusOrCity,
+        handle,
+        campusType: campusType || 'city',
+        phone,
+        coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
+        ambiancePreference: preferences?.ambiancePreference ?? null,
+      };
       setUser(merged);
       void saveUserProfile(merged);
       await logEvent('user_registered', created.uid, { city, campus, handle });
@@ -295,6 +392,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         campusType: cachedLoc.campusType ?? cached?.campusType,
         phone: cached?.phone || authUser?.phoneNumber || userObj.phoneNumber || null,
         photoUrl: cached?.photoUrl || null,
+        coffeeIntents: Array.isArray(cached?.coffeeIntents) ? cached.coffeeIntents : [],
+        ambiancePreference: cached?.ambiancePreference ?? null,
       };
       setUser(initial);
       void saveUserProfile(initial);
@@ -319,6 +418,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               campusType: loc.campusType ?? cached?.campusType,
               phone: data?.phone || authUser.phoneNumber || cached?.phone || prev?.phone,
               photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || prev?.photoUrl,
+              coffeeIntents: Array.isArray(data?.coffeeIntents)
+                ? data.coffeeIntents
+                : Array.isArray(cached?.coffeeIntents)
+                  ? cached.coffeeIntents
+                  : Array.isArray(prev?.coffeeIntents)
+                    ? prev.coffeeIntents
+                    : [],
+              ambiancePreference:
+                data?.ambiancePreference ??
+                cached?.ambiancePreference ??
+                prev?.ambiancePreference ??
+                null,
             };
             void saveUserProfile(merged);
             return merged;
@@ -332,6 +443,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!data?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
           if (!data?.phone && (cached?.phone || authUser?.phoneNumber)) backfill.phone = cached?.phone || authUser?.phoneNumber;
           if (!data?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
+          if (!Array.isArray(data?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
+          if (data?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
           if (!data?.email && userObj.email) backfill.email = userObj.email;
           if (Object.keys(backfill).length) {
             try {
@@ -481,6 +594,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           campusType: loc.campusType ?? cached?.campusType,
           phone: data?.phone || authUser.phoneNumber || cached?.phone || null,
           photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || null,
+          coffeeIntents: Array.isArray(data?.coffeeIntents)
+            ? data.coffeeIntents
+            : Array.isArray(cached?.coffeeIntents)
+              ? cached.coffeeIntents
+              : [],
+          ambiancePreference: data?.ambiancePreference ?? cached?.ambiancePreference ?? null,
         };
         setUser(merged);
         void saveUserProfile(merged);

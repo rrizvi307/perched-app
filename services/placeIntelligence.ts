@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { toMillis } from '@/services/checkinUtils';
 import { withErrorBoundary } from './errorBoundary';
+import { computeVibeScores, getPrimaryVibe, type VibeScores, type VibeType } from './vibeScoring';
 
 export type ExternalSource = 'foursquare' | 'yelp';
 
@@ -71,6 +72,8 @@ export type ScoreBreakdown = {
 
 export type PlaceIntelligence = {
   workScore: number;
+  vibeScores?: VibeScores;
+  primaryVibe?: VibeType;
   scoreBreakdown: ScoreBreakdown;
   crowdLevel: 'low' | 'moderate' | 'high' | 'unknown';
   bestTime: 'morning' | 'afternoon' | 'evening' | 'late' | 'anytime';
@@ -101,6 +104,12 @@ type BuildIntelligenceInput = {
     hasWifi?: boolean;
     wifiConfidence?: number;
     goodForStudying?: boolean;
+    goodForDates?: number;
+    goodForGroups?: number;
+    instagramWorthy?: number;
+    foodQualitySignal?: number;
+    aestheticVibe?: 'cozy' | 'modern' | 'rustic' | 'industrial' | 'classic' | null;
+    musicAtmosphere?: 'none' | 'chill' | 'upbeat' | 'live' | 'unknown' | null;
   } | null;
 };
 
@@ -120,6 +129,14 @@ const telemetryThrottle = new Map<string, number>();
 function getFallbackPlaceIntelligence(): PlaceIntelligence {
   return {
     workScore: 50,
+    vibeScores: {
+      study: 50,
+      date: 42,
+      social: 45,
+      quick: 48,
+      aesthetic: 44,
+    },
+    primaryVibe: 'study',
     scoreBreakdown: {
       wifi: { value: 0, source: 'none' },
       outlet: { value: 0, source: 'none' },
@@ -843,6 +860,47 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     .filter((v: any) => typeof v === 'number') as number[];
   const busynessValues = checkins.map((c: any) => c?.busyness).filter((v: any) => typeof v === 'number') as number[];
   const noiseValues = checkins.map((c: any) => toNoiseLevel(c?.noiseLevel)).filter((v: any) => typeof v === 'number') as number[];
+  const drinkQualityValues = checkins.map((c: any) => c?.drinkQuality).filter((v: any) => typeof v === 'number') as number[];
+  const drinkPriceValues = checkins.map((c: any) => c?.drinkPrice).filter((v: any) => typeof v === 'number') as number[];
+  const ambianceCounts: Record<string, number> = {};
+  const intentCounts: Record<string, number> = {};
+  const photoTagCounts: Record<string, number> = {};
+
+  checkins.forEach((checkin: any) => {
+    if (typeof checkin?.ambiance === 'string' && checkin.ambiance.trim()) {
+      const key = checkin.ambiance.trim().toLowerCase();
+      ambianceCounts[key] = (ambianceCounts[key] || 0) + 1;
+    }
+    if (Array.isArray(checkin?.visitIntent)) {
+      checkin.visitIntent.forEach((intent: unknown) => {
+        if (typeof intent !== 'string') return;
+        const key = intent.trim();
+        if (!key) return;
+        intentCounts[key] = (intentCounts[key] || 0) + 1;
+      });
+    }
+    if (Array.isArray(checkin?.photoTags)) {
+      checkin.photoTags.forEach((tag: unknown) => {
+        if (typeof tag !== 'string') return;
+        const key = tag.trim();
+        if (!key) return;
+        photoTagCounts[key] = (photoTagCounts[key] || 0) + 1;
+      });
+    }
+  });
+
+  const dominantAmbiance = (Object.entries(ambianceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || null) as
+    | 'cozy'
+    | 'modern'
+    | 'rustic'
+    | 'bright'
+    | 'intimate'
+    | 'energetic'
+    | null;
+  const topPhotoTags = Object.entries(photoTagCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([key]) => key);
 
   let wifiAvg = avg(wifiValues);
   const outletAvg = avg(outletValues);
@@ -980,6 +1038,42 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     momentum: { value: round(momentumBoost, 1) },
   };
 
+  const topOutletAvailability =
+    outletAvg === null
+      ? null
+      : outletAvg >= 3.6
+        ? 'plenty'
+        : outletAvg >= 2.6
+          ? 'some'
+          : outletAvg >= 1.6
+            ? 'few'
+            : 'none';
+  const vibeScores = computeVibeScores({
+    avgNoiseLevel: noiseAvg,
+    avgBusyness: adjustedBusynessAvg ?? busynessAvg,
+    avgWifiSpeed: wifiAvg,
+    avgDrinkQuality: avg(drinkQualityValues),
+    avgDrinkPrice: avg(drinkPriceValues),
+    topOutletAvailability,
+    laptopFriendlyPct: laptopPct,
+    ambiance: dominantAmbiance,
+    intentCounts,
+    tagScores,
+    photoTags: topPhotoTags,
+    externalRating: externalRatingAvg,
+    openNow: input.openNow,
+    nlp: {
+      goodForStudying: inf?.goodForStudying,
+      goodForDates: inf?.goodForDates,
+      goodForGroups: inf?.goodForGroups,
+      instagramWorthy: inf?.instagramWorthy,
+      foodQualitySignal: inf?.foodQualitySignal,
+      aestheticVibe: inf?.aestheticVibe,
+      musicAtmosphere: inf?.musicAtmosphere,
+    },
+  });
+  const primaryVibe = getPrimaryVibe(vibeScores, { hour: new Date().getHours(), openNow: input.openNow });
+
   const avgExternalReviewCount = avg(
     externalSignals
       .map((s) => s.reviewCount)
@@ -1022,9 +1116,15 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   if (reliability.score >= 0.78 && highlights.length < 4) highlights.push('High confidence model');
   if (momentum.trend === 'improving' && highlights.length < 4) highlights.push('Trending better this week');
   if (momentum.trend === 'declining' && highlights.length < 4) highlights.push('Trend watch: getting busier');
+  if (highlights.length < 4) {
+    const vibeLabel = primaryVibe.charAt(0).toUpperCase() + primaryVibe.slice(1);
+    highlights.push(`${vibeLabel} vibe match`);
+  }
 
   const payload: PlaceIntelligence = {
     workScore,
+    vibeScores,
+    primaryVibe,
     scoreBreakdown,
     crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,

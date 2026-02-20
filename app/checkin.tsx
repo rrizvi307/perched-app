@@ -61,6 +61,15 @@ function exifToLocation(exif: any) {
 }
 
 const TAG_OPTIONS = ['Quiet', 'Study', 'Social', 'Good Coffee', 'Cozy', 'Spacious', 'Late-night', 'Outdoor Seating'];
+const PHOTO_TAG_OPTIONS = ['Cozy interior', 'Aesthetic latte', 'Outdoor patio', 'Group seating', 'Cool decor', 'Food shot'];
+const AMBIANCE_OPTIONS: { key: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic'; label: string }[] = [
+	{ key: 'cozy', label: 'Cozy' },
+	{ key: 'modern', label: 'Modern' },
+	{ key: 'rustic', label: 'Rustic' },
+	{ key: 'bright', label: 'Bright' },
+	{ key: 'intimate', label: 'Intimate' },
+	{ key: 'energetic', label: 'Energetic' },
+];
 const MAX_TAGS = 4;
 
 export default function CheckinScreen() {
@@ -73,7 +82,9 @@ export default function CheckinScreen() {
 	const [hasPermission, setHasPermission] = useState<boolean | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
+	const [photoTags, setPhotoTags] = useState<string[]>([]);
 	const [visitIntent, setVisitIntent] = useState<DiscoveryIntent[]>([]);
+	const [ambiance, setAmbiance] = useState<'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null>(null);
 	const [noiseLevel, setNoiseLevel] = useState<1 | 2 | 3 | 4 | 5 | null>(null); // 1=silent, 2=quiet, 3=moderate, 4=lively, 5=loud
 	const [busyness, setBusyness] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [drinkPrice, setDrinkPrice] = useState<1 | 2 | 3 | null>(null); // 1=$, 2=$$, 3=$$$
@@ -216,7 +227,9 @@ export default function CheckinScreen() {
 						if (check.caption) setCaption(check.caption);
 						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
+						if (Array.isArray(check.photoTags)) setPhotoTags(check.photoTags.slice(0, 3));
 						if (Array.isArray(check.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(check.visitIntent));
+						if (typeof check.ambiance === 'string') setAmbiance(check.ambiance as any);
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
 					// Load metrics from edit mode
 					const convertedNoise = toNumericNoiseLevel(check.noiseLevel ?? null);
@@ -237,7 +250,9 @@ export default function CheckinScreen() {
 							if (found.caption) setCaption(found.caption);
 							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
+							if (Array.isArray(found.photoTags)) setPhotoTags(found.photoTags.slice(0, 3));
 							if (Array.isArray(found.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(found.visitIntent));
+							if (typeof found.ambiance === 'string') setAmbiance(found.ambiance as any);
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 							// Load metrics from edit mode (local fallback)
 							const convertedNoiseLocal = toNumericNoiseLevel(found.noiseLevel ?? null);
@@ -336,7 +351,9 @@ export default function CheckinScreen() {
 						setCaptured(true);
 					}
 					if (Array.isArray(draft.tags)) setSelectedTags(draft.tags);
+					if (Array.isArray(draft.photoTags)) setPhotoTags(draft.photoTags.slice(0, 3));
 					if (Array.isArray(draft.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(draft.visitIntent));
+					if (typeof draft.ambiance === 'string') setAmbiance(draft.ambiance as any);
 					if (draft.placeId || draft.location) {
 						setPlaceInfo({
 							placeId: draft.placeId,
@@ -381,7 +398,9 @@ export default function CheckinScreen() {
 			(caption && caption.trim().length) ||
 			image ||
 			(selectedTags && selectedTags.length) ||
+			(photoTags && photoTags.length) ||
 			(visitIntent && visitIntent.length) ||
+			ambiance ||
 			placeInfo ||
 			detectedPlace
 		);
@@ -399,7 +418,9 @@ export default function CheckinScreen() {
 					caption,
 					image,
 					tags: selectedTags,
+					photoTags,
 					visitIntent,
+					ambiance,
 					placeId: placeInfo?.placeId || detectedPlace?.placeId,
 					location: placeInfo?.location || detectedPlace?.location,
 					noiseLevel,
@@ -412,7 +433,7 @@ export default function CheckinScreen() {
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, visitIntent, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
+	}, [spot, caption, image, selectedTags, photoTags, visitIntent, ambiance, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -547,6 +568,17 @@ export default function CheckinScreen() {
 		});
 	}
 
+	function togglePhotoTag(tag: string) {
+		setPhotoTags((prev) => {
+			if (prev.includes(tag)) return prev.filter((entry) => entry !== tag);
+			if (prev.length >= 3) {
+				showToast('Pick up to 3 photo tags.', 'info');
+				return prev;
+			}
+			return [...prev, tag];
+		});
+	}
+
 	function resetDraftState() {
 		setSpot('');
 		setCaption('');
@@ -554,7 +586,9 @@ export default function CheckinScreen() {
 		setImageExif(null);
 		setCaptured(false);
 		setSelectedTags([]);
+		setPhotoTags([]);
 		setVisitIntent([]);
+		setAmbiance(null);
 		setPlaceInfo(null);
 		setDetectedPlace(null);
 		setDetectedCandidates([]);
@@ -639,7 +673,9 @@ export default function CheckinScreen() {
 						spotLatLng: activePlace?.location,
 						caption,
 						tags: selectedTags,
+						photoTags: photoTags.slice(0, 3),
 						visitIntent: visitIntent.slice(0, 2),
+						ambiance: ambiance ?? null,
 						visibility,
 						// Utility metrics
 						noiseLevel: noiseLevel ?? null,
@@ -699,7 +735,9 @@ export default function CheckinScreen() {
 				photoUrl: persistedImage,
 				caption,
 				tags: selectedTags,
+				photoTags: photoTags.slice(0, 3),
 				visitIntent: visitIntent.slice(0, 2),
+				ambiance: ambiance ?? null,
 				userId: uid,
 				userName: displayName,
 				userHandle: user?.handle,
@@ -727,7 +765,9 @@ export default function CheckinScreen() {
 				spotLatLng: activePlace?.location,
 				caption: caption || '',
 				tags: selectedTags,
+				photoTags: photoTags.slice(0, 3),
 				visitIntent: visitIntent.slice(0, 2),
+				ambiance: ambiance ?? null,
 				photoUrl: persistedImage,
 				campusOrCity: user?.campusOrCity || user?.city,
 				city: user?.city,
@@ -1070,6 +1110,56 @@ export default function CheckinScreen() {
 										.filter(Boolean)
 										.join(' • ')
 								: 'Choose up to 2 intents to improve recommendations for everyone.'}
+						</Text>
+
+						<Text style={{ color: muted, fontWeight: '600', marginBottom: 6 }}>Ambiance</Text>
+						<View style={styles.tagRow}>
+							{AMBIANCE_OPTIONS.map((option) => {
+								const active = ambiance === option.key;
+								return (
+									<Pressable
+										key={option.key}
+										onPress={() => setAmbiance((prev) => (prev === option.key ? null : option.key))}
+										style={({ pressed }) => [
+											styles.tagChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.12) : 'transparent',
+											},
+										]}
+									>
+										<Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '600' }}>{option.label}</Text>
+									</Pressable>
+								);
+							})}
+						</View>
+						<Text style={{ color: muted, marginBottom: 10 }}>
+							{ambiance ? `${AMBIANCE_OPTIONS.find((entry) => entry.key === ambiance)?.label} vibe selected.` : 'Optional: pick the overall vibe of the space.'}
+						</Text>
+
+						<Text style={{ color: muted, fontWeight: '600', marginBottom: 6 }}>Photo tags</Text>
+						<View style={styles.tagRow}>
+							{PHOTO_TAG_OPTIONS.map((tag) => {
+								const active = photoTags.includes(tag);
+								return (
+									<Pressable
+										key={tag}
+										onPress={() => togglePhotoTag(tag)}
+										style={({ pressed }) => [
+											styles.tagChip,
+											{
+												borderColor: inputBorder,
+												backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.12) : 'transparent',
+											},
+										]}
+									>
+										<Text style={{ color: active ? '#FFFFFF' : text, fontWeight: '600' }}>{tag}</Text>
+									</Pressable>
+								);
+							})}
+						</View>
+						<Text style={{ color: muted, marginBottom: 10 }}>
+							{photoTags.length ? `${photoTags.length}/3 photo tags selected.` : 'Optional: quick photo tags help aesthetic discovery.'}
 						</Text>
 
 						{/* Spot Intel Section - Utility Metrics */}

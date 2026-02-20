@@ -32,6 +32,8 @@ type Checkin = {
   expiresAt?: string;
   createdAt: string;
   tags?: string[];
+  photoTags?: string[];
+  ambiance?: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic';
   visitIntent?: (
     | 'hangout_friends'
     | 'date_night'
@@ -1810,7 +1812,26 @@ export async function getOnboardingComplete() {
   return await readNativeJson<boolean>(ONBOARDING_KEY, false);
 }
 
-export async function setOnboardingProfile(profile: { name?: string; city?: string; campus?: string; campusOrCity?: string; campusType?: 'campus' | 'city' }) {
+export async function setOnboardingProfile(profile: {
+  name?: string;
+  city?: string;
+  campus?: string;
+  campusOrCity?: string;
+  campusType?: 'campus' | 'city';
+  coffeeIntents?: (
+    | 'hangout_friends'
+    | 'date_night'
+    | 'coffee_quality'
+    | 'pastry_snack'
+    | 'aesthetic_photos'
+    | 'quick_pickup'
+    | 'deep_work'
+    | 'quiet_reading'
+    | 'group_study'
+    | 'late_night_open'
+  )[];
+  ambiancePreference?: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null;
+}) {
   if (isWeb()) {
     window.localStorage.setItem(ONBOARDING_PROFILE_KEY, JSON.stringify(profile || {}));
     return;

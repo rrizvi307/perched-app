@@ -1216,7 +1216,7 @@ const NLP_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 /**
  * Analyze spot reviews using GPT-4o-mini via Cloud Function.
  * Accepts { placeId, placeName, reviewTexts: string[] }.
- * Returns { noise, wifiConfidence, goodForStudying, goodForMeetings }.
+ * Returns work + coffee vibe inference signals.
  * Results are cached in Firestore for 24h to avoid repeated OpenAI calls.
  */
 export const analyzeSpotReviews = functions.https.onCall(async (data, context) => {
@@ -1234,7 +1234,22 @@ export const analyzeSpotReviews = functions.https.onCall(async (data, context) =
     throw new functions.https.HttpsError('invalid-argument', 'placeId and placeName are required');
   }
   if (reviewTexts.length === 0) {
-    return { noise: null, noiseConfidence: 0, hasWifi: false, wifiConfidence: 0, goodForStudying: false, goodForMeetings: false };
+    return {
+      noise: null,
+      noiseConfidence: 0,
+      hasWifi: false,
+      wifiConfidence: 0,
+      goodForStudying: false,
+      goodForMeetings: false,
+      dateFriendly: 0,
+      aestheticVibe: null,
+      foodQualitySignal: 0,
+      musicAtmosphere: 'unknown',
+      instagramWorthy: 0,
+      seatingComfort: 'unknown',
+      goodForDates: 0,
+      goodForGroups: 0,
+    };
   }
 
   // Check Firestore TTL cache
@@ -1270,7 +1285,15 @@ Respond with JSON matching this exact schema:
   "hasWifi": true | false,
   "wifiConfidence": 0.0 to 1.0,
   "goodForStudying": true | false,
-  "goodForMeetings": true | false
+  "goodForMeetings": true | false,
+  "dateFriendly": 0.0 to 1.0,
+  "aestheticVibe": "cozy" | "modern" | "rustic" | "industrial" | "classic" | null,
+  "foodQualitySignal": 0.0 to 1.0,
+  "musicAtmosphere": "none" | "chill" | "upbeat" | "live" | "unknown",
+  "instagramWorthy": 0.0 to 1.0,
+  "seatingComfort": "comfortable" | "basic" | "mixed" | "unknown",
+  "goodForDates": 0.0 to 1.0,
+  "goodForGroups": 0.0 to 1.0
 }
 
 Guidelines:
@@ -1280,6 +1303,14 @@ Guidelines:
 - "wifiConfidence": How certain you are based on mentions
 - "goodForStudying": True if reviews mention "study", "work", "laptop", "quiet for work"
 - "goodForMeetings": True if reviews mention "meet", "meetings", "group work"
+- "dateFriendly": Confidence this works for dates/romantic visits
+- "aestheticVibe": Dominant aesthetic style if implied
+- "foodQualitySignal": Confidence food/pastry quality is strong
+- "musicAtmosphere": Dominant music vibe if mentioned
+- "instagramWorthy": Confidence this place is photogenic
+- "seatingComfort": Comfort level implied by seating mentions
+- "goodForDates": Explicit confidence for date suitability
+- "goodForGroups": Explicit confidence for group suitability
 
 If no information is found, use null for noise and false for booleans with 0 confidence.`;
 
@@ -1318,6 +1349,18 @@ If no information is found, use null for noise and false for booleans with 0 con
     }
 
     const parsed = JSON.parse(content);
+    const aestheticVibe =
+      ['cozy', 'modern', 'rustic', 'industrial', 'classic'].includes(String(parsed.aestheticVibe))
+        ? String(parsed.aestheticVibe)
+        : null;
+    const musicAtmosphere =
+      ['none', 'chill', 'upbeat', 'live', 'unknown'].includes(String(parsed.musicAtmosphere))
+        ? String(parsed.musicAtmosphere)
+        : 'unknown';
+    const seatingComfort =
+      ['comfortable', 'basic', 'mixed', 'unknown'].includes(String(parsed.seatingComfort))
+        ? String(parsed.seatingComfort)
+        : 'unknown';
     const result = {
       noise: ['quiet', 'moderate', 'loud'].includes(parsed.noise) ? parsed.noise : null,
       noiseConfidence: Math.max(0, Math.min(1, parsed.noiseConfidence || 0)),
@@ -1325,6 +1368,14 @@ If no information is found, use null for noise and false for booleans with 0 con
       wifiConfidence: Math.max(0, Math.min(1, parsed.wifiConfidence || 0)),
       goodForStudying: Boolean(parsed.goodForStudying),
       goodForMeetings: Boolean(parsed.goodForMeetings),
+      dateFriendly: Math.max(0, Math.min(1, parsed.dateFriendly || 0)),
+      aestheticVibe,
+      foodQualitySignal: Math.max(0, Math.min(1, parsed.foodQualitySignal || 0)),
+      musicAtmosphere,
+      instagramWorthy: Math.max(0, Math.min(1, parsed.instagramWorthy || 0)),
+      seatingComfort,
+      goodForDates: Math.max(0, Math.min(1, parsed.goodForDates || 0)),
+      goodForGroups: Math.max(0, Math.min(1, parsed.goodForGroups || 0)),
     };
 
     // Cache result in Firestore

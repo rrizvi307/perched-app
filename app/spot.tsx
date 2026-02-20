@@ -426,15 +426,21 @@ export default function SpotDetail() {
           types: place?.types,
           checkins: visibleCheckins,
           tagScores: aggregatedTagScores,
-          inferred: place?.intel
-            ? {
-                noise: place.intel.inferredNoise ?? null,
-                noiseConfidence: place.intel.inferredNoiseConfidence,
-                hasWifi: place.intel.hasWifi,
-                wifiConfidence: place.intel.wifiConfidence,
-                goodForStudying: place.intel.goodForStudying,
-              }
-            : null,
+	          inferred: place?.intel
+	            ? {
+	                noise: place.intel.inferredNoise ?? null,
+	                noiseConfidence: place.intel.inferredNoiseConfidence,
+	                hasWifi: place.intel.hasWifi,
+	                wifiConfidence: place.intel.wifiConfidence,
+	                goodForStudying: place.intel.goodForStudying,
+	                goodForDates: place.intel.goodForDates,
+	                goodForGroups: place.intel.goodForGroups,
+	                instagramWorthy: place.intel.instagramWorthy,
+	                foodQualitySignal: place.intel.foodQualitySignal,
+	                aestheticVibe: place.intel.aestheticVibe,
+	                musicAtmosphere: place.intel.musicAtmosphere,
+	              }
+	            : null,
         });
         if (active) setIntelligence(payload);
       } catch {

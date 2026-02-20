@@ -27,6 +27,14 @@ export interface SpotIntelligence {
   wifiConfidence: number;
   goodForStudying: boolean;  // Derived: inferredNoise === 'quiet' && hasWifi
   goodForMeetings: boolean;  // Derived: inferredNoise !== 'loud' && avgRating >= 4.0
+  dateFriendly: number;
+  aestheticVibe: 'cozy' | 'modern' | 'rustic' | 'industrial' | 'classic' | null;
+  foodQualitySignal: number;
+  musicAtmosphere: 'none' | 'chill' | 'upbeat' | 'live' | 'unknown';
+  instagramWorthy: number;
+  seatingComfort: 'comfortable' | 'basic' | 'mixed' | 'unknown';
+  goodForDates: number;
+  goodForGroups: number;
 
   // Provenance
   source: 'api+nlp';
@@ -106,6 +114,14 @@ export async function buildSpotIntelligence(
           wifiConfidence: d.wifiConfidence || 0,
           goodForStudying: d.goodForStudying || false,
           goodForMeetings: d.goodForMeetings || false,
+          dateFriendly: d.dateFriendly || 0,
+          aestheticVibe: d.aestheticVibe || null,
+          foodQualitySignal: d.foodQualitySignal || 0,
+          musicAtmosphere: d.musicAtmosphere || 'unknown',
+          instagramWorthy: d.instagramWorthy || 0,
+          seatingComfort: d.seatingComfort || 'unknown',
+          goodForDates: d.goodForDates || 0,
+          goodForGroups: d.goodForGroups || 0,
           reviewCount: reviews.length,
           lastAnalyzed: Date.now(),
         };
@@ -132,6 +148,14 @@ export async function buildSpotIntelligence(
       wifiConfidence: nlpResult.wifiConfidence,
       goodForStudying,
       goodForMeetings,
+      dateFriendly: nlpResult.dateFriendly,
+      aestheticVibe: nlpResult.aestheticVibe,
+      foodQualitySignal: nlpResult.foodQualitySignal,
+      musicAtmosphere: nlpResult.musicAtmosphere,
+      instagramWorthy: nlpResult.instagramWorthy,
+      seatingComfort: nlpResult.seatingComfort,
+      goodForDates: nlpResult.goodForDates,
+      goodForGroups: nlpResult.goodForGroups,
       source: 'api+nlp',
       lastUpdated: Date.now(),
       reviewCount: nlpResult.reviewCount,
@@ -358,6 +382,14 @@ function getEmptyIntelligence(): SpotIntelligence {
     wifiConfidence: 0,
     goodForStudying: false,
     goodForMeetings: false,
+    dateFriendly: 0,
+    aestheticVibe: null,
+    foodQualitySignal: 0,
+    musicAtmosphere: 'unknown',
+    instagramWorthy: 0,
+    seatingComfort: 'unknown',
+    goodForDates: 0,
+    goodForGroups: 0,
     source: 'api+nlp',
     lastUpdated: Date.now(),
     reviewCount: 0,
