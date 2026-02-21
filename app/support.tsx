@@ -13,7 +13,7 @@ export default function Support() {
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
   const { showToast } = useToast();
-  const supportEmail = ((Constants.expoConfig as any)?.extra?.SUPPORT_EMAIL as string) || '';
+  const supportEmail = ((Constants.expoConfig as any)?.extra?.SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
   const instagramUrl = ((Constants.expoConfig as any)?.extra?.INSTAGRAM_URL as string) || '';
   const tiktokUrl = ((Constants.expoConfig as any)?.extra?.TIKTOK_URL as string) || '';
 
@@ -31,6 +31,31 @@ export default function Support() {
       return;
     }
     const mailto = `mailto:${supportEmail}?subject=${encodeURIComponent(subject)}`;
+    await openLinkWithFeedback(mailto, 'email app');
+  }
+
+  async function emailFeatureRequest() {
+    if (!supportEmail) {
+      showToast('Support email is not configured.', 'warning');
+      return;
+    }
+
+    const subject = 'Feature request - Perched';
+    const body = [
+      'What problem are you trying to solve?',
+      '',
+      'What feature would you like?',
+      '',
+      'How would you use it?',
+      '',
+      'How often would you use it?',
+      '',
+      'Any examples from other apps?',
+      '',
+      'Device + OS (optional):',
+      'App version (optional):',
+    ].join('\n');
+    const mailto = `mailto:${supportEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     await openLinkWithFeedback(mailto, 'email app');
   }
 
@@ -67,6 +92,10 @@ export default function Support() {
               <SocialIcon label="BUG" onPress={() => emailSupport('Bug report')} />
               <Pressable hitSlop={8} onPress={() => emailSupport('Bug report')} style={styles.iconLabel}>
                 <Text style={{ color: muted }}>Report bug</Text>
+              </Pressable>
+              <SocialIcon label="REQ" onPress={() => emailFeatureRequest()} />
+              <Pressable hitSlop={8} onPress={() => emailFeatureRequest()} style={styles.iconLabel}>
+                <Text style={{ color: muted }}>Feature request</Text>
               </Pressable>
               <SocialIcon label="DEL" onPress={() => emailSupport('Account deletion request')} />
               <Pressable hitSlop={8} onPress={() => emailSupport('Account deletion request')} style={styles.iconLabel}>
