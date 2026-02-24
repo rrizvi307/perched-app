@@ -448,7 +448,7 @@ function SuggestionCard({
       await onAdd(suggestion.id);
       setAdded(true);
     } catch (error) {
-      console.error('Failed to add friend:', error);
+      devLog('Failed to add friend:', error);
     } finally {
       setAdding(false);
     }
