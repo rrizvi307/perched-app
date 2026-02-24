@@ -265,7 +265,8 @@ export default function CheckinDetailScreen() {
                     { borderColor: primary, backgroundColor: pressed ? withAlpha(primary, 0.15) : card },
                   ]}
                 >
-                  <Text style={{ color: primary, fontWeight: '800' }}>Share</Text>
+                  <IconSymbol name="square.and.arrow.up" size={18} color={primary} />
+                  <Text style={{ color: primary, fontWeight: '800', marginLeft: 6 }}>Share</Text>
                 </Pressable>
 
                 {spotLink ? (
@@ -317,13 +318,5 @@ const styles = StyleSheet.create({
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap' },
   tag: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   actions: { flexDirection: 'row', flexWrap: 'wrap' },
-  actionButton: {
-    borderWidth: 1,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    minWidth: 110,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  actionButton: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
 });

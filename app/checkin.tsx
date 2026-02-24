@@ -1234,7 +1234,7 @@ export default function CheckinScreen() {
 													textAlign: 'center',
 												}}
 											>
-												{level === 1 ? '\u{1F507}' : level === 2 ? '\u{1F92B}' : level === 3 ? '\u{1F4AC}' : level === 4 ? '\u{1F3B6}' : '\u{1F4E2}'}
+												{level === 1 ? '🔇' : level === 2 ? '🤫' : level === 3 ? '💬' : level === 4 ? '🎉' : '📢'}
 											</Text>
 										</Pressable>
 									))}
@@ -1280,7 +1280,7 @@ export default function CheckinScreen() {
 													textAlign: 'center',
 												}}
 											>
-												{level === 1 ? '\u{1FA91}' : level === 2 ? '\u{1F464}' : level === 3 ? '\u{1F465}' : level === 4 ? '\u{1F9D1}\u{200D}\u{1F91D}\u{200D}\u{1F9D1}' : '\u{1F525}'}
+												{level === 1 ? '👻' : level === 2 ? '🧘' : level === 3 ? '👥' : level === 4 ? '😅' : '🔥'}
 											</Text>
 										</Pressable>
 									))}
@@ -1368,7 +1368,7 @@ export default function CheckinScreen() {
 													textAlign: 'center',
 												}}
 											>
-												{level === 1 ? '??' : level === 2 ? '??' : level === 3 ? '??' : level === 4 ? '??' : '?'}
+												{level === 1 ? '😐' : level === 2 ? '🙂' : level === 3 ? '😊' : level === 4 ? '😋' : '🤩'}
 											</Text>
 										</Pressable>
 									))}
@@ -1414,7 +1414,7 @@ export default function CheckinScreen() {
 													textAlign: 'center',
 												}}
 											>
-												{level === 1 ? '\u{1F422}' : level === 2 ? '\u{1F4F6}' : level === 3 ? '\u{1F4E1}' : level === 4 ? '\u{1F680}' : '\u{26A1}'}
+												{level === 1 ? '🐌' : level === 2 ? '📶' : level === 3 ? '✅' : level === 4 ? '🚀' : '⚡'}
 											</Text>
 										</Pressable>
 									))}
@@ -1438,10 +1438,10 @@ export default function CheckinScreen() {
 								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Outlets Available?</Text>
 								<View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
 									{([
-										{ key: 'plenty', label: '\u{1F50C} Plenty' },
-										{ key: 'some', label: '\u{2705} Some' },
-										{ key: 'few', label: '\u{1F90F} Few' },
-										{ key: 'none', label: '\u{274C} None' },
+										{ key: 'plenty', label: '🔌 Plenty' },
+										{ key: 'some', label: '✅ Some' },
+										{ key: 'few', label: '🤏 Few' },
+										{ key: 'none', label: '❌ None' },
 									] as const).map((option) => (
 										<Pressable
 											key={`outlet-${option.key}`}
@@ -1901,5 +1901,3 @@ export default function CheckinScreen() {
 		elevation: 6,
 	},
 });
-
-

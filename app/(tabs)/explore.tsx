@@ -1,5 +1,6 @@
 import MapView, { Marker, PROVIDER_GOOGLE } from '@/components/map/index';
 import { ThemedView } from '@/components/themed-view';
+import SpotImage from '@/components/ui/spot-image';
 import {
   FilterBottomSheet,
   isIntelV1Enabled,
@@ -94,8 +95,6 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
 const EXPLORE_REMOTE_CHECKIN_LIMIT = 140;
 const EXPLORE_SPOT_QUERY_LIMIT = 90;
 const EXPLORE_SPOT_FALLBACK_LIMIT = 140;
-const HOUSTON_CENTER = { lat: 29.7604, lng: -95.3698 };
-const HOUSTON_RADIUS_KM = 48.3;
 
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
@@ -103,11 +102,6 @@ function formatDistance(distanceKm?: number) {
   const walkMinutes = Math.max(1, Math.round((distanceKm / 5) * 60));
   if (miles < 0.1) return '< 1 min walk';
   return `${miles.toFixed(1)} mi · ${walkMinutes} min walk`;
-}
-
-function isWithinHouston(point?: { lat: number; lng: number } | null) {
-  if (!point) return false;
-  return haversine(point, HOUSTON_CENTER) <= HOUSTON_RADIUS_KM;
 }
 
 function describeSpot(name?: string, address?: string) {
@@ -361,19 +355,12 @@ export default function Explore() {
   const mapCenter = useMemo(() => {
     if (mapFocus) return mapFocus;
     if (loc) return loc;
-    return HOUSTON_CENTER;
+    return { lat: 39.83, lng: -98.58 };
   }, [mapFocus, loc]);
 
   const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
   const hasMapKey = !!mapKey;
   const canShowInteractiveMap = typeof MapView === 'function' && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
-  const mapProvider = Platform.OS === 'android' && hasMapKey ? PROVIDER_GOOGLE : undefined;
-
-  const shouldPreferHouston = useMemo(() => {
-    const focus = mapFocus || loc;
-    if (!focus) return true;
-    return !isWithinHouston(focus);
-  }, [mapFocus, loc]);
 
   const activeFilterCount = useMemo(() => getActiveFilterCount(filters), [filters]);
   const hasActiveFilterState = useMemo(() => hasActiveFilters(filters), [filters]);
@@ -753,20 +740,13 @@ export default function Explore() {
         const queryBoost = applyParsedQueryBoost(spot, parsedQuery);
         const vibeScores = deriveVibeScoresFromSpot(spot);
         const vibeMatch = rankingVibe ? vibeScores[rankingVibe] : null;
-        const coords = spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
-        const isHoustonSpot =
-          typeof coords?.lat === 'number' && typeof coords?.lng === 'number'
-            ? isWithinHouston({ lat: coords.lat, lng: coords.lng })
-            : false;
-        const houstonBoost = shouldPreferHouston && isHoustonSpot ? 0.18 : 0;
         return {
           ...spot,
           intentScore: intentSignal.score,
           intentReasons: Array.from(new Set([...(intentSignal.reasons || []), ...(queryBoost.reasons || [])])),
-          queryBoost: queryBoost.boost + houstonBoost,
+          queryBoost: queryBoost.boost,
           vibeScores,
           vibeMatch,
-          houstonBoost,
         };
       })
       .filter((spot: any) => {
@@ -826,11 +806,16 @@ export default function Explore() {
     });
 
     return list;
-  }, [displaySpots, deferredQuery, filters, parsedQuery, rankingIntent, shouldPreferHouston]);
+  }, [displaySpots, deferredQuery, filters, parsedQuery, rankingIntent]);
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
   const listData = useMemo(() => (deferredQuery.trim() ? filteredSpots : filteredSpots.slice(0, 12)), [filteredSpots, deferredQuery]);
   const markerSpots = useMemo(() => filteredSpots.slice(0, 24), [filteredSpots]);
+  const mapPreview = useMemo(() => {
+    if (!mapKey || !mapCenter) return null;
+    const center = `${mapCenter.lat},${mapCenter.lng}`;
+    return `https://maps.googleapis.com/maps/api/staticmap?center=${center}&zoom=13&size=900x360&scale=2&key=${mapKey}`;
+  }, [mapKey, mapCenter]);
 
   const timeOfDay = useMemo((): 'morning' | 'afternoon' | 'evening' => {
     const hour = new Date().getHours();
@@ -857,7 +842,7 @@ export default function Explore() {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const lastKnown = await getLastKnownLocation(2 * 60 * 1000).catch(() => null);
+      const lastKnown = await getLastKnownLocation().catch(() => null);
       if (!active || !lastKnown) return;
       setLoc((prev) => prev || lastKnown);
       setMapFocus((prev) => prev || lastKnown);
@@ -1216,7 +1201,7 @@ export default function Explore() {
             </Text>
 
             {canShowInteractiveMap ? (
-              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}>
+              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
                 {loading ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
                     {[0, 1, 2, 3].map((i) => (
@@ -1226,7 +1211,7 @@ export default function Explore() {
                 ) : null}
                 <MapView
                   ref={mapViewRef}
-                  provider={mapProvider}
+                  provider={hasMapKey ? PROVIDER_GOOGLE : undefined}
                   style={styles.map}
                   initialRegion={{
                     latitude: mapCenter.lat,
@@ -1264,8 +1249,12 @@ export default function Explore() {
                   })}
                 </MapView>
               </View>
+            ) : mapPreview ? (
+              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
+                <SpotImage source={{ uri: mapPreview }} style={styles.mapImage} />
+              </View>
             ) : (
-              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, alignItems: 'center', justifyContent: 'center' }]}>
+              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, alignItems: 'center', justifyContent: 'center' }]}> 
                 <Text style={{ color: muted }}>Map unavailable.</Text>
               </View>
             )}
@@ -1582,6 +1571,10 @@ const styles = StyleSheet.create({
   map: {
     width: '100%',
     height: 240,
+  },
+  mapImage: {
+    width: '100%',
+    height: 200,
   },
   mapLoading: {
     position: 'absolute',
