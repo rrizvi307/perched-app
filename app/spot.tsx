@@ -609,6 +609,23 @@ export default function SpotDetail() {
                 External signals: {intelligence.externalSignals.map((s) => s.source).join(' + ')}
               </Text>
             ) : null}
+            {intelligence.externalSignals.length ? (
+              <View style={styles.externalSignalsRow}>
+                {intelligence.externalSignals.map((signal) => (
+                  <View key={`ext-${signal.source}`} style={[styles.externalChip, { borderColor: border }]}>
+                    <Text style={{ color: text, fontSize: 12, fontWeight: '700', textTransform: 'capitalize' }}>
+                      {signal.source}
+                    </Text>
+                    {typeof signal.rating === 'number' ? (
+                      <Text style={{ color: muted, fontSize: 11 }}>{signal.rating.toFixed(1)}★</Text>
+                    ) : null}
+                    {typeof signal.reviewCount === 'number' ? (
+                      <Text style={{ color: muted, fontSize: 10 }}>{signal.reviewCount} reviews</Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </PolishedCard>
         ) : null}
         <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.2, marginTop: 12, marginBottom: 8 }}>
@@ -838,6 +855,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 3,
+  },
+  externalSignalsRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    ...gapStyle(8),
+  },
+  externalChip: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   cta: { paddingVertical: 12, borderRadius: 14, alignItems: 'center' },
   actionRow: { flexDirection: 'row', marginTop: 10, flexWrap: 'wrap', ...gapStyle(10) },

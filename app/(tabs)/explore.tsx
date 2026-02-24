@@ -304,6 +304,13 @@ export default function Explore() {
   const [loc, setLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'map'>('map');
+  const [mapRegion, setMapRegion] = useState<{
+    latitude: number;
+    longitude: number;
+    latitudeDelta: number;
+    longitudeDelta: number;
+  } | null>(null);
 
   const [spots, setSpots] = useState<any[]>([]);
   const [intelSpots, setIntelSpots] = useState<any[]>([]);
@@ -810,7 +817,7 @@ export default function Explore() {
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
   const listData = useMemo(() => (deferredQuery.trim() ? filteredSpots : filteredSpots.slice(0, 12)), [filteredSpots, deferredQuery]);
-  const markerSpots = useMemo(() => filteredSpots.slice(0, 24), [filteredSpots]);
+  const markerCandidates = useMemo(() => filteredSpots.slice(0, 160), [filteredSpots]);
   const mapPreview = useMemo(() => {
     if (!mapKey || !mapCenter) return null;
     const center = `${mapCenter.lat},${mapCenter.lng}`;
@@ -832,12 +839,71 @@ export default function Explore() {
 
   const handleRegionChange = useCallback((region: any) => {
     if (typeof region?.latitude !== 'number' || typeof region?.longitude !== 'number') return;
+    setMapRegion(region);
     const next = { lat: region.latitude, lng: region.longitude };
     setMapFocus((prev) => {
       if (!prev) return next;
       return haversine(prev, next) < 0.12 ? prev : next;
     });
   }, []);
+
+  const clusteredMarkers = useMemo(() => {
+    const baseRegion = mapRegion || {
+      latitude: mapCenter.lat,
+      longitude: mapCenter.lng,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    };
+    const latStep = Math.max(0.002, baseRegion.latitudeDelta / 10);
+    const lngStep = Math.max(0.002, baseRegion.longitudeDelta / 10);
+    const buckets = new Map<string, { latSum: number; lngSum: number; spots: any[] }>();
+
+    markerCandidates.forEach((spot) => {
+      const coords = spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
+      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return;
+      const latKey = Math.floor(coords.lat / latStep);
+      const lngKey = Math.floor(coords.lng / lngStep);
+      const key = `${latKey}:${lngKey}`;
+      const bucket = buckets.get(key) || { latSum: 0, lngSum: 0, spots: [] };
+      bucket.latSum += coords.lat;
+      bucket.lngSum += coords.lng;
+      bucket.spots.push({ ...spot, _coords: coords });
+      buckets.set(key, bucket);
+    });
+
+    return Array.from(buckets.entries()).map(([key, bucket]) => {
+      const count = bucket.spots.length;
+      const lat = bucket.latSum / count;
+      const lng = bucket.lngSum / count;
+      if (count === 1) {
+        const spot = bucket.spots[0];
+        return {
+          key: spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot'),
+          count,
+          lat,
+          lng,
+          spot,
+        };
+      }
+      return { key: `cluster-${key}`, count, lat, lng, spots: bucket.spots };
+    });
+  }, [markerCandidates, mapCenter, mapRegion]);
+
+  const handleClusterPress = useCallback((cluster: { lat: number; lng: number }) => {
+    const delta = mapRegion?.latitudeDelta || 0.05;
+    const nextRegion = {
+      latitude: cluster.lat,
+      longitude: cluster.lng,
+      latitudeDelta: Math.max(0.01, delta / 2),
+      longitudeDelta: Math.max(0.01, (mapRegion?.longitudeDelta || 0.05) / 2),
+    };
+    if (mapViewRef.current?.animateToRegion) {
+      mapViewRef.current.animateToRegion(nextRegion, 350);
+    } else {
+      setMapFocus({ lat: cluster.lat, lng: cluster.lng });
+      setMapRegion(nextRegion);
+    }
+  }, [mapRegion]);
 
   useEffect(() => {
     let active = true;
@@ -1187,10 +1253,32 @@ export default function Explore() {
                 ) : null}
               </Pressable>
 
-              <View style={[styles.intelBadge, { borderColor: withAlpha(primary, 0.3), backgroundColor: withAlpha(primary, 0.08) }]}>
-                <Text style={{ color: primary, fontSize: 11, fontWeight: '700' }}>
-                  {intelV1Enabled ? 'INTEL ON' : 'INTEL OFF'}
-                </Text>
+              <View style={styles.filterRightRow}>
+                <View style={[styles.intelBadge, { borderColor: withAlpha(primary, 0.3), backgroundColor: withAlpha(primary, 0.08) }]}>
+                  <Text style={{ color: primary, fontSize: 11, fontWeight: '700' }}>
+                    {intelV1Enabled ? 'INTEL ON' : 'INTEL OFF'}
+                  </Text>
+                </View>
+                <View style={[styles.viewToggle, { borderColor: border, backgroundColor: card }]}>
+                  <Pressable
+                    onPress={() => setViewMode('list')}
+                    style={({ pressed }) => [
+                      styles.viewToggleButton,
+                      viewMode === 'list' ? { backgroundColor: primary } : pressed ? { backgroundColor: highlight } : null,
+                    ]}
+                  >
+                    <IconSymbol name="square.grid.2x2" size={16} color={viewMode === 'list' ? '#FFFFFF' : text} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => setViewMode('map')}
+                    style={({ pressed }) => [
+                      styles.viewToggleButton,
+                      viewMode === 'map' ? { backgroundColor: primary } : pressed ? { backgroundColor: highlight } : null,
+                    ]}
+                  >
+                    <IconSymbol name="mappin.and.ellipse" size={16} color={viewMode === 'map' ? '#FFFFFF' : text} />
+                  </Pressable>
+                </View>
               </View>
             </View>
 
@@ -1200,7 +1288,7 @@ export default function Explore() {
                 : 'No spots match current filters.'}
             </Text>
 
-            {canShowInteractiveMap ? (
+            {viewMode === 'map' && canShowInteractiveMap ? (
               <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
                 {loading ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
@@ -1232,46 +1320,66 @@ export default function Explore() {
                     />
                   ) : null}
 
-                  {markerSpots.map((spot) => {
-                    const coords = spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
-                    if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
-                    const markerKey = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
+                  {clusteredMarkers.map((cluster) => {
+                    if (cluster.count === 1 && cluster.spot) {
+                      const spot = cluster.spot;
+                      const coords = spot?._coords || spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
+                      const markerKey = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
+                      return (
+                        <Marker
+                          key={markerKey}
+                          coordinate={{ latitude: coords.lat, longitude: coords.lng }}
+                          title={spot.name}
+                          description={spot.description || `${spot.count || 0} check-ins`}
+                          pinColor={spot.hereNowCount ? success : primary}
+                          onPress={() => openSpotSheet(spot)}
+                        />
+                      );
+                    }
+
                     return (
                       <Marker
-                        key={markerKey}
-                        coordinate={{ latitude: coords.lat, longitude: coords.lng }}
-                        title={spot.name}
-                        description={spot.description || `${spot.count || 0} check-ins`}
-                        pinColor={spot.hereNowCount ? success : primary}
-                        onPress={() => openSpotSheet(spot)}
-                      />
+                        key={cluster.key}
+                        coordinate={{ latitude: cluster.lat, longitude: cluster.lng }}
+                        title={`${cluster.count} spots`}
+                        pinColor={accent}
+                        onPress={() => handleClusterPress(cluster)}
+                        label={String(cluster.count)}
+                      >
+                        <View style={[styles.clusterBubble, { backgroundColor: accent, borderColor: withAlpha(accent, 0.35) }]}>
+                          <Text style={styles.clusterText}>{cluster.count}</Text>
+                        </View>
+                      </Marker>
                     );
                   })}
                 </MapView>
               </View>
-            ) : mapPreview ? (
+            ) : viewMode === 'map' && mapPreview ? (
               <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
                 <SpotImage source={{ uri: mapPreview }} style={styles.mapImage} />
               </View>
-            ) : (
+            ) : viewMode === 'map' ? (
               <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, alignItems: 'center', justifyContent: 'center' }]}> 
                 <Text style={{ color: muted }}>Map unavailable.</Text>
               </View>
-            )}
+            ) : null}
 
-            <View style={styles.mapOverlayRow}>
-              <Pressable
-                onPress={handleLocateMe}
-                disabled={locBusy}
-                style={({ pressed }) => [
-                  styles.mapOverlayChip,
-                  { borderColor: border, backgroundColor: pressed ? highlight : card },
-                  locBusy ? { opacity: 0.6 } : null,
-                ]}
-              >
-                <IconSymbol name="location.fill" size={16} color={loc ? primary : muted} />
-              </Pressable>
-            </View>
+            {viewMode === 'map' ? (
+              <View style={styles.mapOverlayRow}>
+                <Pressable
+                  onPress={handleLocateMe}
+                  disabled={locBusy}
+                  style={({ pressed }) => [
+                    styles.mapOverlayChip,
+                    { borderColor: border, backgroundColor: pressed ? highlight : card },
+                    locBusy ? { opacity: 0.6 } : null,
+                  ]}
+                >
+                  <IconSymbol name="location.fill" size={16} color={loc ? primary : muted} />
+                </Pressable>
+              </View>
+            ) : null}
 
             <RecommendationsCard
               userLocation={loc}
@@ -1534,6 +1642,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  filterRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   filterButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1562,6 +1675,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  viewToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 999,
+    padding: 3,
+    gap: 4,
+  },
+  viewToggleButton: {
+    width: 34,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+  },
   mapCard: {
     borderRadius: 22,
     borderWidth: 1,
@@ -1575,6 +1703,20 @@ const styles = StyleSheet.create({
   mapImage: {
     width: '100%',
     height: 200,
+  },
+  clusterBubble: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    paddingHorizontal: 6,
+  },
+  clusterText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 12,
   },
   mapLoading: {
     position: 'absolute',

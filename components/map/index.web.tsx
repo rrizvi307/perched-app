@@ -113,7 +113,7 @@ export default function MapView({ children, style, initialRegion, onRegionChange
   );
 }
 
-export function Marker({ coordinate, title, description, pinColor, onPress }: any) {
+export function Marker({ coordinate, title, description, pinColor, onPress, label }: any) {
   const ctx = useContext(MapContext);
   const surface = useThemeColor({}, 'surface');
   const primary = useThemeColor({}, 'primary');
@@ -126,11 +126,19 @@ export function Marker({ coordinate, title, description, pinColor, onPress }: an
       position: pos,
       map: ctx.map,
       title: title || undefined,
+      label: label
+        ? {
+            text: String(label),
+            color: '#FFFFFF',
+            fontSize: '12px',
+            fontWeight: '700',
+          }
+        : undefined,
     });
     if (pinColor || primary) {
       marker.setIcon({
         path: g.maps.SymbolPath.CIRCLE,
-        scale: 6,
+        scale: label ? 10 : 6,
         fillColor: pinColor || primary,
         fillOpacity: 1,
         strokeColor: surface,
