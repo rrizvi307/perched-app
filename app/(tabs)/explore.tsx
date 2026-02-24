@@ -366,7 +366,7 @@ export default function Explore() {
 
   const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
   const hasMapKey = !!mapKey;
-  const canShowInteractiveMap = typeof MapView === 'function' && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
+  const canShowInteractiveMap = typeof MapView === 'function';
   const mapProvider = Platform.OS === 'android' && hasMapKey ? PROVIDER_GOOGLE : undefined;
 
   const shouldPreferHouston = useMemo(() => {
