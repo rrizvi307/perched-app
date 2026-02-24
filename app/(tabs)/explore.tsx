@@ -24,6 +24,7 @@ import {
   getCheckinsRemote,
   getUserFriendsCached,
 } from '@/services/firebaseClient';
+import { resolvePhotoUri } from '@/services/photoSources';
 import {
   CLIENT_FILTERS,
   DEFAULT_FILTERS,
@@ -50,6 +51,7 @@ import {
 } from '@/services/discoveryIntents';
 import { applyParsedQueryBoost, parseCoffeeQuery } from '@/services/vibeSearch';
 import { deriveVibeScoresFromSpot, intentToVibe } from '@/services/vibeScoring';
+import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
 import {
   getCheckins,
   getLastKnownLocation,
@@ -226,12 +228,18 @@ function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number 
         name,
         count: 0,
         example: item,
+        seededCount: 0,
+        isSeeded: false,
         openNow: typeof item.openNow === 'boolean' ? item.openNow : undefined,
         _checkins: [],
       };
     }
 
     grouped[key].count += 1;
+    if (isSeededCheckin(item)) {
+      grouped[key].seededCount += 1;
+      grouped[key].isSeeded = true;
+    }
     grouped[key]._checkins.push(item);
     if (typeof item.openNow === 'boolean') grouped[key].openNow = item.openNow;
   });
@@ -573,17 +581,19 @@ export default function Explore() {
         }
         const items = (remote.items || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
-          if (demoMode && isCloudDemoCheckin(item) && !item?.photoPending && !item?.photoUrl) return false;
+          if (demoMode && isCloudDemoCheckin(item) && !item?.photoPending && !resolvePhotoUri(item)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
           if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
           return true;
         });
+        const normalizedItems = await normalizeCheckins(items as any);
+        const seededApplied = applySeededFallback(normalizedItems as any, 3);
 
         const focus = loc || mapFocus || mapCenter;
         const nearbyThresholdKm = 40;
-        const remoteSpots = buildSpotsFromCheckins(items, focus);
+        const remoteSpots = buildSpotsFromCheckins(seededApplied, focus);
         const hasNearbyRemote = remoteSpots.some(
           (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
         );
@@ -593,7 +603,7 @@ export default function Explore() {
         setStatus(null);
         // If remote is empty or only far-away data, try local + nearby spots fallback.
         // In demo mode, avoid local demo fallbacks to keep cloud as source of truth.
-        if (items.length === 0 || !hasNearbyRemote) {
+        if (seededApplied.length === 0 || !hasNearbyRemote) {
           if (demoMode) {
             if (active) {
               setStatus({ message: 'No cloud demo data found yet. Seed demo check-ins in Firebase.', tone: 'warning' });
@@ -601,7 +611,7 @@ export default function Explore() {
             return;
           }
           const local = await getCheckins();
-          const localScoped = (local || []).filter((item: any) => {
+          let localScoped = (local || []).filter((item: any) => {
             if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
             if (user && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
@@ -609,7 +619,12 @@ export default function Explore() {
             if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
             return true;
           });
-          const localSpots = buildSpotsFromCheckins(localScoped, focus);
+          if (!demoMode) {
+            localScoped = localScoped.filter((item: any) => !isSeededCheckin(item));
+          }
+          const normalizedLocal = await normalizeCheckins(localScoped as any);
+          const seededLocal = applySeededFallback(normalizedLocal as any, 3);
+          const localSpots = buildSpotsFromCheckins(seededLocal, focus);
           const hasNearbyLocal = localSpots.some(
             (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
           );
@@ -621,7 +636,7 @@ export default function Explore() {
             if (active && nearby.length > 0) {
               setSpots(nearby);
               setStatus({ message: 'No recent check-ins yet. Showing nearby spots.', tone: 'info' });
-            } else if (active && items.length > 0) {
+            } else if (active && seededApplied.length > 0) {
               setStatus({ message: 'Most recent check-ins are outside your area. Tap location to recenter.', tone: 'info' });
             }
           }
@@ -637,7 +652,7 @@ export default function Explore() {
           return;
         }
         const local = await getCheckins();
-        const fallback = (local || []).filter((item: any) => {
+        let fallback = (local || []).filter((item: any) => {
           if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
@@ -645,9 +660,14 @@ export default function Explore() {
           if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
           return true;
         });
+        if (!demoMode) {
+          fallback = fallback.filter((item: any) => !isSeededCheckin(item));
+        }
 
         if (!active) return;
-        setSpots(buildSpotsFromCheckins(fallback, loc || mapFocus || mapCenter));
+        const normalizedFallback = await normalizeCheckins(fallback as any);
+        const seededFallback = applySeededFallback(normalizedFallback as any, 3);
+        setSpots(buildSpotsFromCheckins(seededFallback, loc || mapFocus || mapCenter));
         setStatus({ message: 'Offline. Showing saved data.', tone: 'warning' });
       } finally {
         setRefreshing(false);
@@ -734,7 +754,9 @@ export default function Explore() {
       if (q && !name.includes(q)) return false;
 
       const maxDistanceKm = Math.max(0.5, Math.min(5, filters.distance)) * 1.60934;
-      if (typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance > maxDistanceKm) return false;
+      if (!demoMode || !spot?.isSeeded) {
+        if (typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance > maxDistanceKm) return false;
+      }
 
       if (derivedOpenNowFilter && spot?.openNow !== true) return false;
 

@@ -82,9 +82,9 @@ function main() {
     const buildNumber = Number(ios.buildNumber || 0);
 
     check(
-      semverAtLeast(version, '1.2.0'),
-      `App version is >= 1.2.0 (${version})`,
-      `App version must be >= 1.2.0 for resubmission, found ${version || 'unset'}`
+      semverAtLeast(version, '1.1.0'),
+      `App version is >= 1.1.0 (${version})`,
+      `App version must be >= 1.1.0 for resubmission, found ${version || 'unset'}`
     );
     check(
       Number.isFinite(buildNumber) && buildNumber >= 3,

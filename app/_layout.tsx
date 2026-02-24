@@ -14,6 +14,7 @@ import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncP
 import { ToastProvider, useToast } from '@/contexts/ToastContext';
 import { Colors } from '@/constants/theme';
 import { ensureDemoModeReady, isDemoMode } from '@/services/demoMode';
+import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
@@ -124,6 +125,12 @@ function InnerApp() {
       canceled = true;
       task.cancel();
     };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (isDemoMode()) return;
+    void cleanupDemoDataForRealUser(user.id);
   }, [user?.id]);
 
   useEffect(() => {

@@ -19,9 +19,10 @@ import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
-import { DEMO_USER_IDS, isCloudDemoCheckin, isDemoMode } from '@/services/demoMode';
+import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { getReactions, type ReactionType } from '@/services/social';
 import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
+import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
@@ -592,15 +593,17 @@ function FeedPhoto({
 						} catch {}
 					});
 					}
-					const cleaned = filterExpired(res.items as any);
-					let merged = await mergeRemoteWithLocal(cleaned);
-					if (demo) {
-						merged = merged.filter((item: any) => {
-							if (!isCloudDemoCheckin(item)) return true;
-							return !!resolvePhotoSrc(item) || !!item?.photoPending;
-						});
-					}
-				setItems(mergeUniqueCheckins([], merged as any));
+				const cleaned = filterExpired(res.items as any);
+				const normalized = await normalizeCheckins(cleaned as any);
+				let merged = await mergeRemoteWithLocal(normalized as any);
+				merged = applySeededFallback(merged as any, 3);
+				if (demo) {
+					merged = merged.filter((item: any) => {
+						if (!isSeededCheckin(item)) return true;
+						return !!resolvePhotoUri(item) || !!item?.photoPending;
+					});
+				}
+			setItems(mergeUniqueCheckins([], merged as any));
 			if (user) {
 				const selfRemote = merged.filter((c: any) => c.userId === user.id);
 				if (selfRemote.length) {
@@ -626,7 +629,10 @@ function FeedPhoto({
 					setPendingError(pendingSummary.error);
 				} catch {}
 					const data = await getCheckins();
-					const fallback = mergeUniqueCheckins([], filterExpired(data as any) as any);
+					let fallback = mergeUniqueCheckins([], filterExpired(data as any) as any);
+					if (!isDemoMode()) {
+						fallback = fallback.filter((item: any) => !isSeededCheckin(item));
+					}
 					if (isDemoMode()) {
 						setItems([]);
 						setStatus({ message: 'Demo feed requires cloud data. Check network or reseed cloud demo posts.', tone: 'warning' });
@@ -657,7 +663,8 @@ function FeedPhoto({
 				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
 				if (res.items && res.items.length) {
 					const cleaned = filterExpired(res.items as any);
-					setItems((prev) => mergeUniqueCheckins(prev, cleaned as any));
+					const normalized = await normalizeCheckins(cleaned as any);
+					setItems((prev) => applySeededFallback(mergeUniqueCheckins(prev, normalized as any), 3));
 					setRemoteCursor(res.lastCursor || null);
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
@@ -801,7 +808,9 @@ function FeedPhoto({
 					const unsub = subscribeCheckins((remoteItems: any[]) => {
 						const cleaned = filterExpired(remoteItems as any);
 						void (async () => {
-							const merged = await mergeRemoteWithLocal(cleaned);
+							const normalized = await normalizeCheckins(cleaned as any);
+							const seededApplied = applySeededFallback(normalized as any, 3);
+							const merged = await mergeRemoteWithLocal(seededApplied as any);
 							setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 						if (cleaned.length) {
 							setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
@@ -849,7 +858,9 @@ function FeedPhoto({
 				const unsub = subscribeCheckinsForUsers(friendIds, (remoteItems: any[]) => {
 					const cleaned = filterExpired(remoteItems as any);
 					void (async () => {
-						const merged = await mergeRemoteWithLocal(cleaned);
+						const normalized = await normalizeCheckins(cleaned as any);
+						const seededApplied = applySeededFallback(normalized as any, 3);
+						const merged = await mergeRemoteWithLocal(seededApplied as any);
 						setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 					if (cleaned.length) {
 						setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
@@ -890,7 +901,7 @@ function FeedPhoto({
 			// sanitize items for privacy: exact locations visible only to friends/owner
 				const sanitized = out.map((it: any) => {
 					if (user && blockedIdSet.has(it.userId)) return null;
-					if (isDemoMode() && isCloudDemoCheckin(it) && !it?.photoPending && !resolvePhotoSrc(it)) return null;
+					if (isDemoMode() && isSeededCheckin(it) && !it?.photoPending && !resolvePhotoUri(it)) return null;
 				if (!it.visibility) return it;
 			if (it.visibility === 'friends') {
 				const allowed = user && (friendIdSet.has(it.userId) || it.userId === user.id);

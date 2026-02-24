@@ -5,6 +5,7 @@ import { ensureFirebase } from '@/services/firebaseClient';
 import { getCacheHitRate, getCacheStats } from '@/services/cacheLayer';
 import { getPerfMetricsSnapshot } from '@/services/perfMonitor';
 import { SLO_DEFINITIONS, calculateSLOCompliance, isSLOViolation } from '@/services/sloConfig';
+import { runFirebaseDiagnostics, type FirebaseDiagnosticsResult } from '@/services/firebaseDiagnostics';
 import { withAlpha } from '@/utils/colors';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -312,6 +313,8 @@ export default function AdminObservabilityScreen() {
     size: 0,
     avgHitRate: 0,
   });
+  const [firebaseDiag, setFirebaseDiag] = useState<FirebaseDiagnosticsResult | null>(null);
+  const [firebaseDiagBusy, setFirebaseDiagBusy] = useState(false);
   const [cacheHitRate, setCacheHitRate] = useState(0);
   const [cacheTrend, setCacheTrend] = useState<ChartPoint[]>([]);
   const [calibrationSnapshot, setCalibrationSnapshot] = useState<CalibrationSnapshot | null>(null);
@@ -666,6 +669,23 @@ export default function AdminObservabilityScreen() {
     return muted;
   };
 
+  const runDiagnostics = async () => {
+    if (firebaseDiagBusy) return;
+    setFirebaseDiagBusy(true);
+    try {
+      const res = await runFirebaseDiagnostics();
+      setFirebaseDiag(res);
+    } catch (e: any) {
+      setFirebaseDiag({
+        config: { apiKeyPresent: false },
+        firestore: { status: 'fail', error: String(e?.message || e) },
+        storage: { status: 'fail', error: String(e?.message || e) },
+      });
+    } finally {
+      setFirebaseDiagBusy(false);
+    }
+  };
+
   if (adminStatus === 'checking') {
     return (
       <View style={[styles.center, { backgroundColor: background }]}> 
@@ -710,6 +730,40 @@ export default function AdminObservabilityScreen() {
           <Text style={[styles.errorText, { color: danger }]}>{errorMessage}</Text>
         </View>
       ) : null}
+
+      <View style={[styles.card, { backgroundColor: card, borderColor: border }]}> 
+        <Text style={[styles.cardTitle, { color: text }]}>Firebase Diagnostics</Text>
+        <Text style={[styles.tableSecondary, { color: muted }]}>
+          Quick health check for config, Firestore, and Storage.
+        </Text>
+        <Pressable
+          onPress={runDiagnostics}
+          style={[styles.diagnosticButton, { borderColor: border, backgroundColor: firebaseDiagBusy ? withAlpha(border, 0.2) : card }]}
+        >
+          <Text style={[styles.diagnosticButtonText, { color: text }]}>
+            {firebaseDiagBusy ? 'Running…' : 'Run diagnostics'}
+          </Text>
+        </Pressable>
+        {firebaseDiag ? (
+          <View style={{ marginTop: 10 }}>
+            <Text style={[styles.tableSecondary, { color: muted }]}>
+              Project: {firebaseDiag.config.projectId || 'unknown'}
+            </Text>
+            <Text style={[styles.tableSecondary, { color: muted }]}>
+              Storage bucket: {firebaseDiag.config.storageBucket || 'unknown'}
+            </Text>
+            <Text style={[styles.tableSecondary, { color: muted }]}>
+              API key present: {firebaseDiag.config.apiKeyPresent ? 'yes' : 'no'}
+            </Text>
+            <Text style={[styles.tableSecondary, { color: muted }]}>
+              Firestore: {firebaseDiag.firestore.status}{firebaseDiag.firestore.error ? ` — ${firebaseDiag.firestore.error}` : ''}
+            </Text>
+            <Text style={[styles.tableSecondary, { color: muted }]}>
+              Storage: {firebaseDiag.storage.status}{firebaseDiag.storage.error ? ` — ${firebaseDiag.storage.error}` : ''}
+            </Text>
+          </View>
+        ) : null}
+      </View>
 
       <View style={[styles.card, { backgroundColor: card, borderColor: border }]}> 
         <Text style={[styles.cardTitle, { color: text }]}>SLO Compliance Summary</Text>
@@ -1007,4 +1061,13 @@ const styles = StyleSheet.create({
   cacheHitRate: { fontSize: 30, fontWeight: '800', marginTop: 2 },
   cacheStatsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4, marginBottom: 4 },
   cacheStat: { fontSize: 12 },
+  diagnosticButton: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignSelf: 'flex-start',
+  },
+  diagnosticButtonText: { fontSize: 13, fontWeight: '700' },
 });
