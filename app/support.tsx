@@ -5,6 +5,8 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { openExternalLink } from '@/services/externalLinks';
 import { gapStyle } from '@/utils/layout';
 import Constants from 'expo-constants';
+import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
+import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function Support() {
@@ -59,14 +61,27 @@ export default function Support() {
     await openLinkWithFeedback(mailto, 'email app');
   }
 
-  function SocialIcon({ label, onPress }: { label: string; onPress: () => void }) {
+  function ActionButton({
+    label,
+    icon,
+    onPress,
+  }: {
+    label: string;
+    icon: ComponentProps<typeof FontAwesome5>['name'];
+    onPress: () => void;
+  }) {
     return (
       <Pressable
         hitSlop={8}
         onPress={onPress}
-        style={({ pressed }) => [styles.iconButton, { borderColor: border }, pressed ? { opacity: 0.65 } : null]}
+        style={({ pressed }) => [
+          styles.actionButton,
+          { borderColor: border, backgroundColor: pressed ? card : 'transparent' },
+          pressed ? { opacity: 0.7 } : null,
+        ]}
       >
-        <Text style={{ color: text, fontWeight: '800', letterSpacing: 1 }}>{label}</Text>
+        <FontAwesome5 name={icon} size={14} color={text} />
+        <Text style={{ color: text, fontWeight: '700', fontSize: 13 }}>{label}</Text>
       </Pressable>
     );
   }
@@ -83,47 +98,23 @@ export default function Support() {
         <Text style={{ color: text, fontWeight: '700' }}>Email</Text>
         <Text style={{ color: muted, marginTop: 6 }}>{supportEmail || 'Add SUPPORT_EMAIL in app.json'}</Text>
         {supportEmail ? (
-          <>
-            <View style={styles.iconRow}>
-              <SocialIcon label="@" onPress={() => emailSupport('Support request')} />
-              <Pressable hitSlop={8} onPress={() => emailSupport('Support request')} style={styles.iconLabel}>
-                <Text style={{ color: muted }}>Support</Text>
-              </Pressable>
-              <SocialIcon label="BUG" onPress={() => emailSupport('Bug report')} />
-              <Pressable hitSlop={8} onPress={() => emailSupport('Bug report')} style={styles.iconLabel}>
-                <Text style={{ color: muted }}>Report bug</Text>
-              </Pressable>
-              <SocialIcon label="REQ" onPress={() => emailFeatureRequest()} />
-              <Pressable hitSlop={8} onPress={() => emailFeatureRequest()} style={styles.iconLabel}>
-                <Text style={{ color: muted }}>Feature request</Text>
-              </Pressable>
-              <SocialIcon label="DEL" onPress={() => emailSupport('Account deletion request')} />
-              <Pressable hitSlop={8} onPress={() => emailSupport('Account deletion request')} style={styles.iconLabel}>
-                <Text style={{ color: muted }}>Delete</Text>
-              </Pressable>
-            </View>
-          </>
+          <View style={styles.actionRow}>
+            <ActionButton label="Support" icon="life-ring" onPress={() => emailSupport('Support request')} />
+            <ActionButton label="Report Bug" icon="bug" onPress={() => emailSupport('Bug report')} />
+            <ActionButton label="Feature Request" icon="lightbulb" onPress={() => emailFeatureRequest()} />
+            <ActionButton label="Delete Account" icon="user-slash" onPress={() => emailSupport('Account deletion request')} />
+          </View>
         ) : null}
       </View>
       {(instagramUrl || tiktokUrl) ? (
         <View style={[styles.card, { backgroundColor: card, borderColor: border, marginTop: 12 }]}>
           <Text style={{ color: text, fontWeight: '700' }}>Follow</Text>
-          <View style={styles.iconRow}>
+          <View style={styles.actionRow}>
             {instagramUrl ? (
-              <>
-                <SocialIcon label="IG" onPress={() => { void openLinkWithFeedback(instagramUrl, 'Instagram'); }} />
-                <Pressable hitSlop={8} onPress={() => { void openLinkWithFeedback(instagramUrl, 'Instagram'); }} style={styles.iconLabel}>
-                  <Text style={{ color: muted }}>Instagram</Text>
-                </Pressable>
-              </>
+              <ActionButton label="Instagram" icon="instagram" onPress={() => { void openLinkWithFeedback(instagramUrl, 'Instagram'); }} />
             ) : null}
             {tiktokUrl ? (
-              <>
-                <SocialIcon label="TT" onPress={() => { void openLinkWithFeedback(tiktokUrl, 'TikTok'); }} />
-                <Pressable hitSlop={8} onPress={() => { void openLinkWithFeedback(tiktokUrl, 'TikTok'); }} style={styles.iconLabel}>
-                  <Text style={{ color: muted }}>TikTok</Text>
-                </Pressable>
-              </>
+              <ActionButton label="TikTok" icon="tiktok" onPress={() => { void openLinkWithFeedback(tiktokUrl, 'TikTok'); }} />
             ) : null}
           </View>
         </View>
@@ -140,14 +131,14 @@ export default function Support() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20 },
   card: { borderWidth: 1, borderRadius: 16, padding: 14 },
-  iconRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 10, ...gapStyle(10) },
-  iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
+  actionRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 10, ...gapStyle(10) },
+  actionButton: {
     borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    ...gapStyle(8),
   },
-  iconLabel: { paddingRight: 10 },
 });

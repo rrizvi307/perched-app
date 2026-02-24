@@ -147,11 +147,11 @@ function toDrinkPriceLabel(value: unknown): string | null {
 }
 
 function toDrinkQualityLabel(value: unknown): string | null {
-	if (value === 1) return '😐 Poor';
-	if (value === 2) return '🙂 Below avg';
-	if (value === 3) return '😊 Decent';
-	if (value === 4) return '😋 Great';
-	if (value === 5) return '🤩 Exceptional';
+	if (value === 1) return '?? Poor';
+	if (value === 2) return '?? Below avg';
+	if (value === 3) return '?? Decent';
+	if (value === 4) return '?? Great';
+	if (value === 5) return '?? Exceptional';
 	return null;
 }
 
@@ -1245,11 +1245,12 @@ function FeedPhoto({
 						const isIncoming = !!(item.userId && incomingById.has(item.userId));
 						const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
 						const photo = resolvePhotoSrc(item);
-						const reactionCheckinId = String(item.id || (item as any).clientId || '');
-						const reactionSummary = reactionByCheckin[reactionCheckinId];
-						const selfFallback = user && item.userId === user.id
-							? (user.name || (user.handle ? `@${user.handle}` : user.email ? user.email.split('@')[0] : null))
-							: null;
+							const reactionCheckinId = String(item.id || (item as any).clientId || '');
+							const reactionSummary = reactionByCheckin[reactionCheckinId];
+							const detailId = String(item.id || (item as any).clientId || '');
+							const selfFallback = user && item.userId === user.id
+								? (user.name || (user.handle ? `@${user.handle}` : user.email ? user.email.split('@')[0] : null))
+								: null;
 						const rawUserName = typeof item.userName === 'string' ? item.userName.trim() : null;
 						const userName =
 							user && item.userId === user.id && rawUserName === 'Someone'
@@ -1277,6 +1278,7 @@ function FeedPhoto({
 							const reportPending = !!pendingActions[reportActionKey];
 							const blockPending = !!pendingActions[blockActionKey];
 							const targetIsBlocked = !!(item.userId && blockedIds.includes(item.userId));
+							const isSelf = !!(user && item.userId === user.id);
 							return (
 							<PolishedCard
 								variant="elevated"
@@ -1406,13 +1408,28 @@ function FeedPhoto({
 									) : null}
 							</View>
 
-							<FeedPhoto
-								uri={photo}
-								itemId={String((item as any).id || (item as any).clientId || '')}
-								background={background}
-								muted={muted}
-								pending={item.photoPending}
-							/>
+							{isSelf && detailId ? (
+								<Pressable
+									onPress={() => router.push(`/checkin-detail?cid=${encodeURIComponent(detailId)}` as any)}
+									style={({ pressed }) => (pressed ? { opacity: 0.9 } : null)}
+								>
+									<FeedPhoto
+										uri={photo}
+										itemId={detailId}
+										background={background}
+										muted={muted}
+										pending={item.photoPending}
+									/>
+								</Pressable>
+							) : (
+								<FeedPhoto
+									uri={photo}
+									itemId={detailId}
+									background={background}
+									muted={muted}
+									pending={item.photoPending}
+								/>
+							)}
 							<View style={styles.cardContent}>
 								<Pressable
 									onPress={() => {
@@ -1706,3 +1723,4 @@ const styles = StyleSheet.create({
 });
 
  
+
