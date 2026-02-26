@@ -305,6 +305,8 @@ export default function Explore() {
   const [mapFocus, setMapFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [locBusy, setLocBusy] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('map');
+  const flatListRef = useRef<FlatList>(null);
+  const mapTouchingRef = useRef(false);
   const [mapRegion, setMapRegion] = useState<{
     latitude: number;
     longitude: number;
@@ -1146,6 +1148,7 @@ export default function Explore() {
       <Atmosphere variant="cool" />
 
       <FlatList
+        ref={flatListRef}
         data={listData}
         keyExtractor={listKeyExtractor}
         contentContainerStyle={styles.listContent}
@@ -1289,7 +1292,21 @@ export default function Explore() {
             </Text>
 
             {viewMode === 'map' && canShowInteractiveMap ? (
-              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}> 
+              <View
+                onTouchStart={() => {
+                  mapTouchingRef.current = true;
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: false });
+                }}
+                onTouchEnd={() => {
+                  mapTouchingRef.current = false;
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
+                }}
+                onTouchCancel={() => {
+                  mapTouchingRef.current = false;
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
+                }}
+                style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}
+              > 
                 {loading ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
                     {[0, 1, 2, 3].map((i) => (
@@ -1308,6 +1325,10 @@ export default function Explore() {
                     longitudeDelta: 0.05,
                   }}
                   onRegionChangeComplete={handleRegionChange}
+                  scrollEnabled
+                  zoomEnabled
+                  rotateEnabled={false}
+                  pitchEnabled={false}
                   showsUserLocation
                   showsMyLocationButton
                 >
@@ -1698,7 +1719,7 @@ const styles = StyleSheet.create({
   },
   map: {
     width: '100%',
-    height: 240,
+    height: 300,
   },
   mapImage: {
     width: '100%',

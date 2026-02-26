@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
 type ToastTone = 'info' | 'success' | 'warning' | 'error';
@@ -52,11 +53,12 @@ export function useToast() {
 }
 
 function ToastViewport({ toasts }: { toasts: Toast[] }) {
+  const insets = useSafeAreaInsets();
   const border = useThemeColor({}, 'border');
   const text = useThemeColor({}, 'text');
   const bg = useThemeColor({}, 'card');
   return (
-    <View pointerEvents="none" style={styles.viewport}>
+    <View pointerEvents="none" style={[styles.viewport, { top: Math.max(insets.top + 4, 12) }]}>
       {toasts.map((t) => (
         <View key={t.id} style={[styles.toast, { borderColor: border, backgroundColor: bg }]}>
           <Text style={[styles.toastText, { color: text }]}>{t.message}</Text>

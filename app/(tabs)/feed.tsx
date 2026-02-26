@@ -597,12 +597,10 @@ function FeedPhoto({
 				const normalized = await normalizeCheckins(cleaned as any);
 				let merged = await mergeRemoteWithLocal(normalized as any);
 				merged = applySeededFallback(merged as any, 3);
-				if (demo) {
-					merged = merged.filter((item: any) => {
-						if (!isSeededCheckin(item)) return true;
-						return !!resolvePhotoUri(item) || !!item?.photoPending;
-					});
-				}
+				merged = merged.filter((item: any) => {
+					if (!isSeededCheckin(item)) return true;
+					return !!resolvePhotoUri(item) || !!item?.photoPending;
+				});
 			setItems(mergeUniqueCheckins([], merged as any));
 			if (user) {
 				const selfRemote = merged.filter((c: any) => c.userId === user.id);
@@ -904,7 +902,7 @@ function FeedPhoto({
 			// sanitize items for privacy: exact locations visible only to friends/owner
 				const sanitized = out.map((it: any) => {
 					if (user && blockedIdSet.has(it.userId)) return null;
-					if (isDemoMode() && isSeededCheckin(it) && !it?.photoPending && !resolvePhotoUri(it)) return null;
+					if (isSeededCheckin(it) && !it?.photoPending && !resolvePhotoUri(it)) return null;
 				if (!it.visibility) return it;
 			if (it.visibility === 'friends') {
 				const allowed = user && (friendIdSet.has(it.userId) || it.userId === user.id);
