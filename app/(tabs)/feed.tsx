@@ -664,7 +664,10 @@ function FeedPhoto({
 				if (res.items && res.items.length) {
 					const cleaned = filterExpired(res.items as any);
 					const normalized = await normalizeCheckins(cleaned as any);
-					setItems((prev) => applySeededFallback(mergeUniqueCheckins(prev, normalized as any), 3));
+					setItems((prev) => {
+						const result = applySeededFallback(mergeUniqueCheckins(prev, normalized as any), 3) as Checkin[];
+						return result;
+					});
 					setRemoteCursor(res.lastCursor || null);
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
