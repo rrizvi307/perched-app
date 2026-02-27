@@ -14,7 +14,7 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportUserRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
+import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
@@ -31,7 +31,7 @@ import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks'
 import { trackScreenLoad } from '@/services/perfMonitor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
+import { FlatList, InteractionManager, Linking, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
 
 type Checkin = {
 	id: string;
@@ -1271,11 +1271,9 @@ function FeedPhoto({
 							].filter(Boolean) as string[];
 							const profileActionKey = `profile:${item.userId || 'none'}:${reactionCheckinId}`;
 							const closeActionKey = `close:${item.userId || 'none'}:${reactionCheckinId}`;
-							const reportActionKey = `report:${reactionCheckinId}`;
 							const blockActionKey = `block:${item.userId || 'none'}`;
 							const profilePending = !!pendingActions[profileActionKey];
 							const closePending = !!pendingActions[closeActionKey];
-							const reportPending = !!pendingActions[reportActionKey];
 							const blockPending = !!pendingActions[blockActionKey];
 							const targetIsBlocked = !!(item.userId && blockedIds.includes(item.userId));
 							return (
@@ -1462,7 +1460,13 @@ function FeedPhoto({
 										hitSlop={8}
 										onPress={async () => {
 											try {
-													const message = `${item.spot}${(item as any).caption ? '\n' + (item as any).caption : ''}\nSee on Perched.`;
+													const spotTitle = (item as any).spotName || item.spot || 'Check this spot';
+						const posterHandle = (item as any).userHandle ? `@${(item as any).userHandle}` : null;
+						const selfHandle = user?.handle ? `@${user.handle}` : null;
+						const addMeLine = selfHandle ? `Add me on Perched: ${selfHandle}` : 'Check out Perched';
+						const creditLine = posterHandle && posterHandle !== selfHandle ? `${posterHandle} checked in at ${spotTitle}` : `Checked in at ${spotTitle}`;
+						const captionLine = (item as any).caption ? `\n${(item as any).caption}` : '';
+						const message = `${creditLine}${captionLine}\n\n${addMeLine}`;
 												await Share.share({ message });
 												await logEvent('checkin_shared', user?.id, { id: item.id });
 											} catch {
@@ -1479,32 +1483,21 @@ function FeedPhoto({
 									<Pressable
 										hitSlop={8}
 										onPress={async () => {
-											if (!beginAction(reportActionKey)) return;
 											try {
-												await logEvent('checkin_reported', user?.id, { id: item.id });
-												try {
-													const { reportCheckinRemote } = await import('@/services/moderation');
-													await reportCheckinRemote(item.id, user?.id as any, undefined, item.userId, item.spotName || item.spot);
-												} catch {}
-												if (user && item.userId) {
-													await reportUserRemote(user.id, item.userId, 'reported_from_feed');
-												}
-												setItems((prev) => prev.filter((p: any) => p.id !== item.id));
-												showToast('Report submitted. This check-in was hidden from your feed.', 'success');
-											} catch (error) {
-												devLog('report action failed', error);
-												showToast('Unable to submit report right now.', 'error');
-											} finally {
-												endAction(reportActionKey);
+												const spotTitle = (item as any).spotName || item.spot || 'a spot';
+												const subject = encodeURIComponent(`Report: Check-in at ${spotTitle}`);
+												const body = encodeURIComponent(`I'd like to report a check-in.\n\nCheck-in ID: ${item.id}\nSpot: ${spotTitle}\n\nReason:`);
+												await Linking.openURL(`mailto:perchedappteam@gmail.com?subject=${subject}&body=${body}`);
+											} catch {
+												showToast('Open your email app to report: perchedappteam@gmail.com', 'info');
 											}
 										}}
 										style={({ pressed }) => [
 											styles.footerButton,
 											pressed ? { opacity: 0.6 } : null,
 										]}
-										disabled={reportPending}
 									>
-										<Text style={{ color: muted }}>{reportPending ? 'Reporting…' : 'Report'}</Text>
+										<Text style={{ color: muted }}>Report</Text>
 									</Pressable>
 									{user && item.userId && item.userId !== user.id ? (
 										<Pressable

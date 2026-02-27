@@ -135,8 +135,9 @@ service cloud.firestore {
 
     // Friend requests collection
     match /friendRequests/{requestId} {
-      // Users can read requests involving them
+      // Users can read requests involving them (resource == null means doc doesn't exist — allow so existence checks work)
       allow read: if isAuthenticated() && (
+        resource == null ||
         resource.data.fromId == request.auth.uid ||
         resource.data.toId == request.auth.uid
       );

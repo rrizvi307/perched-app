@@ -83,7 +83,7 @@ export default function SignUp() {
   const isHandleValid = !!normalizedHandle && normalizedHandle.length >= 3 && /^[a-z0-9_.]{3,20}$/.test(normalizedHandle);
   const isCityValid = !!city;
   const handleReady = handleAvailability !== 'checking' && handleAvailability !== 'taken' && handleAvailability !== 'invalid';
-  const canSubmitEmail = isEmailValid && isPasswordValid && isHandleValid && isCityValid && handleReady && !loading;
+  const canSubmitEmail = isEmailValid && isPasswordValid && isPhoneValid && isHandleValid && isCityValid && handleReady && !loading;
   const canSubmitPhone = isPhoneValid && isHandleValid && isCityValid && handleReady && !!verificationId && smsCode.trim().length >= 4 && !verifyingCode;
   const canSubmit = authMode === 'email' ? canSubmitEmail : canSubmitPhone;
   const submitting = authMode === 'email' ? loading : verifyingCode;
@@ -220,7 +220,7 @@ export default function SignUp() {
 
     if (!isEmailValid) return alert('Enter a valid email');
     if (!isPasswordValid) return alert('Password must be at least 6 characters');
-    if (phone.trim() && !isPhoneValid) return alert('Enter a valid phone number (include area code).');
+    if (!isPhoneValid) return alert('Enter a valid phone number (include area code).');
     setLoading(true);
     const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -547,7 +547,7 @@ export default function SignUp() {
               <Text style={{ color: muted, marginBottom: 8 }}>Use at least 6 characters.</Text>
             )}
 
-            <Label>Phone (optional)</Label>
+            <Label>Phone</Label>
             <TextInput
               placeholder="+1 555 123 4567"
               placeholderTextColor={muted}
@@ -556,7 +556,11 @@ export default function SignUp() {
               style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
               keyboardType="phone-pad"
             />
-            <Text style={{ color: muted, marginBottom: 8 }}>Add your number so friends can find you.</Text>
+            {phone.trim() && !isPhoneValid ? (
+              <Text style={{ color: danger, marginBottom: 8 }}>Enter a valid phone number with area code.</Text>
+            ) : (
+              <Text style={{ color: muted, marginBottom: 8 }}>Required — lets friends find you by number.</Text>
+            )}
           </>
         ) : (
           <>

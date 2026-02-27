@@ -1,6 +1,6 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
-import React from 'react';
+import React, { useMemo } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -21,7 +21,10 @@ export default function TabLayout() {
   const { width } = useWindowDimensions();
   const compactTabs = width < 360;
   const iconSize = width < 360 ? 22 : width < 420 ? 24 : 26;
-  const tabsProps = { tabBar: (props: any) => <AppTabBar {...props} compact={compactTabs} iconSize={iconSize} /> };
+  const tabsProps = useMemo(
+    () => ({ tabBar: (props: any) => <AppTabBar {...props} compact={compactTabs} iconSize={iconSize} /> }),
+    [compactTabs, iconSize],
+  );
 
   const navReady = !!rootNavigationState?.key;
 

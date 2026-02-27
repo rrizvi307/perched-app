@@ -92,6 +92,8 @@ export default function CheckinScreen() {
 	const [wifiSpeed, setWifiSpeed] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 	const [outletAvailability, setOutletAvailability] = useState<'plenty' | 'some' | 'few' | 'none' | null>(null);
 	const [laptopFriendly, setLaptopFriendly] = useState<boolean | null>(null);
+	const [parkingAvailability, setParkingAvailability] = useState<'yes' | 'limited' | 'no' | null>(null);
+	const [parkingType, setParkingType] = useState<'lot' | 'street' | 'garage' | null>(null);
 	// no direct Camera ref — using ImagePicker.launchCameraAsync for camera-first flow
 	const router = useRouter();
 	const rootNavigationState = useRootNavigationState();
@@ -370,6 +372,8 @@ export default function CheckinScreen() {
 					if (typeof draft.wifiSpeed === 'number') setWifiSpeed(draft.wifiSpeed);
 					if (typeof draft.outletAvailability === 'string') setOutletAvailability(draft.outletAvailability as any);
 					if (typeof draft.laptopFriendly === 'boolean') setLaptopFriendly(draft.laptopFriendly);
+					if (typeof draft.parkingAvailability === 'string') setParkingAvailability(draft.parkingAvailability as any);
+					if (typeof draft.parkingType === 'string') setParkingType(draft.parkingType as any);
 				}
 			} catch {}
 			draftLoadedRef.current = true;
@@ -430,10 +434,12 @@ export default function CheckinScreen() {
 					wifiSpeed,
 					outletAvailability,
 					laptopFriendly,
+					parkingAvailability,
+					parkingType,
 				});
 		}, 400);
 		return () => clearTimeout(timer);
-	}, [spot, caption, image, selectedTags, photoTags, visitIntent, ambiance, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly]);
+	}, [spot, caption, image, selectedTags, photoTags, visitIntent, ambiance, placeInfo, detectedPlace, noiseLevel, busyness, drinkPrice, drinkQuality, wifiSpeed, outletAvailability, laptopFriendly, parkingAvailability, parkingType]);
 
 	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
 		const toRad = (v: number) => (v * Math.PI) / 180;
@@ -685,6 +691,8 @@ export default function CheckinScreen() {
 						wifiSpeed: wifiSpeed ?? null,
 						outletAvailability: outletAvailability ?? null,
 						laptopFriendly: laptopFriendly ?? null,
+						parkingAvailability: parkingAvailability ?? null,
+						parkingType: parkingType ?? null,
 					};
 					await fb.updateCheckinRemote(editId, updates);
 					// update local copy
@@ -754,6 +762,8 @@ export default function CheckinScreen() {
 				wifiSpeed: wifiSpeed ?? null,
 				outletAvailability: outletAvailability ?? null,
 				laptopFriendly: laptopFriendly ?? null,
+				parkingAvailability: parkingAvailability ?? null,
+				parkingType: parkingType ?? null,
 			} as any;
 			const pendingPayload = {
 				userId: uid,
@@ -782,6 +792,8 @@ export default function CheckinScreen() {
 				wifiSpeed: wifiSpeed ?? null,
 				outletAvailability: outletAvailability ?? null,
 				laptopFriendly: laptopFriendly ?? null,
+				parkingAvailability: parkingAvailability ?? null,
+				parkingType: parkingType ?? null,
 			};
 			try {
 				const savedLocal = await saveCheckin(localPayload as any);
@@ -1280,7 +1292,7 @@ export default function CheckinScreen() {
 													textAlign: 'center',
 												}}
 											>
-												{level === 1 ? '👻' : level === 2 ? '🧘' : level === 3 ? '👥' : level === 4 ? '😅' : '🔥'}
+												{level === 1 ? '1️⃣' : level === 2 ? '2️⃣' : level === 3 ? '3️⃣' : level === 4 ? '4️⃣' : '5️⃣'}
 											</Text>
 										</Pressable>
 									))}
@@ -1543,6 +1555,70 @@ export default function CheckinScreen() {
 										: 'Would you bring your laptop here?'}
 								</Text>
 							</View>
+
+							<View style={{ marginBottom: 16 }}>
+								<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Parking Available?</Text>
+								<View style={{ flexDirection: 'row', gap: 8 }}>
+									{([
+										{ key: 'yes', label: '🟢 Yes' },
+										{ key: 'limited', label: '🟡 Limited' },
+										{ key: 'no', label: '🔴 None' },
+									] as const).map((option) => (
+										<Pressable
+											key={`parking-avail-${option.key}`}
+											onPress={() => {
+												void safeImpact();
+												setParkingAvailability(parkingAvailability === option.key ? null : option.key);
+											}}
+											style={[
+												styles.metricChip,
+												{
+													borderColor: inputBorder,
+													backgroundColor: parkingAvailability === option.key ? primary : 'transparent',
+													minWidth: 86,
+												},
+											]}
+										>
+											<Text style={{ color: parkingAvailability === option.key ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+												{option.label}
+											</Text>
+										</Pressable>
+									))}
+								</View>
+							</View>
+
+							{parkingAvailability === 'yes' || parkingAvailability === 'limited' ? (
+								<View style={{ marginBottom: 16 }}>
+									<Text style={{ color: muted, fontWeight: '600', marginBottom: 8 }}>Parking Type</Text>
+									<View style={{ flexDirection: 'row', gap: 8 }}>
+										{([
+											{ key: 'lot', label: '🅿️ Lot' },
+											{ key: 'street', label: '🚗 Street' },
+											{ key: 'garage', label: '🏢 Garage' },
+										] as const).map((option) => (
+											<Pressable
+												key={`parking-type-${option.key}`}
+												onPress={() => {
+													void safeImpact();
+													setParkingType(parkingType === option.key ? null : option.key);
+												}}
+												style={[
+													styles.metricChip,
+													{
+														borderColor: inputBorder,
+														backgroundColor: parkingType === option.key ? primary : 'transparent',
+														minWidth: 86,
+													},
+												]}
+											>
+												<Text style={{ color: parkingType === option.key ? '#FFFFFF' : text, fontWeight: '600', textAlign: 'center' }}>
+													{option.label}
+												</Text>
+											</Pressable>
+										))}
+									</View>
+								</View>
+							) : null}
 						</View>
 
 						<View style={{ height: 8 }} />

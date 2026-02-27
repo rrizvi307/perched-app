@@ -181,7 +181,7 @@ export default function StoryCardScreen() {
   async function writeJpegToCache(base64: string) {
     const dir = cacheDirectory || documentDirectory;
     if (!dir) throw new Error('No writable directory available');
-    const uri = `${dir}perched-story-card-${Date.now()}.jpg`;
+    const uri = `${dir}PerchedRecap.jpg`;
     await writeAsStringAsync(uri, base64, { encoding: EncodingType.Base64 });
     return uri;
   }

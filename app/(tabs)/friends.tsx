@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import * as Contacts from 'expo-contacts';
 import {
   View,
   Text,
@@ -287,57 +288,64 @@ export default function FriendsScreen() {
 
   const handleSyncContacts = async () => {
     try {
-      const req: any = eval('require');
-      const Contacts = req('expo-contacts');
-      if (!Contacts?.requestPermissionsAsync) {
-        showToast('Contacts unavailable on this build', 'error');
-        return;
-      }
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== 'granted') {
-        showToast('Contacts permission denied', 'error');
+        showToast('Contacts permission denied. Enable it in Settings.', 'error');
         return;
       }
-      const fields = [Contacts.Fields.Emails];
-      if (Contacts.Fields.PhoneNumbers) fields.push(Contacts.Fields.PhoneNumbers);
-      const { data } = await Contacts.getContactsAsync({ fields });
-      const emails: string[] = (data || [])
-        .flatMap((c: any) => (c.emails || []).map((e: any) => e.email))
-        .filter((v: any): v is string => typeof v === 'string' && v.includes('@'));
-      const unique = Array.from(new Set(emails)).slice(0, 30);
-      if (unique.length === 0) {
-        showToast('No email contacts found', 'info');
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.Emails, Contacts.Fields.PhoneNumbers],
+      });
+      // Collect phone numbers and emails from contacts
+      const phones: string[] = [];
+      const emails: string[] = [];
+      (data || []).forEach((c: any) => {
+        (c.phoneNumbers || []).forEach((p: any) => {
+          if (p.number) phones.push(p.number.replace(/\D/g, ''));
+        });
+        (c.emails || []).forEach((e: any) => {
+          if (e.email && e.email.includes('@')) emails.push(e.email);
+        });
+      });
+      const uniquePhones = Array.from(new Set(phones)).slice(0, 50);
+      const uniqueEmails = Array.from(new Set(emails)).slice(0, 30);
+      if (uniquePhones.length === 0 && uniqueEmails.length === 0) {
+        showToast('No contacts found', 'info');
         return;
       }
       const matched = new Map<string, FriendUser>();
-      await Promise.all(
-        unique.map(async (email) => {
+      await Promise.all([
+        ...uniquePhones.map(async (phone) => {
           try {
-            const results = await searchUsers(email, 3);
+            const results = await searchUsers(phone, 3);
             results.forEach((u: any) => {
               if (u.id !== user?.id && !matched.has(u.id)) {
-                matched.set(u.id, {
-                  id: u.id,
-                  name: u.name || 'Unknown',
-                  handle: u.handle,
-                  photoUrl: u.photoUrl,
-                  campus: u.campus || u.campusOrCity,
-                });
+                matched.set(u.id, { id: u.id, name: u.name || 'Unknown', handle: u.handle, photoUrl: u.photoUrl, campus: u.campus || u.campusOrCity });
               }
             });
           } catch {}
         }),
-      );
+        ...uniqueEmails.map(async (email) => {
+          try {
+            const results = await searchUsers(email, 3);
+            results.forEach((u: any) => {
+              if (u.id !== user?.id && !matched.has(u.id)) {
+                matched.set(u.id, { id: u.id, name: u.name || 'Unknown', handle: u.handle, photoUrl: u.photoUrl, campus: u.campus || u.campusOrCity });
+              }
+            });
+          } catch {}
+        }),
+      ]);
       if (matched.size === 0) {
-        showToast('No matches found in contacts', 'info');
+        showToast('No contacts found on Perched yet', 'info');
       } else {
         setSearchResults(Array.from(matched.values()));
         setSearchQuery('Contacts');
-        showToast(`Found ${matched.size} contact(s) on Perched`, 'success');
+        showToast(`Found ${matched.size} contact${matched.size === 1 ? '' : 's'} on Perched`, 'success');
       }
     } catch (err) {
       devLog('contacts sync failed', err);
-      showToast('Unable to sync contacts', 'error');
+      showToast('Unable to access contacts', 'error');
     }
   };
 
@@ -508,30 +516,6 @@ export default function FriendsScreen() {
 
   const ListHeader = () => (
     <View>
-      <View style={[styles.searchBar, { backgroundColor: card, borderBottomColor: border }]}>
-        <View style={[styles.searchField, { backgroundColor: withAlpha(muted, 0.08), borderColor: border }]}>
-          <IconSymbol name="magnifyingglass" size={16} color={muted} />
-          <TextInput
-            style={[styles.searchInput, { color: text }]}
-            placeholder="Search name, @handle, or email..."
-            placeholderTextColor={muted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <Pressable onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
-              <IconSymbol name="xmark.circle.fill" size={16} color={muted} />
-            </Pressable>
-          )}
-        </View>
-        <Pressable onPress={handleSyncContacts} style={styles.syncBtn} hitSlop={6}>
-          <IconSymbol name="phone.fill" size={18} color={primary} />
-        </Pressable>
-      </View>
-
       {!isSearchActive && incomingReqs.length > 0 && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -601,6 +585,29 @@ export default function FriendsScreen() {
 
   return (
     <ThemedView style={{ flex: 1 }}>
+      <View style={[styles.searchBar, { backgroundColor: card, borderBottomColor: border }]}>
+        <View style={[styles.searchField, { backgroundColor: withAlpha(muted, 0.08), borderColor: border }]}>
+          <IconSymbol name="magnifyingglass" size={16} color={muted} />
+          <TextInput
+            style={[styles.searchInput, { color: text }]}
+            placeholder="Search name, @handle, or email..."
+            placeholderTextColor={muted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <Pressable onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
+              <IconSymbol name="xmark.circle.fill" size={16} color={muted} />
+            </Pressable>
+          )}
+        </View>
+        <Pressable onPress={handleSyncContacts} style={styles.syncBtn} hitSlop={6}>
+          <IconSymbol name="phone.fill" size={18} color={primary} />
+        </Pressable>
+      </View>
       <FlatList
         data={listData}
         keyExtractor={(item) => item.id}
@@ -609,7 +616,8 @@ export default function FriendsScreen() {
         ListFooterComponent={ListFooter}
         ListEmptyComponent={ListEmpty}
         contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="none"
         showsVerticalScrollIndicator={false}
         refreshing={refreshing}
         onRefresh={handleRefresh}
