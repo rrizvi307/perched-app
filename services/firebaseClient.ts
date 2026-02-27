@@ -1592,6 +1592,7 @@ export async function createUserRemote({
   const normalizedPhone = normalizePhone(phone || '');
   const payload = sanitizeFields({
     name,
+    nameLower: typeof name === 'string' ? name.toLowerCase() : null,
     city: city || null,
     campus: campus || null,
     campusOrCity: campusOrCity || city || null,
@@ -1616,9 +1617,11 @@ export async function updateUserRemote(userId: string, fields: any) {
     Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
   const db = fb.firestore();
   const normalizedPhone = fields?.phone ? normalizePhone(fields.phone) : undefined;
+  const nameLower = typeof fields?.name === 'string' ? fields.name.toLowerCase() : undefined;
   const payload = sanitizeFields({
     ...fields,
     phoneNormalized: normalizedPhone ?? fields?.phoneNormalized,
+    nameLower: nameLower ?? fields?.nameLower,
     updatedAt: fb.firestore.FieldValue.serverTimestamp(),
   });
   await db.collection('users').doc(userId).set(payload, { merge: true });
@@ -1667,6 +1670,59 @@ export async function findUserByHandle(handle: string) {
   const doc = q.docs[0];
   return { id: doc.id, ...(doc.data() || {}) };
 }
+
+/**
+ * Search users by name or handle prefix.
+ * Returns up to `limit` results matching the query as a prefix.
+ */
+export async function searchUsers(query: string, limit = 10): Promise<any[]> {
+  const trimmed = (query || '').trim().toLowerCase();
+  if (!trimmed) return [];
+  const prefix = trimmed.replace(/^@/, '');
+  const prefixEnd = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+  const fb = ensureFirebase();
+  if (!fb) {
+    const users = readLocalUsers();
+    return users.filter((u: any) => {
+      const name = (u.name || '').toLowerCase();
+      const handle = (u.handle || '').toLowerCase();
+      return name.includes(prefix) || handle.startsWith(prefix);
+    }).slice(0, limit);
+  }
+
+  const db = fb.firestore();
+  const results = new Map<string, any>();
+
+  // Search by handle prefix
+  try {
+    const handleSnap = await db.collection('users')
+      .where('handle', '>=', prefix)
+      .where('handle', '<', prefixEnd)
+      .limit(limit)
+      .get();
+    for (const doc of handleSnap.docs) {
+      results.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+    }
+  } catch {}
+
+  // Search by nameLower prefix (if the field exists)
+  try {
+    const nameSnap = await db.collection('users')
+      .where('nameLower', '>=', prefix)
+      .where('nameLower', '<', prefixEnd)
+      .limit(limit)
+      .get();
+    for (const doc of nameSnap.docs) {
+      if (!results.has(doc.id)) {
+        results.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+      }
+    }
+  } catch {}
+
+  return Array.from(results.values()).slice(0, limit);
+}
+
 export async function getUsersByIds(userIds: string[]) {
   const fb = ensureFirebase();
   if (!fb) {

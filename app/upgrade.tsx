@@ -195,10 +195,6 @@ export default function UpgradeAccount() {
                 </>
               ) : null}
               <Button onPress={handleChangePassword}>Change password</Button>
-              <View style={{ height: 12 }} />
-              <Button onPress={handleDeleteAccount} style={{ backgroundColor: danger }}>
-                Delete account
-              </Button>
             </>
           )}
         </ScrollView>

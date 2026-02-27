@@ -15,6 +15,7 @@ import { useToast } from '@/contexts/ToastContext';
 import {
   findUserByEmail,
   findUserByHandle,
+  searchUsers,
   sendFriendRequest,
   getUsersByCampus,
   getUserFriends,
@@ -152,24 +153,27 @@ export default function FindFriendsScreen() {
 
     try {
       const query = searchQuery.trim();
-      let foundUser: any = null;
+      const foundUsers: any[] = [];
 
-      // Search by handle if starts with @ or doesn't look like email
-      if (query.startsWith('@') || !query.includes('@')) {
-        foundUser = await findUserByHandle(query.replace(/^@/, ''));
+      // 1. Prefix search by name and handle (like Instagram)
+      const prefixResults = await searchUsers(query, 10);
+      for (const u of prefixResults) {
+        if (u.id !== user.id) foundUsers.push(u);
       }
 
-      // If not found by handle and looks like email, search by email
-      if (!foundUser && query.includes('@')) {
-        foundUser = await findUserByEmail(query);
+      // 2. If query looks like an email and prefix search found nothing, try exact email match
+      if (foundUsers.length === 0 && query.includes('@') && !query.startsWith('@')) {
+        const byEmail = await findUserByEmail(query);
+        if (byEmail && byEmail.id !== user.id) foundUsers.push(byEmail);
       }
 
-      // If still not found and didn't start with @, try handle search
-      if (!foundUser && !query.startsWith('@') && !query.includes('@')) {
-        foundUser = await findUserByHandle(query);
+      // 3. If still nothing, try exact handle match as fallback
+      if (foundUsers.length === 0) {
+        const byHandle = await findUserByHandle(query.replace(/^@/, ''));
+        if (byHandle && byHandle.id !== user.id) foundUsers.push(byHandle);
       }
 
-      if (foundUser && foundUser.id !== user.id) {
+      if (foundUsers.length > 0) {
         const [currentFriends, outgoingRequests] = await Promise.all([
           getUserFriends(user.id),
           getOutgoingFriendRequests(user.id),
@@ -178,20 +182,28 @@ export default function FindFriendsScreen() {
         const friendSet = new Set(currentFriends);
         const pendingSet = new Set(outgoingRequests.map((r: any) => r.toId));
 
-        setSearchResults([{
-          id: foundUser.id,
-          name: foundUser.name || 'Unknown',
-          handle: foundUser.handle,
-          photoUrl: foundUser.photoUrl,
-          campus: foundUser.campus || foundUser.campusOrCity,
-          isFriend: friendSet.has(foundUser.id),
-          isPending: pendingSet.has(foundUser.id),
-        }]);
+        // Deduplicate by id
+        const seen = new Set<string>();
+        const results: UserResult[] = [];
+        for (const u of foundUsers) {
+          if (seen.has(u.id)) continue;
+          seen.add(u.id);
+          results.push({
+            id: u.id,
+            name: u.name || 'Unknown',
+            handle: u.handle,
+            photoUrl: u.photoUrl,
+            campus: u.campus || u.campusOrCity,
+            isFriend: friendSet.has(u.id),
+            isPending: pendingSet.has(u.id),
+          });
+        }
+        setSearchResults(results);
       } else {
         setSearchResults([]);
       }
 
-      void logEvent('friend_search', user.id, { query: query.includes('@') ? 'email' : 'handle' });
+      void logEvent('friend_search', user.id, { query: query.includes('@') ? 'email' : 'name_or_handle' });
     } catch (error) {
       ok = false;
       devLog('Search failed:', error);
@@ -201,6 +213,21 @@ export default function FindFriendsScreen() {
       void endPerfMark(markId, ok, { queryLength: searchQuery.trim().length });
     }
   }, [searchQuery, user?.id]);
+
+  // Debounced auto-search as user types (300ms delay)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      if (!q) { setSearchResults([]); setHasSearched(false); }
+      return;
+    }
+    debounceRef.current = setTimeout(() => {
+      void handleSearch();
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [searchQuery, handleSearch]);
 
   const handleSendRequest = async (targetUser: UserResult) => {
     if (!user?.id || targetUser.isFriend || targetUser.isPending) return;
@@ -324,7 +351,7 @@ export default function FindFriendsScreen() {
           <IconSymbol name="magnifyingglass" size={18} color={muted} />
           <TextInput
             style={[styles.searchInput, { color: text }]}
-            placeholder="Search by @handle or email"
+            placeholder="Search by name, @handle, or email"
             placeholderTextColor={muted}
             value={searchQuery}
             onChangeText={setSearchQuery}

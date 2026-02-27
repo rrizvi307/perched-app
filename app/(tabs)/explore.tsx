@@ -77,7 +77,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { DEMO_USER_IDS, isCloudDemoCheckin, isDemoMode } from '@/services/demoMode';
+import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { trackScreenLoad } from '@/services/perfMonitor';
 
@@ -589,8 +589,6 @@ export default function Explore() {
           throw error;
         }
         const items = (remote.items || []).filter((item: any) => {
-          if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
-          if (demoMode && isCloudDemoCheckin(item) && !item?.photoPending && !resolvePhotoUri(item)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
@@ -598,7 +596,11 @@ export default function Explore() {
           return true;
         });
         const normalizedItems = await normalizeCheckins(items as any);
-        const seededApplied = applySeededFallback(normalizedItems as any, 3);
+        let seededApplied = applySeededFallback(normalizedItems as any, 3);
+        seededApplied = seededApplied.filter((item: any) => {
+          if (!isSeededCheckin(item)) return true;
+          return !!resolvePhotoUri(item) || !!item?.photoPending;
+        });
 
         const focus = loc || mapFocus || mapCenter;
         const nearbyThresholdKm = 40;
@@ -621,18 +623,18 @@ export default function Explore() {
           }
           const local = await getCheckins();
           let localScoped = (local || []).filter((item: any) => {
-            if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
             if (user && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
             if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
             if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
             return true;
           });
-          if (!demoMode) {
-            localScoped = localScoped.filter((item: any) => !isSeededCheckin(item));
-          }
           const normalizedLocal = await normalizeCheckins(localScoped as any);
-          const seededLocal = applySeededFallback(normalizedLocal as any, 3);
+          let seededLocal = applySeededFallback(normalizedLocal as any, 3);
+          seededLocal = seededLocal.filter((item: any) => {
+            if (!isSeededCheckin(item)) return true;
+            return !!resolvePhotoUri(item) || !!item?.photoPending;
+          });
           const localSpots = buildSpotsFromCheckins(seededLocal, focus);
           const hasNearbyLocal = localSpots.some(
             (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
@@ -662,20 +664,20 @@ export default function Explore() {
         }
         const local = await getCheckins();
         let fallback = (local || []).filter((item: any) => {
-          if (!demoMode && item?.userId && DEMO_USER_IDS.includes(item.userId)) return false;
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
           if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
           if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
           return true;
         });
-        if (!demoMode) {
-          fallback = fallback.filter((item: any) => !isSeededCheckin(item));
-        }
 
         if (!active) return;
         const normalizedFallback = await normalizeCheckins(fallback as any);
-        const seededFallback = applySeededFallback(normalizedFallback as any, 3);
+        let seededFallback = applySeededFallback(normalizedFallback as any, 3);
+        seededFallback = seededFallback.filter((item: any) => {
+          if (!isSeededCheckin(item)) return true;
+          return !!resolvePhotoUri(item) || !!item?.photoPending;
+        });
         setSpots(buildSpotsFromCheckins(seededFallback, loc || mapFocus || mapCenter));
         setStatus({ message: 'Offline. Showing saved data.', tone: 'warning' });
       } finally {

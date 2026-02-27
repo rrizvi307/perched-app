@@ -280,20 +280,6 @@ export default function SettingsScreen() {
             >
               <Text style={{ color: danger, fontWeight: '700' }}>Sign out</Text>
             </Pressable>
-
-            <View style={{ height: 12 }} />
-            <Pressable
-              onPress={confirmDeleteAccount}
-              style={({ pressed }) => [
-                styles.dangerRow,
-                {
-                  borderColor: withAlpha(danger, 0.35),
-                  backgroundColor: pressed ? withAlpha(danger, 0.12) : card,
-                },
-              ]}
-            >
-              <Text style={{ color: danger, fontWeight: '700' }}>Delete account</Text>
-            </Pressable>
           </>
         ) : (
           <Pressable
