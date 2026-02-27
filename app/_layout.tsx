@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react';
 import { AppState, InteractionManager, Platform } from 'react-native';
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { ThemePreferenceProvider, useThemePreference } from '@/contexts/ThemePreferenceContext';
+import { ThemePreferenceProvider } from '@/contexts/ThemePreferenceContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initErrorReporting } from '@/services/errorReporting';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
@@ -64,7 +64,6 @@ export default function RootLayout() {
 function InnerApp() {
   const { user } = useAuth();
   const colorScheme = useColorScheme();
-  const { preference } = useThemePreference();
   const mapsKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY;
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
@@ -284,7 +283,7 @@ function InnerApp() {
   }, [showToast, user?.id]);
 
   return (
-    <ThemeProvider key={`${colorScheme}-${preference}`} value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
+    <ThemeProvider value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
       <Stack
         screenOptions={{
           headerShown: true,

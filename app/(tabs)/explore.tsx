@@ -765,7 +765,7 @@ export default function Explore() {
       if (q && !name.includes(q)) return false;
 
       const maxDistanceKm = Math.max(0.5, Math.min(5, filters.distance)) * 1.60934;
-      if (!demoMode || !spot?.isSeeded) {
+      if (!spot?.isSeeded) {
         if (typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance > maxDistanceKm) return false;
       }
 
