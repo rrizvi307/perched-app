@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SignIn() {
   const insets = useSafeAreaInsets();
-  const [authMode, setAuthMode] = useState<'email' | 'phone'>('email');
+  const [authMode, setAuthMode] = useState<'email' | 'phone'>('phone');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
