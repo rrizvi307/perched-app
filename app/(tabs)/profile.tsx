@@ -91,10 +91,12 @@ export default function ProfileScreen() {
   const [cityTouched, setCityTouched] = useState(false);
   const [cityResults, setCityResults] = useState<string[]>([]);
   const [cityLoading, setCityLoading] = useState(false);
+  const [cityDropdownOpen, setCityDropdownOpen] = useState(false);
   const [campusQuery, setCampusQuery] = useState('');
   const [campusTouched, setCampusTouched] = useState(false);
   const [campusResults, setCampusResults] = useState<string[]>([]);
   const [campusLoading, setCampusLoading] = useState(false);
+  const [campusDropdownOpen, setCampusDropdownOpen] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState(user?.phone || '');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(user?.name || '');
@@ -959,12 +961,14 @@ export default function ProfileScreen() {
                       onChangeText={(text) => {
                         setCityTouched(true);
                         setCityQuery(text);
+                        setCityDropdownOpen(true);
                       }}
+                      onFocus={() => { if (cityQuery.trim()) setCityDropdownOpen(true); }}
                       style={[styles.input, { borderColor, backgroundColor: cardBg, color: textColor }]}
                     />
                     {detectingCity && !cityDraft ? <Text style={{ color: muted, marginBottom: 8 }}>Detecting your city...</Text> : null}
                     {cityLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-                    {cityQuery.trim().length ? (
+                    {cityDropdownOpen && cityQuery.trim().length ? (
                       <View style={[styles.suggestionList, { borderColor, backgroundColor: cardBg }]}>
                         {(cityResults.length ? cityResults : getLocationOptions('city', cityQuery).slice(0, 8)).map((option) => (
                           <Pressable
@@ -973,6 +977,7 @@ export default function ProfileScreen() {
                               setCityDraft(option);
                               setCityQuery(option);
                               setCityTouched(true);
+                              setCityDropdownOpen(false);
                             }}
                             style={({ pressed }) => [
                               styles.locationRow,
@@ -1014,11 +1019,13 @@ export default function ProfileScreen() {
                       onChangeText={(text) => {
                         setCampusTouched(true);
                         setCampusQuery(text);
+                        setCampusDropdownOpen(true);
                       }}
+                      onFocus={() => { if (campusQuery.trim()) setCampusDropdownOpen(true); }}
                       style={[styles.input, { borderColor, backgroundColor: cardBg, color: textColor }]}
                     />
                     {campusLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-                    {campusQuery.trim().length ? (
+                    {campusDropdownOpen && campusQuery.trim().length ? (
                       <View style={[styles.suggestionList, { borderColor, backgroundColor: cardBg }]}>
                         {(campusResults.length ? campusResults : getLocationOptions('campus', campusQuery).slice(0, 8)).map((option) => (
                           <Pressable
@@ -1027,6 +1034,7 @@ export default function ProfileScreen() {
                               setCampusDraft(option);
                               setCampusQuery(option);
                               setCampusTouched(true);
+                              setCampusDropdownOpen(false);
                             }}
                             style={({ pressed }) => [
                               styles.locationRow,

@@ -55,6 +55,7 @@ export default function SignIn() {
   const normalizedPhone = phone.trim() ? normalizePhone(phone.trim()) : null;
   const isPhoneValid = !!normalizedPhone;
   const supportsPhoneAuth = Platform.OS === 'web' || !!RecaptchaModal;
+  const showPhoneTab = supportsPhoneAuth;
   const submitting = authMode === 'email' ? loading : verifyingCode;
   const compactHeader = keyboardVisible && Platform.OS !== 'web';
   const logoSize = compactHeader ? 44 : height < 740 ? 56 : 72;
@@ -108,10 +109,6 @@ export default function SignIn() {
     }
     if (!normalizedPhone) {
       setError('Enter a valid phone number with area code.');
-      return;
-    }
-    if (!supportsPhoneAuth) {
-      setError("Phone verification isn't available on this device yet. Use email for now.");
       return;
     }
     const verifier = getRecaptchaVerifier();
@@ -250,20 +247,22 @@ export default function SignIn() {
                 </Pressable>
               </View>
             ) : null}
-            <View style={styles.modeRow}>
-              <Pressable
-                onPress={() => setAuthMode('email')}
-                style={[styles.modeButton, { borderColor: border }, authMode === 'email' ? { backgroundColor: primary } : null]}
-              >
-                <Text style={{ color: authMode === 'email' ? '#FFFFFF' : color, fontWeight: '700' }}>Email</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setAuthMode('phone')}
-                style={[styles.modeButton, { borderColor: border }, authMode === 'phone' ? { backgroundColor: primary } : null]}
-              >
-                <Text style={{ color: authMode === 'phone' ? '#FFFFFF' : color, fontWeight: '700' }}>Phone</Text>
-              </Pressable>
-            </View>
+            {showPhoneTab ? (
+              <View style={styles.modeRow}>
+                <Pressable
+                  onPress={() => setAuthMode('email')}
+                  style={[styles.modeButton, { borderColor: border }, authMode === 'email' ? { backgroundColor: primary } : null]}
+                >
+                  <Text style={{ color: authMode === 'email' ? '#FFFFFF' : color, fontWeight: '700' }}>Email</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setAuthMode('phone')}
+                  style={[styles.modeButton, { borderColor: border }, authMode === 'phone' ? { backgroundColor: primary } : null]}
+                >
+                  <Text style={{ color: authMode === 'phone' ? '#FFFFFF' : color, fontWeight: '700' }}>Phone</Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             {RecaptchaModal ? <RecaptchaModal ref={recaptchaVerifier} firebaseConfig={FIREBASE_CONFIG} /> : null}
             {Platform.OS === 'web' ? (
@@ -335,13 +334,10 @@ export default function SignIn() {
                     returnKeyType="send"
                     onSubmitEditing={sendCode}
                   />
-                  {!supportsPhoneAuth ? (
-                    <Text style={{ color: muted, marginTop: 6 }}>Phone verification is available on web for now.</Text>
-                  ) : null}
                   <Pressable
                     onPress={sendCode}
-                    style={[styles.inlineButton, { borderColor: border }, (sendingCode || !supportsPhoneAuth) ? { opacity: 0.6 } : null]}
-                    disabled={sendingCode || !supportsPhoneAuth}
+                    style={[styles.inlineButton, { borderColor: border }, sendingCode ? { opacity: 0.6 } : null]}
+                    disabled={sendingCode}
                   >
                     <Text style={{ color: primary, fontWeight: '700' }}>{sendingCode ? 'Sending...' : verificationId ? 'Resend code' : 'Send code'}</Text>
                   </Pressable>

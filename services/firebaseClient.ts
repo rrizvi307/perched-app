@@ -1066,18 +1066,13 @@ export async function getUserFriendsCached(userId: string, ttlMs = 15000) {
 async function callSocialGraphMutation(action: string, payload: Record<string, any>) {
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).functions !== 'function') return null;
-  try {
-    const region =
-      ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
-      (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
-      'us-central1';
-    const callable = (fb as any).functions(region).httpsCallable('socialGraphMutation');
-    const response = await callable({ action, ...payload });
-    return response?.data || null;
-  } catch (error) {
-    devLog(`socialGraphMutation(${action}) failed`, error);
-    return null;
-  }
+  const region =
+    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+    'us-central1';
+  const callable = (fb as any).functions(region).httpsCallable('socialGraphMutation');
+  const response = await callable({ action, ...payload });
+  return response?.data || null;
 }
 
 function raiseSocialGraphPermissionError(action: string): never {
@@ -1792,17 +1787,30 @@ export async function sendFriendRequest(fromId: string, toId: string) {
     return { id: requestId, fromId, toId, status: 'pending' };
   }
 
-  const callableResult = await callSocialGraphMutation('send_friend_request', { toId });
-  if (callableResult?.ok) {
-    invalidateUserFriendsCache([fromId, toId]);
-    return {
-      id: callableResult.requestId || `${fromId}_${toId}`,
-      fromId,
-      toId,
-      status: callableResult.status || 'pending',
-      autoAccepted: Boolean(callableResult.autoAccepted),
-      alreadyFriends: Boolean(callableResult.alreadyFriends),
-    };
+  // Try server-authoritative cloud function first
+  try {
+    const callableResult = await callSocialGraphMutation('send_friend_request', { toId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return {
+        id: callableResult.requestId || `${fromId}_${toId}`,
+        fromId,
+        toId,
+        status: callableResult.status || 'pending',
+        autoAccepted: Boolean(callableResult.autoAccepted),
+        alreadyFriends: Boolean(callableResult.alreadyFriends),
+      };
+    }
+  } catch (cfError: any) {
+    // Only fall through to direct Firestore if functions are unavailable/not-found
+    const code = cfError?.code || cfError?.details || '';
+    const isFunctionsUnavailable =
+      typeof code === 'string' && /not.found|unavailable|internal|unimplemented/i.test(code);
+    if (!isFunctionsUnavailable) {
+      devLog('sendFriendRequest cloud function error', cfError);
+      throw cfError;
+    }
+    devLog('Cloud functions unavailable, falling back to direct Firestore', code);
   }
 
   const db = fb.firestore();
@@ -1837,16 +1845,23 @@ export async function sendFriendRequest(fromId: string, toId: string) {
     return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
   }
 
-  const ref = db.collection('friendRequests').doc(forwardRequestId);
-  await ref.set(
-    {
-      fromId,
-      toId,
-      status: 'pending',
-      createdAt: fb.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+  // Check if a pending request already exists before writing
+  const forwardRef = db.collection('friendRequests').doc(forwardRequestId);
+  const existingDoc = await forwardRef.get();
+  if (existingDoc.exists && existingDoc.data()?.status === 'pending') {
+    return { id: forwardRequestId, fromId, toId, status: 'pending' };
+  }
+
+  // Delete stale doc first if it exists (e.g. old declined request), then create fresh
+  if (existingDoc.exists) {
+    await forwardRef.delete();
+  }
+  await forwardRef.set({
+    fromId,
+    toId,
+    status: 'pending',
+    createdAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
   return { id: forwardRequestId, fromId, toId, status: 'pending' };
 }
 

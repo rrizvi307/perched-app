@@ -37,7 +37,7 @@ export default function Onboarding() {
   const [step, setStep] = useState<OnboardingStep>('welcome');
   const [loading, setLoading] = useState(false);
   const [locationEnabled, setLocationEnabled] = useState<boolean | null>(null);
-  const [detectedCity, setDetectedCity] = useState<string>('');
+  const [detectedCity, setDetectedCity] = useState<string>('Houston');
   const [coffeeIntents, setCoffeeIntents] = useState<DiscoveryIntent[]>([]);
   const [ambiancePreference, setAmbiancePreference] = useState<'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null>(null);
 

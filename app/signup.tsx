@@ -168,10 +168,6 @@ export default function SignUp() {
       setAuthError('Server not configured — phone verification unavailable in this build.');
       return;
     }
-    if (!supportsPhoneAuth) {
-      setAuthError('Phone verification is not available on this device. Try opening the app in a browser.');
-      return;
-    }
     const verifier = getRecaptchaVerifier();
     if (!verifier) {
       setAuthError('Unable to initialize verification. Please refresh and try again.');

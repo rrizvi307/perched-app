@@ -248,13 +248,14 @@ export default function FriendsScreen() {
     try {
       await sendFriendRequest(user.id, target.id);
       showToast('Friend request sent', 'success');
-    } catch {
+    } catch (err: any) {
       setOutgoingIds((prev) => {
         const next = new Set(prev);
         next.delete(target.id);
         return next;
       });
-      showToast('Could not send request', 'error');
+      const msg = err?.message || 'Could not send request';
+      showToast(msg.length > 80 ? 'Could not send request' : msg, 'error');
     } finally {
       clearBusy(target.id);
     }
