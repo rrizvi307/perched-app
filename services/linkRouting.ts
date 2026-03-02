@@ -1,5 +1,3 @@
-import { openExternalLink } from './externalLinks';
-
 export type LinkDecision = 'internal-route' | 'external-open' | 'invalid';
 
 export interface LinkClassification {
@@ -93,5 +91,6 @@ export function isInternalPerchedUrl(rawInput: string | null | undefined): boole
 }
 
 export async function openReportEmail(subject: string, body: string) {
+  const { openExternalLink } = await import('./externalLinks');
   return openExternalLink(`mailto:perchedappteam@gmail.com?subject=${subject}&body=${body}`);
 }
