@@ -1070,7 +1070,7 @@ async function callSocialGraphMutation(action: string, payload: Record<string, a
     ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
     (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
     'us-central1';
-  const callable = (fb as any).functions(region).httpsCallable('socialGraphMutation');
+  const callable = (fb as any).app().functions(region).httpsCallable('socialGraphMutation');
   const response = await callable({ action, ...payload });
   return response?.data || null;
 }

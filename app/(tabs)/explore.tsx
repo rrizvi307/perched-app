@@ -308,6 +308,7 @@ export default function Explore() {
   const [viewMode, setViewMode] = useState<'list' | 'map'>('map');
   const flatListRef = useRef<FlatList>(null);
   const mapTouchingRef = useRef(false);
+  const [mapInteracting, setMapInteracting] = useState(false);
   const [mapRegion, setMapRegion] = useState<{
     latitude: number;
     longitude: number;
@@ -1159,6 +1160,7 @@ export default function Explore() {
         initialNumToRender={6}
         maxToRenderPerBatch={6}
         windowSize={8}
+        scrollEnabled={!mapInteracting}
         removeClippedSubviews={Platform.OS !== 'web'}
         onViewableItemsChanged={onViewableItemsChangedRef.current}
         viewabilityConfig={viewabilityConfigRef.current}
@@ -1299,14 +1301,17 @@ export default function Explore() {
               <View
                 onTouchStart={() => {
                   mapTouchingRef.current = true;
+                  setMapInteracting(true);
                   flatListRef.current?.setNativeProps?.({ scrollEnabled: false });
                 }}
                 onTouchEnd={() => {
                   mapTouchingRef.current = false;
+                  setMapInteracting(false);
                   flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
                 }}
                 onTouchCancel={() => {
                   mapTouchingRef.current = false;
+                  setMapInteracting(false);
                   flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
                 }}
                 style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}
