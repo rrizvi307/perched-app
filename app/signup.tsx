@@ -8,14 +8,8 @@ import { getLocationOptions } from '@/constants/locations';
 import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import Logo from '@/components/logo';
 import {
-  confirmPhoneAuth,
   findUserByHandle,
-  getWebRecaptchaVerifier,
   isFirebaseConfigured,
-  linkAnonymousWithEmail,
-  startPhoneAuth,
-  updateUserRemote,
-  FIREBASE_CONFIG,
 } from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
 import { getOnboardingProfile } from '@/storage/local';
@@ -43,13 +37,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export default function SignUp() {
   const insets = useSafeAreaInsets();
 
-  // Phone verification
-  const [phone, setPhone] = useState('');
-  const [smsCode, setSmsCode] = useState('');
-  const [verificationId, setVerificationId] = useState('');
-  const [sendingCode, setSendingCode] = useState(false);
-
-  // Account security — email optional, password only required if email provided
+  // Account
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -57,6 +45,7 @@ export default function SignUp() {
   // Profile
   const [handle, setHandle] = useState('');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [city, setCity] = useState('Houston');
   const [campus, setCampus] = useState('');
 
@@ -100,21 +89,16 @@ export default function SignUp() {
   const highlight = withAlpha(primary, 0.1);
   const router = useRouter();
   const rootNavigationState = useRootNavigationState();
-  const recaptchaVerifier = useRef<any>(null);
-  const [RecaptchaModal, setRecaptchaModal] = useState<any>(null);
   const scrollRef = useRef<ScrollView>(null);
 
   // ── Validation ──────────────────────────────────────────────────────────────
   function validateEmail(e: string) {
     return /\S+@\S+\.\S+/.test(e);
   }
+  const isEmailValid = validateEmail(email.trim());
+  const isPasswordValid = password.length >= 6;
+  const passwordsMatch = password === passwordConfirm;
   const normalizedPhone = phone.trim() ? normalizePhone(phone.trim()) : null;
-  const isPhoneValid = !!normalizedPhone;
-  const isEmailProvided = email.trim().length > 0;
-  const isEmailValid = !isEmailProvided || validateEmail(email.trim());
-  const isPasswordValid = !isEmailProvided || password.length >= 6;
-  const passwordsMatch = !isEmailProvided || password === passwordConfirm;
-  // Strip any @ the user might type, keep lowercase
   const normalizedHandle = handle.trim().toLowerCase().replace(/^@+/, '');
   const isHandleValid =
     !!normalizedHandle &&
@@ -125,10 +109,7 @@ export default function SignUp() {
     handleAvailability !== 'checking' &&
     handleAvailability !== 'taken' &&
     handleAvailability !== 'invalid';
-  const phoneVerified = !!verificationId && smsCode.trim().length >= 4;
   const canSubmit =
-    isPhoneValid &&
-    phoneVerified &&
     isEmailValid &&
     isPasswordValid &&
     passwordsMatch &&
@@ -136,8 +117,6 @@ export default function SignUp() {
     isCityValid &&
     handleReady &&
     !loading;
-
-  const supportsPhoneAuth = Platform.OS === 'web' || !!RecaptchaModal;
 
   const { height } = useWindowDimensions();
   const keyboardVisible = useKeyboardVisible();
@@ -147,133 +126,63 @@ export default function SignUp() {
   const titleSize = compactHeader ? 30 : height < 740 ? 36 : undefined;
   const extraScrollPad = Platform.OS === 'ios' ? Math.max(28, keyboardHeight + 28) : 28;
 
-  function getRecaptchaVerifier() {
-    if (Platform.OS === 'web') {
-      if (!recaptchaVerifier.current) {
-        recaptchaVerifier.current = getWebRecaptchaVerifier('recaptcha-container-signup');
-      }
-      return recaptchaVerifier.current;
-    }
-    return recaptchaVerifier.current;
-  }
-
-  // ── Send SMS code ────────────────────────────────────────────────────────────
-  async function sendCode() {
-    setAuthError(null);
-    if (!isPhoneValid) {
-      setAuthError('Enter a valid phone number with country code.');
-      return;
-    }
-    if (!fbAvailable) {
-      setAuthError('Server not configured — phone verification unavailable in this build.');
-      return;
-    }
-    const verifier = getRecaptchaVerifier();
-    if (!verifier) {
-      setAuthError('Unable to initialize verification. Please refresh and try again.');
-      return;
-    }
-    setSendingCode(true);
-    try {
-      const res = await startPhoneAuth(normalizedPhone!, verifier);
-      setVerificationId(res.verificationId);
-      setSmsCode('');
-      setAuthError(null);
-    } catch (e: any) {
-      devLog('sendCode error', e);
-      setAuthError(e?.message || 'Unable to send code. Check your number and try again.');
-    } finally {
-      setSendingCode(false);
-    }
-  }
-
   // ── Create account ───────────────────────────────────────────────────────────
   async function doRegister() {
     setAuthError(null);
 
-    if (!isPhoneValid) return setAuthError('Enter a valid phone number.');
-    if (!verificationId) return setAuthError('Tap "Send verification code" first.');
-    if (smsCode.trim().length < 4) return setAuthError('Enter the verification code from your text.');
+    if (!isEmailValid) return setAuthError('Enter a valid email address.');
+    if (!isPasswordValid) return setAuthError('Password must be at least 6 characters.');
+    if (!passwordsMatch) return setAuthError('Passwords do not match.');
     if (!isHandleValid) return setAuthError('Choose a username (3–20 chars, letters/numbers/underscore/period).');
     if (handleAvailability === 'taken') return setAuthError('That username is taken — pick a different one.');
     if (handleAvailability === 'checking') return setAuthError('Still checking username — try again in a moment.');
     if (!isCityValid) return setAuthError('Select your city.');
-    if (isEmailProvided && !validateEmail(email.trim())) return setAuthError('Enter a valid email address.');
-    if (isEmailProvided && password.length < 6) return setAuthError('Password must be at least 6 characters.');
-    if (isEmailProvided && password !== passwordConfirm) return setAuthError('Passwords do not match.');
-
-    // Local/dev fallback — no Firebase
-    if (!fbAvailable) {
-      setLoading(true);
-      try {
-        const campusType = campus ? 'campus' : 'city';
-        await register(
-          email.trim() || `phone-${normalizedPhone}@local`,
-          password || 'phone-auth',
-          name || undefined,
-          city,
-          normalizedHandle,
-          campusType,
-          campus || undefined,
-          normalizedPhone!,
-          { coffeeIntents: coffeeIntentsPref.slice(0, 3), ambiancePreference },
-        );
-      } catch (e: any) {
-        setAuthError(e?.message || 'Unable to create account.');
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
 
     setLoading(true);
-    try {
-      // 1. Confirm phone → creates / signs in Firebase phone auth account
-      const authUser = await confirmPhoneAuth(verificationId, smsCode.trim());
-      const uid = authUser?.uid;
-      if (!uid) throw new Error('Unable to verify phone number.');
-
-      // 2. Save profile to Firestore
-      const campusType = campus ? 'campus' : 'city';
-      await updateUserRemote(uid, {
-        name: name.trim() || null,
-        city: city || null,
-        campus: campus || null,
-        campusOrCity: campusType === 'campus' ? campus : city,
-        campusType,
-        handle: normalizedHandle,
-        phone: normalizedPhone,
-        email: email.trim() || null,
-        coffeeIntents: coffeeIntentsPref.slice(0, 3),
-        ambiancePreference,
-      });
-
-      // 3. Link email + password if provided (non-blocking — user can add later)
-      if (isEmailProvided && password.length >= 6) {
-        try {
-          await linkAnonymousWithEmail({ email: email.trim(), password });
-        } catch (e: any) {
-          devLog('email link (non-fatal):', e?.code, e?.message);
-        }
+    const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<T>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} timed out. Check your network or Firebase setup.`)), ms);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-
-      // 4. Referral tracking
-      if (referralCode) void trackReferralSignup(uid, referralCode);
-
-      // 5. Sync user state
-      await refreshUser?.();
-    } catch (e: any) {
-      devLog('doRegister error', e);
-      const code = e?.code || '';
-      const msg =
-        code === 'auth/invalid-verification-code'
-          ? 'Invalid code — check your text and try again.'
-          : code === 'auth/code-expired'
-            ? 'Code expired — tap "Resend code" to get a new one.'
-            : code === 'auth/session-expired'
-              ? 'Session expired — tap "Resend code" to get a new one.'
-              : e?.message || 'Unable to create account. Please try again.';
-      setAuthError(msg);
+    };
+    try {
+      let existing = null;
+      try {
+        existing = await withTimeout(findUserByHandle(normalizedHandle), 6000, 'Checking handle');
+      } catch (e) {
+        devLog('handle check skipped', e);
+      }
+      if (existing) {
+        setAuthError('That username is taken.');
+        setLoading(false);
+        return;
+      }
+      const campusType = campus ? 'campus' : 'city';
+      await register(
+        email.trim(),
+        password,
+        name || undefined,
+        city || undefined,
+        normalizedHandle,
+        campusType,
+        campus || undefined,
+        normalizedPhone || undefined,
+        {
+          coffeeIntents: coffeeIntentsPref.slice(0, 3),
+          ambiancePreference,
+        },
+      );
+    } catch (e) {
+      devLog('register error', e);
+      const msg = (e as any)?.message || String(e);
+      setAuthError('Unable to register: ' + msg);
     } finally {
       setLoading(false);
     }
@@ -315,7 +224,7 @@ export default function SignUp() {
     })().catch(() => {});
   }, []);
 
-  // Auto-detect city from GPS (only when dropdown is closed and city hasn't been manually changed)
+  // Auto-detect city from GPS
   useEffect(() => {
     let cancelled = false;
     if (!geoBias || cityDropdownOpen) return;
@@ -346,16 +255,6 @@ export default function SignUp() {
       void trackReferralSignup(user.id, referralCode);
     }
   }, [user?.id, referralCode]);
-
-  // Load RecaptchaModal on native
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-    try {
-      const req = eval('require');
-      const mod = req('expo-firebase-recaptcha');
-      if (mod?.FirebaseRecaptchaVerifierModal) setRecaptchaModal(() => mod.FirebaseRecaptchaVerifierModal);
-    } catch {}
-  }, []);
 
   // City search (only fires when dropdown is open)
   useEffect(() => {
@@ -429,11 +328,10 @@ export default function SignUp() {
     return () => { cancelled = true; clearTimeout(id); };
   }, [normalizedHandle]);
 
-  // Navigate once user is set (phone users skip email verification gate)
+  // Navigate once user is set
   useEffect(() => {
     if (!rootNavigationState?.key || !user) return;
-    // Only redirect to /verify for email-only accounts (legacy path, no phone)
-    if (user.email && !user.emailVerified && !user.phone) {
+    if (user.email && !user.emailVerified) {
       router.replace('/verify');
       return;
     }
@@ -481,7 +379,7 @@ export default function SignUp() {
           </View>
           {!compactHeader ? (
             <Body style={{ color, marginTop: 8, marginBottom: 4 }}>
-              We'll text a code to verify your number.
+              Sign up with your email to get started.
             </Body>
           ) : null}
 
@@ -495,141 +393,59 @@ export default function SignUp() {
             </View>
           ) : null}
 
-          {RecaptchaModal ? (
-            <RecaptchaModal ref={recaptchaVerifier} firebaseConfig={FIREBASE_CONFIG} />
-          ) : null}
-          {Platform.OS === 'web' ? (
-            <View nativeID="recaptcha-container-signup" id="recaptcha-container-signup" style={{ height: 0 }} />
+          {/* ─── EMAIL ──────────────────────────────────────────────────────── */}
+          <Label>Email</Label>
+          <TextInput
+            placeholder="you@email.com"
+            placeholderTextColor={muted}
+            value={email}
+            onChangeText={setEmail}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {email.trim().length > 0 && !isEmailValid ? (
+            <Text style={[styles.hint, { color: danger }]}>Enter a valid email address.</Text>
           ) : null}
 
-          {/* ─── PHONE VERIFICATION ─────────────────────────────────────────── */}
-          <Label>Phone number</Label>
+          {/* ─── PASSWORD ───────────────────────────────────────────────────── */}
+          <Label>Password</Label>
           <TextInput
-            placeholder="+1 (713) 555-0123"
+            placeholder="At least 6 characters"
             placeholderTextColor={muted}
-            value={phone}
-            onChangeText={(t) => {
-              setPhone(t);
-              // Reset verification if phone number changes
-              setVerificationId('');
-              setSmsCode('');
-              setAuthError(null);
-            }}
-            style={[
-              styles.input,
-              { borderColor: verificationId ? success : border, backgroundColor: card, color },
-            ]}
-            keyboardType="phone-pad"
-            autoCapitalize="none"
+            value={password}
+            onChangeText={setPassword}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            secureTextEntry
           />
-          {phone.trim() && !isPhoneValid ? (
-            <Text style={[styles.hint, { color: danger }]}>
-              Include country code, e.g. +1 713 555 0123
-            </Text>
+          {password.length > 0 && password.length < 6 ? (
+            <Text style={[styles.hint, { color: danger }]}>Use at least 6 characters.</Text>
           ) : (
-            <Text style={[styles.hint, { color: muted }]}>
-              Required — lets friends find you by number
-            </Text>
+            <Text style={[styles.hint, { color: muted }]}>Min 6 characters.</Text>
           )}
 
-          <Pressable
-            onPress={sendCode}
+          <Label>Confirm password</Label>
+          <TextInput
+            placeholder="Re-enter your password"
+            placeholderTextColor={muted}
+            value={passwordConfirm}
+            onChangeText={setPasswordConfirm}
             style={[
-              styles.inlineButton,
-              { borderColor: primary },
-              !isPhoneValid || sendingCode ? { opacity: 0.45 } : null,
+              styles.input,
+              {
+                borderColor:
+                  passwordConfirm.length > 0 && password !== passwordConfirm ? danger : border,
+                backgroundColor: card,
+                color,
+              },
             ]}
-            disabled={!isPhoneValid || sendingCode}
-          >
-            <Text style={{ color: primary, fontWeight: '700' }}>
-              {sendingCode ? 'Sending...' : verificationId ? 'Resend code' : 'Send verification code'}
-            </Text>
-          </Pressable>
-
-          {verificationId ? (
-            <>
-              <Label>Verification code</Label>
-              <TextInput
-                placeholder="6-digit code"
-                placeholderTextColor={muted}
-                value={smsCode}
-                onChangeText={setSmsCode}
-                style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-                keyboardType="number-pad"
-                maxLength={6}
-              />
-              <Text style={[styles.hint, { color: muted }]}>
-                Check your texts for the code we sent.
-              </Text>
-            </>
-          ) : null}
-
-          {/* ─── EMAIL (optional) ───────────────────────────────────────────── */}
-          <View style={{ marginTop: 8 }}>
-            <Label>
-              Email{' '}
-              <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>
-                (optional — for account recovery)
-              </Text>
-            </Label>
-            <TextInput
-              placeholder="you@email.com"
-              placeholderTextColor={muted}
-              value={email}
-              onChangeText={setEmail}
-              style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {isEmailProvided && !validateEmail(email.trim()) ? (
-              <Text style={[styles.hint, { color: danger }]}>Enter a valid email address.</Text>
-            ) : null}
-          </View>
-
-          {/* ─── PASSWORD (only when email is provided) ─────────────────────── */}
-          {isEmailProvided ? (
-            <>
-              <Label>Password</Label>
-              <TextInput
-                placeholder="At least 6 characters"
-                placeholderTextColor={muted}
-                value={password}
-                onChangeText={setPassword}
-                style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-                secureTextEntry
-              />
-              {password.length > 0 && password.length < 6 ? (
-                <Text style={[styles.hint, { color: danger }]}>Use at least 6 characters.</Text>
-              ) : (
-                <Text style={[styles.hint, { color: muted }]}>Min 6 characters.</Text>
-              )}
-
-              <Label>Confirm password</Label>
-              <TextInput
-                placeholder="Re-enter your password"
-                placeholderTextColor={muted}
-                value={passwordConfirm}
-                onChangeText={setPasswordConfirm}
-                style={[
-                  styles.input,
-                  {
-                    borderColor:
-                      passwordConfirm.length > 0 && password !== passwordConfirm ? danger : border,
-                    backgroundColor: card,
-                    color,
-                  },
-                ]}
-                secureTextEntry
-              />
-              {passwordConfirm.length > 0 && password !== passwordConfirm ? (
-                <Text style={[styles.hint, { color: danger }]}>Passwords don't match.</Text>
-              ) : passwordConfirm.length > 0 && password === passwordConfirm ? (
-                <Text style={[styles.hint, { color: success }]}>Passwords match.</Text>
-              ) : (
-                <Text style={[styles.hint, { color: muted }]}>Re-enter your password.</Text>
-              )}
-            </>
+            secureTextEntry
+          />
+          {passwordConfirm.length > 0 && password !== passwordConfirm ? (
+            <Text style={[styles.hint, { color: danger }]}>Passwords don&apos;t match.</Text>
+          ) : passwordConfirm.length > 0 && password === passwordConfirm ? (
+            <Text style={[styles.hint, { color: success }]}>Passwords match.</Text>
           ) : null}
 
           {/* ─── USERNAME ───────────────────────────────────────────────────── */}
@@ -690,6 +506,23 @@ export default function SignUp() {
             maxLength={40}
           />
 
+          {/* ─── PHONE (optional — for friend discovery) ────────────────────── */}
+          <Label>
+            Phone{' '}
+            <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
+          </Label>
+          <TextInput
+            placeholder="+1 (713) 555-0123"
+            placeholderTextColor={muted}
+            value={phone}
+            onChangeText={setPhone}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            keyboardType="phone-pad"
+          />
+          <Text style={[styles.hint, { color: muted }]}>
+            Lets friends find you by phone number.
+          </Text>
+
           {/* ─── CITY ───────────────────────────────────────────────────────── */}
           <Label>City</Label>
           <TextInput
@@ -699,7 +532,7 @@ export default function SignUp() {
             onChangeText={(text) => {
               setCityQuery(text);
               setCityDropdownOpen(true);
-              setCity(''); // clear confirmed selection while typing
+              setCity('');
             }}
             onFocus={() => {
               if (cityQuery.trim()) setCityDropdownOpen(true);
@@ -779,7 +612,7 @@ export default function SignUp() {
             onChangeText={(text) => {
               setCampusQuery(text);
               setCampusDropdownOpen(true);
-              setCampus(''); // clear confirmed selection while typing
+              setCampus('');
             }}
             onFocus={() => {
               if (campusQuery.trim()) setCampusDropdownOpen(true);
