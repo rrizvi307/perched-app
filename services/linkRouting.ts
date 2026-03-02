@@ -1,3 +1,5 @@
+import { openExternalLink } from './externalLinks';
+
 export type LinkDecision = 'internal-route' | 'external-open' | 'invalid';
 
 export interface LinkClassification {
@@ -88,4 +90,8 @@ export function classifyLink(rawInput: string | null | undefined): LinkClassific
 
 export function isInternalPerchedUrl(rawInput: string | null | undefined): boolean {
   return classifyLink(rawInput).decision === 'internal-route';
+}
+
+export async function openReportEmail(subject: string, body: string) {
+  return openExternalLink(`mailto:perchedappteam@gmail.com?subject=${subject}&body=${body}`);
 }

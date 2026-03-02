@@ -32,7 +32,7 @@ import { trackScreenLoad } from '@/services/perfMonitor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
-import { openExternalLink } from '@/services/externalLinks';
+import { openReportEmail } from '@/services/linkRouting';
 
 type Checkin = {
 	id: string;
@@ -1488,7 +1488,7 @@ function FeedPhoto({
 												const spotTitle = (item as any).spotName || item.spot || 'a spot';
 												const subject = encodeURIComponent(`Report: Check-in at ${spotTitle}`);
 												const body = encodeURIComponent(`I&apos;d like to report a check-in.\n\nCheck-in ID: ${item.id}\nSpot: ${spotTitle}\n\nReason:`);
-												const opened = await openExternalLink(`mailto:perchedappteam@gmail.com?subject=${subject}&body=${body}`);
+												const opened = await openReportEmail(subject, body);
 												if (!opened) {
 													showToast('Open your email app to report: perchedappteam@gmail.com', 'info');
 												}

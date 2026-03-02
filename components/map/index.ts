@@ -13,5 +13,6 @@ export const PROVIDER_GOOGLE = isWeb ? WEB_PROVIDER_GOOGLE : NATIVE_PROVIDER_GOO
 const MapView = React.forwardRef<any, React.ComponentProps<typeof BaseMap>>((props, ref) =>
   React.createElement(BaseMap as any, { ...props, ref }),
 );
+MapView.displayName = 'MapView';
 
 export default MapView;
