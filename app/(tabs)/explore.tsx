@@ -1,4 +1,5 @@
 import MapView, { Marker, PROVIDER_GOOGLE } from '@/components/map/index';
+import type { Provider } from 'react-native-maps';
 import { ThemedView } from '@/components/themed-view';
 import SpotImage from '@/components/ui/spot-image';
 import {
@@ -369,6 +370,7 @@ export default function Explore() {
 
   const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
   const hasMapKey = !!mapKey;
+  const mapProvider: Provider | undefined = hasMapKey ? (PROVIDER_GOOGLE as Provider) : undefined;
   const canShowInteractiveMap = typeof MapView === 'function' && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
 
   const activeFilterCount = useMemo(() => getActiveFilterCount(filters), [filters]);
@@ -1318,7 +1320,7 @@ export default function Explore() {
                 ) : null}
                 <MapView
                   ref={mapViewRef}
-                  provider={hasMapKey ? PROVIDER_GOOGLE : undefined}
+                  provider={mapProvider}
                   style={styles.map}
                   initialRegion={{
                     latitude: mapCenter.lat,
@@ -1368,7 +1370,6 @@ export default function Explore() {
                         title={`${cluster.count} spots`}
                         pinColor={accent}
                         onPress={() => handleClusterPress(cluster)}
-                        label={String(cluster.count)}
                       >
                         <View style={[styles.clusterBubble, { backgroundColor: accent, borderColor: withAlpha(accent, 0.35) }]}>
                           <Text style={styles.clusterText}>{cluster.count}</Text>

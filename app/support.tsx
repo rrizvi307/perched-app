@@ -40,7 +40,7 @@ export default function Support() {
   return (
     <ThemedView style={[styles.container, { paddingTop: Math.max(insets.top + 12, 20) }]}>
       <Label style={{ color: muted, marginBottom: 8 }}>Support</Label>
-      <H1 style={{ color: text }}>We're here to help</H1>
+      <H1 style={{ color: text }}>We&apos;re here to help</H1>
       <Body style={{ color: muted, marginTop: 6 }}>
         Reach out if something feels off or you want help with your account.
       </Body>

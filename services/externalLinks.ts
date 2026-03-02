@@ -53,24 +53,17 @@ export async function resolveAndOpenLink(input: string | null | undefined): Prom
   }
 
   try {
-    // Skip canOpenURL for mailto/tel/sms — Expo Go's Info.plist doesn't list
-    // these in LSApplicationQueriesSchemes so canOpenURL returns false even
-    // though openURL works fine.
-    const scheme = classification.normalizedUrl.split(':')[0]?.toLowerCase();
-    const skipCanOpen = scheme === 'mailto' || scheme === 'tel' || scheme === 'sms';
-    if (!skipCanOpen) {
-      const supported = await ExpoLinking.canOpenURL(classification.normalizedUrl);
-      if (!supported) {
-        devLog('unsupported external link', { input: raw, normalizedUrl: classification.normalizedUrl });
-        return {
-          decision: 'external-open',
-          input: raw,
-          normalizedUrl: classification.normalizedUrl,
-          opened: false,
-          destination: 'blocked',
-          reason: 'unsupported',
-        };
-      }
+    const supported = await ExpoLinking.canOpenURL(classification.normalizedUrl);
+    if (!supported) {
+      devLog('unsupported external link', { input: raw, normalizedUrl: classification.normalizedUrl });
+      return {
+        decision: 'external-open',
+        input: raw,
+        normalizedUrl: classification.normalizedUrl,
+        opened: false,
+        destination: 'blocked',
+        reason: 'unsupported',
+      };
     }
     await ExpoLinking.openURL(classification.normalizedUrl);
     devLog('link resolver', {
