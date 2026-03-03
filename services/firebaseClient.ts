@@ -900,7 +900,7 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
 
     const db = fb.firestore();
 
-    // Query public feed only so collection reads satisfy Firestore query rules.
+    // Query public feed first so collection reads satisfy Firestore query rules.
     let snapshot: any;
     try {
       let q: any = db
@@ -921,27 +921,77 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
         if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
         snapshot = await legacyQ.get();
       } catch {
-        // Both indexes missing — fall back to unordered query (can't paginate)
+        // Both indexes missing; fall back to unordered query (can't paginate)
         snapshot = await db
           .collection('checkins')
           .where('visibility', '==', 'public')
           .limit(limit)
           .get();
-        const items: any[] = [];
-        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-        items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
-        const payload = { items, lastCursor: null };
-        setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
-        return payload;
       }
     }
-    const items: any[] = [];
+
+    const publicItems: any[] = [];
     snapshot.forEach((doc: any) => {
-      items.push({ id: doc.id, ...(doc.data() || {}) });
+      publicItems.push({ id: doc.id, ...(doc.data() || {}) });
     });
 
-    const lastCursor = items.length
-      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+    // Include signed-in user's own check-ins on first page, regardless of visibility.
+    // This keeps personal history in feed/explore while preserving public pagination.
+    let ownItems: any[] = [];
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    if (!startAfter && currentUserId) {
+      try {
+        const ownSnapshot = await db
+          .collection('checkins')
+          .where('userId', '==', currentUserId)
+          .orderBy('createdAt', 'desc')
+          .limit(limit)
+          .get();
+        ownItems = ownSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+      } catch {
+        try {
+          const ownLegacySnapshot = await db
+            .collection('checkins')
+            .where('userId', '==', currentUserId)
+            .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .get();
+          ownItems = ownLegacySnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+        } catch {
+          try {
+            const ownFallbackSnapshot = await db
+              .collection('checkins')
+              .where('userId', '==', currentUserId)
+              .limit(limit)
+              .get();
+            ownItems = ownFallbackSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+          } catch {
+            ownItems = [];
+          }
+        }
+      }
+    }
+
+    const mergedById = new Map<string, any>();
+    [...publicItems, ...ownItems].forEach((item: any) => {
+      const fallbackKey = `${item?.userId || 'anon'}:${item?.spotPlaceId || item?.spotName || item?.spot || 'spot'}:${toMillisSafe(item?.createdAt || item?.timestamp)}`;
+      const key = item?.id || item?.clientId || fallbackKey;
+      const existing = mergedById.get(key);
+      if (!existing) {
+        mergedById.set(key, item);
+        return;
+      }
+      const nextTs = toMillisSafe(item?.createdAt || item?.timestamp);
+      const prevTs = toMillisSafe(existing?.createdAt || existing?.timestamp);
+      if (nextTs >= prevTs) mergedById.set(key, item);
+    });
+
+    const items = Array.from(mergedById.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp)
+    );
+
+    const lastCursor = publicItems.length
+      ? (publicItems[publicItems.length - 1].createdAt ?? publicItems[publicItems.length - 1].timestamp ?? null)
       : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
@@ -949,6 +999,101 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
   }, { items: [], lastCursor: null });
 }
 
+export async function getCheckinsForSpotRemote(spotId: string, limit = 200) {
+  return withErrorBoundary('firebase_get_checkins_for_spot', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    if (!spotId) return { items: [], lastCursor: null };
+
+    const cacheKey = `spot:${spotId}:${limit}`;
+    const cached = getCachedValue(checkinsCache, cacheKey, 10000);
+    if (cached) {
+      void recordPerfMetric('firebase_get_checkins_for_spot_cache_hit', Date.now() - startedAt, true);
+      return cached;
+    }
+
+    const db = fb.firestore();
+    // Query by spot directly so spot detail can show full history instead of
+    // sampling from the global feed window. Restrict the primary query to
+    // public visibility so Firestore rules allow the read.
+    let publicSnapshot: any;
+    try {
+      publicSnapshot = await db
+        .collection('checkins')
+        .where('spotPlaceId', '==', spotId)
+        .where('visibility', '==', 'public')
+        .orderBy('createdAt', 'desc')
+        .limit(limit)
+        .get();
+    } catch {
+      try {
+        publicSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('visibility', '==', 'public')
+          .orderBy('timestamp', 'desc')
+          .limit(limit)
+          .get();
+      } catch {
+        publicSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('visibility', '==', 'public')
+          .limit(limit)
+          .get();
+      }
+    }
+
+    let ownItems: any[] = [];
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    if (currentUserId) {
+      try {
+        const ownSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('userId', '==', currentUserId)
+          .orderBy('createdAt', 'desc')
+          .limit(limit)
+          .get();
+        ownItems = ownSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+      } catch {
+        try {
+          const ownLegacySnapshot = await db
+            .collection('checkins')
+            .where('spotPlaceId', '==', spotId)
+            .where('userId', '==', currentUserId)
+            .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .get();
+          ownItems = ownLegacySnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+        } catch {
+          ownItems = [];
+        }
+      }
+    }
+
+    const publicItems = publicSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+    const mergedById = new Map<string, any>();
+    [...publicItems, ...ownItems].forEach((item: any) => {
+      const key = item?.id || item?.clientId || `${item?.userId || 'anon'}:${item?.spotPlaceId || 'spot'}:${toMillisSafe(item?.createdAt || item?.timestamp)}`;
+      const existing = mergedById.get(key);
+      if (!existing || toMillisSafe(item?.createdAt || item?.timestamp) >= toMillisSafe(existing?.createdAt || existing?.timestamp)) {
+        mergedById.set(key, item);
+      }
+    });
+
+    const items = Array.from(mergedById.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp)
+    );
+    const lastCursor = publicItems.length
+      ? (publicItems[publicItems.length - 1].createdAt ?? publicItems[publicItems.length - 1].timestamp ?? null)
+      : null;
+    const payload = { items, lastCursor };
+    setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
+    return payload;
+  }, { items: [], lastCursor: null });
+}
 export async function getCheckinsForUserRemote(userId: string, limit = 80, startAfter?: any) {
   return withErrorBoundary('firebase_get_checkins_for_user', async () => {
     const startedAt = Date.now();
@@ -2487,3 +2632,4 @@ export async function updateCommentInFirestore(commentId: string, userId: string
     { merge: true }
   );
 }
+

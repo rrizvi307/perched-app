@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Share,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +26,8 @@ import {
   getUserFriendsCached,
   getUsersByCampus,
   getOutgoingFriendRequests,
+  findUserByEmail,
+  findUserByPhone,
   getIncomingFriendRequests,
   acceptFriendRequest,
   declineFriendRequest,
@@ -48,6 +51,14 @@ interface FriendRequest {
   user?: FriendUser;
 }
 
+interface ContactEntry {
+  id: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  matchedUser?: FriendUser | null;
+}
+
 export default function FriendsScreen() {
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -64,8 +75,12 @@ export default function FriendsScreen() {
 
   const [friends, setFriends] = useState<FriendUser[]>([]);
   const [incomingReqs, setIncomingReqs] = useState<FriendRequest[]>([]);
+  const [outgoingReqs, setOutgoingReqs] = useState<FriendRequest[]>([]);
   const [outgoingIds, setOutgoingIds] = useState<Set<string>>(new Set());
   const [suggestions, setSuggestions] = useState<FriendUser[]>([]);
+  const [contactEntries, setContactEntries] = useState<ContactEntry[]>([]);
+  const [contactsExpanded, setContactsExpanded] = useState(false);
+  const [syncingContacts, setSyncingContacts] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<FriendUser[]>([]);
@@ -107,7 +122,8 @@ export default function FriendsScreen() {
         setOutgoingIds(new Set((outgoing || []).map((r: any) => r.toId)));
 
         const incomingFromIds = (incoming || []).map((r: any) => r.fromId);
-        const allProfileIds = Array.from(new Set([...ids, ...incomingFromIds]));
+        const outgoingToIds = (outgoing || []).map((r: any) => r.toId);
+        const allProfileIds = Array.from(new Set([...ids, ...incomingFromIds, ...outgoingToIds]));
         const profiles = allProfileIds.length ? await getUsersByIdsCached(allProfileIds) : [];
         const profileMap: Record<string, FriendUser> = {};
         (profiles || []).forEach((p: any) => {
@@ -127,6 +143,14 @@ export default function FriendsScreen() {
             fromId: r.fromId,
             toId: r.toId,
             user: profileMap[r.fromId],
+          })),
+        );
+        setOutgoingReqs(
+          (outgoing || []).map((r: any) => ({
+            id: r.id,
+            fromId: r.fromId,
+            toId: r.toId,
+            user: profileMap[r.toId],
           })),
         );
 
@@ -159,7 +183,7 @@ export default function FriendsScreen() {
         setRefreshing(false);
       }
     },
-    [user?.id, user?.campus, user?.campusOrCity],
+    [showToast, user?.id, user?.campus, user?.campusOrCity],
   );
 
   useEffect(() => {
@@ -288,7 +312,16 @@ export default function FriendsScreen() {
   };
 
   const handleSyncContacts = async () => {
+    const toDigits = (value: string) => String(value || '').replace(/\D/g, '');
+    const toFriendUser = (u: any): FriendUser => ({
+      id: u.id,
+      name: u.name || 'Unknown',
+      handle: u.handle,
+      photoUrl: u.photoUrl,
+      campus: u.campus || u.campusOrCity,
+    });
     try {
+      setSyncingContacts(true);
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== 'granted') {
         showToast('Contacts permission denied. Enable it in Settings.', 'error');
@@ -297,56 +330,111 @@ export default function FriendsScreen() {
       const { data } = await Contacts.getContactsAsync({
         fields: [Contacts.Fields.Emails, Contacts.Fields.PhoneNumbers],
       });
-      // Collect phone numbers and emails from contacts
-      const phones: string[] = [];
-      const emails: string[] = [];
-      (data || []).forEach((c: any) => {
-        (c.phoneNumbers || []).forEach((p: any) => {
-          if (p.number) phones.push(p.number.replace(/\D/g, ''));
-        });
-        (c.emails || []).forEach((e: any) => {
-          if (e.email && e.email.includes('@')) emails.push(e.email);
-        });
-      });
-      const uniquePhones = Array.from(new Set(phones)).slice(0, 50);
-      const uniqueEmails = Array.from(new Set(emails)).slice(0, 30);
-      if (uniquePhones.length === 0 && uniqueEmails.length === 0) {
-        showToast('No contacts found', 'info');
+      const contacts = (data || [])
+        .map((contact: any, index: number) => {
+          const phones = Array.isArray(contact?.phoneNumbers)
+            ? contact.phoneNumbers
+                .map((p: any) => (typeof p?.number === 'string' ? p.number.trim() : ''))
+                .filter(Boolean)
+            : [];
+          const emails = Array.isArray(contact?.emails)
+            ? contact.emails
+                .map((e: any) => (typeof e?.email === 'string' ? e.email.trim().toLowerCase() : ''))
+                .filter((value: string) => value.includes('@'))
+            : [];
+          const name = (contact?.name || '').trim() || (emails[0]?.split('@')?.[0] || phones[0] || `Contact ${index + 1}`);
+          return {
+            id: String(contact?.id || `contact-${index}`),
+            name,
+            phones,
+            emails,
+          };
+        })
+        .filter((contact: any) => contact.name || contact.phones.length > 0 || contact.emails.length > 0);
+
+      if (!contacts.length) {
+        setContactEntries([]);
+        showToast('No contacts found on this device.', 'info');
         return;
       }
-      const matched = new Map<string, FriendUser>();
-      await Promise.all([
-        ...uniquePhones.map(async (phone) => {
+
+      const uniqueEmails = Array.from(new Set(contacts.flatMap((c: any) => c.emails))).slice(0, 300);
+      const uniquePhones = Array.from(new Set(contacts.flatMap((c: any) => c.phones.map((p: string) => toDigits(p)).filter(Boolean)))).slice(0, 300);
+
+      const emailMatchMap = new Map<string, FriendUser>();
+      const phoneMatchMap = new Map<string, FriendUser>();
+
+      await Promise.all(
+        uniqueEmails.map(async (email) => {
           try {
-            const results = await searchUsers(phone, 3);
-            results.forEach((u: any) => {
-              if (u.id !== user?.id && !matched.has(u.id)) {
-                matched.set(u.id, { id: u.id, name: u.name || 'Unknown', handle: u.handle, photoUrl: u.photoUrl, campus: u.campus || u.campusOrCity });
-              }
-            });
+            const found = await findUserByEmail(email);
+            if (found?.id && found.id !== user?.id) {
+              emailMatchMap.set(email, toFriendUser(found));
+            }
           } catch {}
-        }),
-        ...uniqueEmails.map(async (email) => {
+        })
+      );
+      await Promise.all(
+        uniquePhones.map(async (phoneDigits) => {
           try {
-            const results = await searchUsers(email, 3);
-            results.forEach((u: any) => {
-              if (u.id !== user?.id && !matched.has(u.id)) {
-                matched.set(u.id, { id: u.id, name: u.name || 'Unknown', handle: u.handle, photoUrl: u.photoUrl, campus: u.campus || u.campusOrCity });
-              }
-            });
+            const found = await findUserByPhone(phoneDigits);
+            if (found?.id && found.id !== user?.id) {
+              phoneMatchMap.set(phoneDigits, toFriendUser(found));
+            }
           } catch {}
-        }),
-      ]);
-      if (matched.size === 0) {
-        showToast('No contacts found on Perched yet', 'info');
-      } else {
-        setSearchResults(Array.from(matched.values()));
-        setSearchQuery('Contacts');
-        showToast(`Found ${matched.size} contact${matched.size === 1 ? '' : 's'} on Perched`, 'success');
-      }
+        })
+      );
+
+      const entries: ContactEntry[] = contacts.map((contact: any, index: number) => {
+        const firstMatchedEmail = contact.emails.find((email: string) => emailMatchMap.has(email));
+        const firstMatchedPhone = contact.phones
+          .map((phone: string) => toDigits(phone))
+          .find((digits: string) => phoneMatchMap.has(digits));
+        const matchedUser = firstMatchedEmail
+          ? emailMatchMap.get(firstMatchedEmail) || null
+          : firstMatchedPhone
+            ? phoneMatchMap.get(firstMatchedPhone) || null
+            : null;
+        return {
+          id: `${contact.id}-${index}`,
+          name: contact.name,
+          phone: contact.phones[0] || undefined,
+          email: contact.emails[0] || undefined,
+          matchedUser,
+        };
+      });
+
+      entries.sort((a, b) => {
+        const aMatched = !!a.matchedUser;
+        const bMatched = !!b.matchedUser;
+        if (aMatched !== bMatched) return aMatched ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      setContactEntries(entries);
+      setContactsExpanded(false);
+      const matchedCount = entries.filter((entry) => !!entry.matchedUser).length;
+      const inviteCount = entries.length - matchedCount;
+      showToast(`Synced ${entries.length} contacts • ${matchedCount} on Perched • ${inviteCount} to invite`, 'success');
     } catch (err) {
       devLog('contacts sync failed', err);
       showToast('Unable to access contacts', 'error');
+    } finally {
+      setSyncingContacts(false);
+    }
+  };
+
+  const handleInviteContact = async (contact: ContactEntry) => {
+    markBusy(contact.id);
+    try {
+      const mention = contact.name ? `${contact.name}, ` : '';
+      const message = `${mention}join me on Perched to share coffee spots and check-ins.\nDownload: https://perched.app`;
+      await Share.share({ message });
+      showToast('Invite sheet opened.', 'success');
+    } catch {
+      showToast('Unable to open invite right now.', 'warning');
+    } finally {
+      clearBusy(contact.id);
     }
   };
 
@@ -440,15 +528,15 @@ export default function FriendsScreen() {
     const relation = getRelation(item.id);
     const busy = busyIds.has(item.id);
     return (
-      <Pressable style={[styles.row, { borderBottomColor: border }]} onPress={() => navigateToProfile(item.id)}>
-        <View style={styles.rowLeft}>
+      <View style={[styles.row, { borderBottomColor: border }]}>
+        <Pressable style={styles.rowLeft} onPress={() => navigateToProfile(item.id)}>
           {renderAvatar(item, 48)}
           <View style={styles.rowInfo}>
             <Text style={[styles.rowName, { color: text }]} numberOfLines={1}>{item.name}</Text>
             {item.handle ? <Text style={[styles.rowHandle, { color: muted }]} numberOfLines={1}>@{item.handle}</Text> : null}
             {item.campus ? <Text style={[styles.rowCampus, { color: muted }]} numberOfLines={1}>{item.campus}</Text> : null}
           </View>
-        </View>
+        </Pressable>
         {relation === 'friend' ? (
           <View style={[styles.badge, { backgroundColor: withAlpha(success, 0.12) }]}>
             <Text style={[styles.badgeText, { color: success }]}>Friends</Text>
@@ -456,6 +544,10 @@ export default function FriendsScreen() {
         ) : relation === 'pending' ? (
           <View style={[styles.badge, { backgroundColor: withAlpha(muted, 0.12) }]}>
             <Text style={[styles.badgeText, { color: muted }]}>Pending</Text>
+          </View>
+        ) : relation === 'incoming' ? (
+          <View style={[styles.badge, { backgroundColor: withAlpha(primary, 0.12) }]}>
+            <Text style={[styles.badgeText, { color: primary }]}>Requested you</Text>
           </View>
         ) : busy ? (
           <ActivityIndicator size="small" color={primary} />
@@ -471,7 +563,7 @@ export default function FriendsScreen() {
             <IconSymbol name="person.badge.plus" size={18} color={primary} />
           </Pressable>
         )}
-      </Pressable>
+      </View>
     );
   };
 
@@ -495,6 +587,10 @@ export default function FriendsScreen() {
           <View style={[styles.badge, { backgroundColor: withAlpha(muted, 0.12) }]}>
             <Text style={[styles.badgeText, { color: muted }]}>Sent</Text>
           </View>
+        ) : relation === 'incoming' ? (
+          <View style={[styles.badge, { backgroundColor: withAlpha(primary, 0.12) }]}>
+            <Text style={[styles.badgeText, { color: primary }]}>Requested you</Text>
+          </View>
         ) : busy ? (
           <ActivityIndicator size="small" color={primary} />
         ) : (
@@ -513,10 +609,120 @@ export default function FriendsScreen() {
     );
   };
 
+  const renderContactRow = (entry: ContactEntry) => {
+    const matched = entry.matchedUser || null;
+    const relation = matched ? getRelation(matched.id) : null;
+    const busy = busyIds.has(entry.id) || (matched ? busyIds.has(matched.id) : false);
+
+    return (
+      <View key={entry.id} style={[styles.row, { borderBottomColor: border }]}>
+        {matched ? (
+          <Pressable style={styles.rowLeft} onPress={() => navigateToProfile(matched.id)}>
+            {renderAvatar(matched, 44)}
+            <View style={styles.rowInfo}>
+              <Text style={[styles.rowName, { color: text }]} numberOfLines={1}>{entry.name}</Text>
+              <Text style={[styles.rowHandle, { color: muted }]} numberOfLines={1}>
+                @{matched.handle || matched.name}
+              </Text>
+            </View>
+          </Pressable>
+        ) : (
+          <View style={styles.rowLeft}>
+            <View style={[styles.avatar, styles.avatarPlaceholder, { width: 44, height: 44, borderRadius: 22, backgroundColor: withAlpha(primary, 0.12) }]}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: primary }}>
+                {(entry.name || '?').charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.rowInfo}>
+              <Text style={[styles.rowName, { color: text }]} numberOfLines={1}>{entry.name}</Text>
+              <Text style={[styles.rowHandle, { color: muted }]} numberOfLines={1}>
+                {entry.phone || entry.email || 'Invite to Perched'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {matched ? (
+          relation === 'friend' ? (
+            <View style={[styles.badge, { backgroundColor: withAlpha(success, 0.12) }]}>
+              <Text style={[styles.badgeText, { color: success }]}>Friends</Text>
+            </View>
+          ) : relation === 'pending' ? (
+            <View style={[styles.badge, { backgroundColor: withAlpha(muted, 0.12) }]}>
+              <Text style={[styles.badgeText, { color: muted }]}>Pending</Text>
+            </View>
+          ) : relation === 'incoming' ? (
+            <View style={[styles.badge, { backgroundColor: withAlpha(primary, 0.12) }]}>
+              <Text style={[styles.badgeText, { color: primary }]}>Requested you</Text>
+            </View>
+          ) : busy ? (
+            <ActivityIndicator size="small" color={primary} />
+          ) : (
+            <Pressable
+              onPress={() => handleSendRequest(matched)}
+              style={({ pressed }) => [
+                styles.addBtn,
+                { backgroundColor: withAlpha(primary, 0.1), borderColor: primary },
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <IconSymbol name="person.badge.plus" size={18} color={primary} />
+            </Pressable>
+          )
+        ) : (
+          <Pressable
+            disabled={busy}
+            onPress={() => handleInviteContact(entry)}
+            style={({ pressed }) => [
+              styles.inviteBtn,
+              { borderColor: primary, backgroundColor: withAlpha(primary, 0.08) },
+              (busy || pressed) ? { opacity: 0.7 } : null,
+            ]}
+          >
+            {busy ? <ActivityIndicator size="small" color={primary} /> : <Text style={{ color: primary, fontWeight: '700' }}>Invite</Text>}
+          </Pressable>
+        )}
+      </View>
+    );
+  };
+
   /* ─── list header / footer / empty ─── */
 
   const ListHeader = () => (
     <View>
+      {!isSearchActive && outgoingReqs.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: text }]}>
+              Pending Sent ({outgoingReqs.length})
+            </Text>
+          </View>
+          <View style={styles.pendingChipRow}>
+            {outgoingReqs.slice(0, 4).map((req) => {
+              const target = req.user || { id: req.toId, name: 'Pending user' };
+              return (
+                <Pressable
+                  key={req.id}
+                  onPress={() => navigateToProfile(target.id)}
+                  style={[styles.pendingChip, { borderColor: border, backgroundColor: card }]}
+                >
+                  {renderAvatar(target, 28)}
+                  <Text style={{ color: text, fontWeight: '600', maxWidth: 120 }} numberOfLines={1}>
+                    {target.name}
+                  </Text>
+                  <Text style={{ color: muted, fontSize: 12 }}>Pending</Text>
+                </Pressable>
+              );
+            })}
+            {outgoingReqs.length > 4 ? (
+              <View style={[styles.pendingChipMore, { borderColor: border }]}>
+                <Text style={{ color: muted, fontWeight: '700' }}>+{outgoingReqs.length - 4}</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      )}
+
       {!isSearchActive && incomingReqs.length > 0 && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -540,15 +746,52 @@ export default function FriendsScreen() {
   );
 
   const ListFooter = () => {
-    if (isSearchActive || suggestions.length === 0) return null;
+    if (isSearchActive) return null;
+    const matchedContacts = contactEntries.filter((entry) => !!entry.matchedUser).length;
+    const visibleContacts = contactsExpanded ? contactEntries : contactEntries.slice(0, 12);
+
+    const hasSuggestions = suggestions.length > 0;
+    const hasContacts = contactEntries.length > 0;
+    if (!hasSuggestions && !hasContacts) return null;
+
     return (
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: text }]}>
-            Suggested{user?.campus ? ` at ${user.campus}` : ''}
-          </Text>
-        </View>
-        {suggestions.map(renderSuggestionRow)}
+      <View>
+        {hasSuggestions ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: text }]}>
+                Suggested{user?.campus ? ` at ${user.campus}` : ''}
+              </Text>
+            </View>
+            {suggestions.map(renderSuggestionRow)}
+          </View>
+        ) : null}
+
+        {hasContacts ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: text }]}>Contacts ({contactEntries.length})</Text>
+              {syncingContacts ? <ActivityIndicator size="small" color={primary} /> : null}
+            </View>
+            <Text style={[styles.contactsMeta, { color: muted }]}>
+              {matchedContacts} on Perched • {contactEntries.length - matchedContacts} to invite
+            </Text>
+            {visibleContacts.map(renderContactRow)}
+            {contactEntries.length > 12 ? (
+              <Pressable
+                onPress={() => setContactsExpanded((prev) => !prev)}
+                style={({ pressed }) => [
+                  styles.showMoreBtn,
+                  { borderColor: border, backgroundColor: pressed ? withAlpha(primary, 0.08) : card },
+                ]}
+              >
+                <Text style={{ color: primary, fontWeight: '700' }}>
+                  {contactsExpanded ? 'Show less contacts' : `Show all contacts (${contactEntries.length})`}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -660,6 +903,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   section: { marginTop: 4 },
+  pendingChipRow: {
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pendingChip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pendingChipMore: {
+    minWidth: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -669,6 +935,11 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   sectionTitle: { fontSize: 15, fontWeight: '700' },
+  contactsMeta: {
+    fontSize: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -699,6 +970,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1.5,
   },
+  inviteBtn: {
+    minWidth: 84,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
+  },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -714,6 +994,15 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
     paddingHorizontal: 32,
     gap: 8,
+  },
+  showMoreBtn: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   emptyTitle: { fontSize: 17, fontWeight: '700', marginTop: 8 },
   emptyDesc: { fontSize: 14, textAlign: 'center', lineHeight: 20 },

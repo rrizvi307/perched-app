@@ -9,12 +9,12 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { getCheckinsRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
+import { getCheckinsForSpotRemote, getCheckinsRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
 import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
 import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spotUtils';
-import { formatCheckinClock, formatTimeRemaining, isCheckinExpired } from '@/services/checkinUtils';
+import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,7 +47,11 @@ const TAG_VARIANTS = {
   full7: ['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Bright', 'Spacious', 'Late-night'],
 } as const;
 
-const SPOT_CHECKINS_LIMIT = 50;
+const SPOT_CHECKINS_LIMIT = 240;
+
+function checkinCreatedAtMs(checkin: any) {
+  return toMillis(checkin?.createdAt) || toMillis(checkin?.timestamp) || 0;
+}
 
 function VoteableTag({
   tag,
@@ -150,8 +154,8 @@ export default function SpotDetail() {
     });
   }, [checkins, placeKey, user]);
   const visibleCheckins = useMemo(() => {
-    return checkins.filter((c) => {
-      if (isCheckinExpired(c)) return false;
+    // Never expire check-ins in spot view; enforce only privacy visibility.
+    const allowed = checkins.filter((c) => {
       if (!c.visibility) return true;
       if (c.visibility === 'public') return true;
       if (!user) return false;
@@ -161,6 +165,7 @@ export default function SpotDetail() {
       }
       return true;
     });
+    return allowed.sort((a, b) => checkinCreatedAtMs(b) - checkinCreatedAtMs(a));
   }, [checkins, friendIdSet, user]);
   const aggregatedTagScores = useMemo(() => {
     const scores: Record<string, number> = {};
@@ -334,9 +339,11 @@ export default function SpotDetail() {
       setLoadingInitial(true);
       const fetchMarkId = startPerfMark('spot_fetch_checkins');
       try {
-        const res = await getCheckinsRemote(SPOT_CHECKINS_LIMIT);
+        const res = placeId
+          ? await getCheckinsForSpotRemote(placeId, SPOT_CHECKINS_LIMIT)
+          : await getCheckinsRemote(SPOT_CHECKINS_LIMIT);
         void endPerfMark(fetchMarkId, true, { limit: SPOT_CHECKINS_LIMIT });
-        const items = (res.items || []).filter((it: any) => !isCheckinExpired(it));
+        const items = (res.items || []);
         const targetKey = spotKey(placeId || undefined, nameParam || '');
         const filtered = items.filter((it: any) => {
           const name = it.spotName || it.spot || '';
@@ -469,23 +476,19 @@ export default function SpotDetail() {
     return `https://maps.googleapis.com/maps/api/staticmap?center=${center}&zoom=15&size=800x350&scale=2&markers=color:red%7C${center}&key=${key}`;
   }, [coords]);
 
-  const recentCheckins = visibleCheckins.slice(0, 6);
+  const orderedCheckins = visibleCheckins;
   const densityBars = useMemo(() => {
-    const now = Date.now();
-    const TWELVE_HOURS = 12 * 60 * 60 * 1000;
     const bucketCount = 6;
-    const bucketSize = TWELVE_HOURS / bucketCount;
     const buckets = new Array(bucketCount).fill(0);
-    visibleCheckins.forEach((c) => {
-      const created = c.createdAt?.seconds ? c.createdAt.seconds * 1000 : new Date(c.createdAt).getTime();
-      const age = now - created;
-      if (age < 0 || age > TWELVE_HOURS) return;
-      const idx = Math.min(bucketCount - 1, Math.floor(age / bucketSize));
+    if (!orderedCheckins.length) return buckets.map(() => 0.1);
+    const bucketSize = Math.max(1, Math.ceil(orderedCheckins.length / bucketCount));
+    orderedCheckins.forEach((_, index) => {
+      const idx = Math.min(bucketCount - 1, Math.floor(index / bucketSize));
       buckets[idx] += 1;
     });
     const max = Math.max(1, ...buckets);
     return buckets.map((b) => Math.max(0.1, b / max));
-  }, [visibleCheckins]);
+  }, [orderedCheckins]);
 
   useEffect(() => {
     if (intelligence?.workScore != null) {
@@ -663,7 +666,7 @@ export default function SpotDetail() {
             </View>
           ))}
         </View>
-        <Text style={{ color: muted, marginTop: 6 }}>Past 12 hours</Text>
+        <Text style={{ color: muted, marginTop: 6 }}>All-time activity (newest first)</Text>
         <View style={{ height: 12 }} />
         <PremiumButton
           onPress={() => {
@@ -763,14 +766,14 @@ export default function SpotDetail() {
           </View>
         ) : null}
 
-        {recentCheckins.length ? (
+        {orderedCheckins.length ? (
           <View style={{ marginTop: 16 }}>
-            <Text style={{ color: muted, marginBottom: 6 }}>Recent check-ins</Text>
-            {recentCheckins.map((c) => {
-              const remaining = formatTimeRemaining(c);
+            <Text style={{ color: muted, marginBottom: 6 }}>Check-ins</Text>
+            {orderedCheckins.map((c) => {
               const photo = resolvePhotoUri(c);
+              const checkinKey = c.id || c.clientId || `${c.userId || 'anon'}-${checkinCreatedAtMs(c)}`;
               return (
-                <View key={c.id} style={[styles.feedRow, { borderColor: border, backgroundColor: card }]}>
+                <View key={checkinKey} style={[styles.feedRow, { borderColor: border, backgroundColor: card }]}>
                   {photo ? (
                     <SpotImage source={photo} style={styles.feedThumb} />
                   ) : (
@@ -780,7 +783,6 @@ export default function SpotDetail() {
                     <Text style={{ color: text, fontWeight: '600' }}>{c.userName || 'Someone'}</Text>
                     <Text style={{ color: muted }}>{c.caption || 'Checked in'}</Text>
                     <Text style={{ color: muted, marginTop: 4 }}>{formatTime(c.createdAt)}</Text>
-                    {remaining ? <Text style={{ color: muted, marginTop: 2 }}>{remaining}</Text> : null}
                   </View>
                   <Pressable
                     onPress={async () => {
@@ -796,7 +798,7 @@ export default function SpotDetail() {
             })}
           </View>
         ) : (
-          <Body style={{ color: muted, marginTop: 12 }}>No recent check-ins yet.</Body>
+          <Body style={{ color: muted, marginTop: 12 }}>No check-ins yet.</Body>
         )}
       </Animated.ScrollView>
 

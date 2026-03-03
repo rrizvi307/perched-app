@@ -51,7 +51,7 @@ export default function MapView({ children, style, initialRegion, onRegionChange
     [mapStyle],
   );
   const center = useMemo(() => centerFromRegion(initialRegion), [initialRegion]);
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<any>(null);
   const [ready, setReady] = useState(false);
 
@@ -66,7 +66,11 @@ export default function MapView({ children, style, initialRegion, onRegionChange
           center,
           zoom: 13,
           gestureHandling: 'greedy',
-          disableDefaultUI: true,
+          disableDefaultUI: false,
+          zoomControl: true,
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
         });
         nextMap.addListener('idle', () => {
           if (!onRegionChangeComplete) return;
@@ -106,7 +110,7 @@ export default function MapView({ children, style, initialRegion, onRegionChange
 
   return (
     <View style={containerStyle}>
-      <View ref={mapRef} style={StyleSheet.absoluteFill} />
+      <div ref={mapRef} style={{ position: 'absolute', inset: 0 }} />
       {!ready && fallbackUri ? <Image source={{ uri: fallbackUri }} style={StyleSheet.absoluteFill} /> : null}
       <MapContext.Provider value={{ map }}>{children}</MapContext.Provider>
     </View>
@@ -150,7 +154,7 @@ export function Marker({ coordinate, title, description, pinColor, onPress, labe
       if (listener?.remove) listener.remove();
       marker.setMap(null);
     };
-  }, [ctx?.map, coordinate, title, description, pinColor, onPress, primary, surface]);
+  }, [ctx?.map, coordinate, title, description, pinColor, onPress, label, primary, surface]);
   return null;
 }
 

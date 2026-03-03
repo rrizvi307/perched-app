@@ -30,7 +30,7 @@ import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByH
 import { logEvent } from '@/services/logEvent';
 import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
-import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
+import { toMillis } from '@/services/checkinUtils';
 import { isPhoneLike, normalizePhone } from '@/utils/phone';
 import { openExternalLink } from '@/services/externalLinks';
 import { useRouter } from 'expo-router';
@@ -130,14 +130,9 @@ export default function ProfileScreen() {
   }, [user]);
   const requestUserMap = useMemo(() => ({ ...requestUsers }), [requestUsers]);
   const historySections = useMemo(() => {
+    // Posts no longer expire; keep a single newest-first history section.
     const sorted = (checkins || []).slice().sort((a: any, b: any) => createdAtMs(b) - createdAtMs(a));
-    const now = Date.now();
-    const live = sorted.filter((c: any) => !isCheckinExpired(c, now));
-    const expired = sorted.filter((c: any) => isCheckinExpired(c, now));
-    return [
-      { key: 'live', title: 'Live', data: toRows(live, 2) },
-      { key: 'expired', title: 'Expired', data: toRows(expired, 2) },
-    ].filter((s) => s.data.length);
+    return [{ key: 'all', title: 'All posts', data: toRows(sorted, 2) }].filter((s) => s.data.length);
   }, [checkins]);
 
   const loadCheckins = useCallback(async () => {

@@ -184,13 +184,9 @@ async function writeNativeJson<T>(key: string, value: T): Promise<void> {
   } catch {}
 }
 
-function pruneHistory(list: Checkin[], maxDays = 30) {
-  const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
-  return list.filter((c) => {
-    const ms = c?.createdAt ? new Date(c.createdAt).getTime() : 0;
-    if (!ms || Number.isNaN(ms)) return true;
-    return ms >= cutoff;
-  });
+function pruneHistory(list: Checkin[], _maxDays = 30) {
+  // Preserve full local history for now; no age-based trimming.
+  return list;
 }
 
 export async function saveCheckin(item: Omit<Checkin, 'id' | 'createdAt' | 'expiresAt'>) {

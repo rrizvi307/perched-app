@@ -63,6 +63,7 @@ export type ScoreBreakdown = {
   noise: { value: number; source: ScoreFactorSource };
   busyness: { value: number; source: ScoreFactorSource };
   laptop: { value: number; source: ScoreFactorSource };
+  drinkQuality: { value: number; source: ScoreFactorSource };
   tags: { value: number; source: ScoreFactorSource };
   externalRating: { value: number; source: ScoreFactorSource };
   venueType: { value: number };
@@ -115,7 +116,7 @@ type BuildIntelligenceInput = {
 
 const INTELLIGENCE_TTL_MS = 15 * 60 * 1000;
 const MOMENTUM_WINDOW_DAYS = 7;
-const PLACE_INTEL_MODEL_VERSION = '2026-03-03-r4';
+const PLACE_INTEL_MODEL_VERSION = '2026-03-03-r5';
 const INTEL_TELEMETRY_SAMPLE_RATE = 0.08;
 const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
 const WEATHER_TTL_MS = 30 * 60 * 1000;
@@ -181,6 +182,7 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
       noise: { value: 0, source: 'none' },
       busyness: { value: 0, source: 'none' },
       laptop: { value: 0, source: 'none' },
+      drinkQuality: { value: 0, source: 'none' },
       tags: { value: 0, source: 'none' },
       externalRating: { value: 0, source: 'none' },
       venueType: { value: 0 },
@@ -451,6 +453,48 @@ function computeEvidenceWeight(input: {
     0.2,
     0.9
   );
+}
+
+// Add a calibrated "holistic fit" term so sparse but high-quality evidence
+// (trusted external ratings + work-friendly signals) can lift clearly good spots.
+function computeHolisticWorkFitBoost(input: {
+  workFriendlyType: boolean;
+  externalRatingAvg: number | null;
+  externalSignalMeta: ExternalSignalMeta;
+  wifiAvg: number | null;
+  outletAvg: number | null;
+  laptopPct: number | null;
+  drinkQualityAvg: number | null;
+  inferred?: BuildIntelligenceInput['inferred'];
+  tagScores: Record<string, number>;
+}) {
+  let boost = 0;
+
+  if (typeof input.externalRatingAvg === 'number') {
+    const reviewDepth = clamp(Math.log10(1 + input.externalSignalMeta.totalReviewCount) / 3.4, 0, 1);
+    const ratingLift = clamp((input.externalRatingAvg - 3.8) * (5.5 + reviewDepth * 3.5), -8, 11);
+    const trustFactor = 0.45 + input.externalSignalMeta.trustScore * 0.55;
+    boost += ratingLift * trustFactor;
+  }
+
+  if (input.workFriendlyType) boost += 2.5;
+  if ((input.wifiAvg || 0) >= 3.6) boost += 2;
+  if ((input.outletAvg || 0) >= 2.8) boost += 2;
+  if ((input.laptopPct || 0) >= 60) boost += 2;
+  if (typeof input.drinkQualityAvg === 'number') {
+    boost += clamp((input.drinkQualityAvg - 3) * 1.4, -2, 3);
+  }
+
+  if (input.inferred?.goodForStudying === true) boost += 2.2;
+  if (input.inferred?.hasWifi === true) boost += 1.2;
+  if (typeof input.inferred?.foodQualitySignal === 'number') {
+    boost += clamp((input.inferred.foodQualitySignal - 0.5) * 3.2, -1.2, 2.2);
+  }
+
+  const tagSignal = computeWorkTagSignal(input.tagScores);
+  boost += clamp(tagSignal.positiveStrength * 0.75 - tagSignal.negativeStrength * 1.05, -4, 4);
+
+  return clamp(round(boost, 2), -12, 18);
 }
 
 function bucketHour(hour: number): 'morning' | 'afternoon' | 'evening' | 'late' {
@@ -1237,20 +1281,34 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const cafePenalty = /bar|night_club|casino/.test(typeText) ? 6 : 0;
   const openBoost = input.openNow === true ? 4 : input.openNow === false ? -4 : 0;
   const momentumBoost = momentum.trend === 'improving' ? 2 : momentum.trend === 'declining' ? -2 : 0;
+  const drinkQualityAvg = avg(drinkQualityValues);
+  const holisticWorkFitBoost = computeHolisticWorkFitBoost({
+    workFriendlyType,
+    externalRatingAvg,
+    externalSignalMeta,
+    wifiAvg,
+    outletAvg,
+    laptopPct,
+    drinkQualityAvg,
+    inferred: inf,
+    tagScores,
+  });
 
   const score =
     venueBaseline +
-    (wifiAvg || 0) * 10 +
-    (outletAvg !== null ? (outletAvg - 1) * 5 : 0) +
-    (laptopPct || 0) * 0.22 +
-    (noiseAvg !== null ? (6 - noiseAvg) * 7 : 0) +
-    (adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0) +
-    Math.log10(1 + Math.max(0, tagBoost)) * 18 +
-    (externalRatingAvg || 0) * 6 +
+    (wifiAvg || 0) * 9.5 +
+    (outletAvg !== null ? (outletAvg - 1) * 6 : 0) +
+    (laptopPct || 0) * 0.24 +
+    (noiseAvg !== null ? (6 - noiseAvg) * 5.5 : 0) +
+    (adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 4.5 : 0) +
+    (drinkQualityAvg !== null ? (drinkQualityAvg - 3) * 2.8 : 0) +
+    Math.log10(1 + Math.max(0, tagBoost)) * 16 +
+    (externalRatingAvg || 0) * 4.8 +
     studyTypeBoost +
     openBoost -
     cafePenalty +
-    momentumBoost;
+    momentumBoost +
+    holisticWorkFitBoost;
   // Raw model score from observed metrics.
   const modelWorkScore = clamp(Math.round(score), 0, 100);
   const observedSignalCount = [
@@ -1291,14 +1349,17 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     workScore = workFriendlyType ? 42 : 30;
   }
   const scoreBreakdown: ScoreBreakdown = {
-    wifi: { value: round((wifiAvg || 0) * 10, 1), source: wifiSource },
-    outlet: { value: round(outletAvg !== null ? (outletAvg - 1) * 5 : 0, 1), source: outletAvg !== null ? 'checkin' : 'none' },
-    noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 7 : 0, 1), source: noiseSource },
-    busyness: { value: round(adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0, 1), source: adjustedBusynessAvg !== null ? 'checkin' : 'none' },
-    laptop: { value: round((laptopPct || 0) * 0.22, 1), source: laptopSource },
-    tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 18, 1), source: Object.keys(tagScores).length > 0 ? 'checkin' : 'none' },
-    externalRating: { value: round((externalRatingAvg || 0) * 6, 1), source: externalRatingAvg ? 'api' : 'none' },
-    venueType: { value: round(venueBaseline + studyTypeBoost - cafePenalty, 1) },
+    wifi: { value: round((wifiAvg || 0) * 9.5, 1), source: wifiSource },
+    outlet: { value: round(outletAvg !== null ? (outletAvg - 1) * 6 : 0, 1), source: outletAvg !== null ? 'checkin' : 'none' },
+    noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 5.5 : 0, 1), source: noiseSource },
+    busyness: { value: round(adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 4.5 : 0, 1), source: adjustedBusynessAvg !== null ? 'checkin' : 'none' },
+    laptop: { value: round((laptopPct || 0) * 0.24, 1), source: laptopSource },
+    drinkQuality: { value: round(drinkQualityAvg !== null ? (drinkQualityAvg - 3) * 2.8 : 0, 1), source: drinkQualityAvg !== null ? 'checkin' : 'none' },
+    tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 16, 1), source: Object.keys(tagScores).length > 0 ? 'checkin' : 'none' },
+    externalRating: { value: round((externalRatingAvg || 0) * 4.8, 1), source: externalRatingAvg ? 'api' : 'none' },
+    // Venue includes static type priors plus holistic fit so users can see why
+    // known strong work spots still score well when check-in samples are sparse.
+    venueType: { value: round(venueBaseline + studyTypeBoost - cafePenalty + holisticWorkFitBoost, 1) },
     openStatus: { value: round(openBoost, 1) },
     momentum: { value: round(momentumBoost, 1) },
   };
@@ -1317,7 +1378,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     avgNoiseLevel: noiseAvg,
     avgBusyness: adjustedBusynessAvg ?? busynessAvg,
     avgWifiSpeed: wifiAvg,
-    avgDrinkQuality: avg(drinkQualityValues),
+    avgDrinkQuality: drinkQualityAvg,
     avgDrinkPrice: avg(drinkPriceValues),
     topOutletAvailability,
     laptopFriendlyPct: laptopPct,
@@ -1345,11 +1406,32 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
       .filter((v): v is number => typeof v === 'number')
   );
   const reviewSupport = clamp((avgExternalReviewCount || 0) / 500, 0, 0.12);
-  const externalTrustSupport = externalSignalMeta.trustScore * 0.16;
+  const externalTrustSupport = externalSignalMeta.trustScore * 0.2;
+  const inferredSupport = inf
+    ? clamp(
+      (inf.goodForStudying === true ? 0.04 : 0) +
+      (inf.hasWifi === true ? 0.03 : 0) +
+      (typeof inf.noiseConfidence === 'number' ? clamp(inf.noiseConfidence, 0, 1) * 0.02 : 0),
+      0,
+      0.08
+    )
+    : 0;
+  const qualitySignalSupport = clamp(
+    ((wifiAvg || 0) >= 3.5 ? 0.05 : 0) +
+    ((outletAvg || 0) >= 2.8 ? 0.04 : 0) +
+    ((laptopPct || 0) >= 60 ? 0.05 : 0) +
+    ((externalRatingAvg || 0) >= 4.2 ? 0.05 : 0),
+    0,
+    0.16
+  );
   const maxConfidence = usedInferred && checkins.length === 0 ? 0.35 : 0.97;
+  const workFriendlyConfidenceFloor = workFriendlyType
+    ? clamp(0.28 + externalSignalMeta.trustScore * 0.12 + (checkins.length > 0 ? 0.06 : 0), 0.28, 0.46)
+    : 0.1;
+  const minConfidence = Math.min(maxConfidence, workFriendlyConfidenceFloor);
   const confidence = clamp(
-    round(reliability.score * 0.72 + externalTrustSupport + reviewSupport, 2),
-    0.1,
+    round(reliability.score * 0.68 + externalTrustSupport + reviewSupport + inferredSupport + qualitySignalSupport, 2),
+    minConfidence,
     maxConfidence
   );
 
@@ -1448,3 +1530,4 @@ export async function buildPlaceIntelligence(input: BuildIntelligenceInput): Pro
     getFallbackPlaceIntelligence()
   );
 }
+

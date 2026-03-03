@@ -39,6 +39,7 @@ import { requestForegroundLocation } from '@/services/location';
 import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
 import { buildPlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
 import { openInMaps } from '@/services/mapsLinks';
+import { getMapsKey } from '@/services/googleMaps';
 import { spotKey } from '@/services/spotUtils';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
@@ -92,7 +93,7 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-const EXPLORE_REMOTE_CHECKIN_LIMIT = 140;
+const EXPLORE_REMOTE_CHECKIN_LIMIT = 600;
 const EXPLORE_SPOT_QUERY_LIMIT = 90;
 const EXPLORE_SPOT_FALLBACK_LIMIT = 140;
 
@@ -269,6 +270,68 @@ function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number 
   return spots;
 }
 
+function isCheckinVisibleToUser(item: any, userId: string | null | undefined, friendIdSet: Set<string>) {
+  const visibility = item?.visibility;
+  if (!visibility) return true;
+  if (visibility === 'friends' || visibility === 'close') {
+    if (!userId) return false;
+    return item?.userId === userId || friendIdSet.has(item?.userId);
+  }
+  return true;
+}
+
+function mergeUniqueCheckins(existing: any[], incoming: any[], maxItems = 600) {
+  const keyFor = (item: any) => {
+    if (item?.id) return `id:${item.id}`;
+    if (item?.clientId) return `client:${item.clientId}`;
+    const ts = item?.createdAt?.seconds
+      ? item.createdAt.seconds * 1000
+      : typeof item?.createdAt === 'number'
+        ? item.createdAt
+        : Date.parse(item?.createdAt || item?.timestamp || '') || 0;
+    return `sig:${item?.userId || 'anon'}:${item?.spotPlaceId || item?.spotName || item?.spot || 'spot'}:${ts}`;
+  };
+
+  const merged = new Map<string, any>();
+  const upsert = (item: any) => {
+    const key = keyFor(item);
+    const previous = merged.get(key);
+    if (!previous) {
+      merged.set(key, item);
+      return;
+    }
+    const nextTs = item?.createdAt?.seconds
+      ? item.createdAt.seconds * 1000
+      : typeof item?.createdAt === 'number'
+        ? item.createdAt
+        : Date.parse(item?.createdAt || item?.timestamp || '') || 0;
+    const prevTs = previous?.createdAt?.seconds
+      ? previous.createdAt.seconds * 1000
+      : typeof previous?.createdAt === 'number'
+        ? previous.createdAt
+        : Date.parse(previous?.createdAt || previous?.timestamp || '') || 0;
+    if (nextTs >= prevTs) merged.set(key, item);
+  };
+
+  existing.forEach(upsert);
+  incoming.forEach(upsert);
+  return Array.from(merged.values())
+    .sort((a: any, b: any) => {
+      const aTs = a?.createdAt?.seconds
+        ? a.createdAt.seconds * 1000
+        : typeof a?.createdAt === 'number'
+          ? a.createdAt
+          : Date.parse(a?.createdAt || a?.timestamp || '') || 0;
+      const bTs = b?.createdAt?.seconds
+        ? b.createdAt.seconds * 1000
+        : typeof b?.createdAt === 'number'
+          ? b.createdAt
+          : Date.parse(b?.createdAt || b?.timestamp || '') || 0;
+      return bTs - aTs;
+    })
+    .slice(0, maxItems);
+}
+
 export default function Explore() {
   const router = useRouter();
   const { user } = useAuth();
@@ -368,11 +431,11 @@ export default function Explore() {
     return { lat: 39.83, lng: -98.58 };
   }, [mapFocus, loc]);
 
-  const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
+  const mapKey = getMapsKey() || null;
   const hasMapKey = !!mapKey;
   // Use Apple Maps on iOS (native support); Google Maps on Android/web only
   const mapProvider: Provider | undefined = hasMapKey && Platform.OS !== 'ios' ? (PROVIDER_GOOGLE as Provider) : undefined;
-  const canShowInteractiveMap = typeof MapView === 'function' && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
+  const canShowInteractiveMap = !!MapView && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
 
   const activeFilterCount = useMemo(() => getActiveFilterCount(filters), [filters]);
   const hasActiveFilterState = useMemo(() => hasActiveFilters(filters), [filters]);
@@ -591,11 +654,15 @@ export default function Explore() {
           void endPerfMark(fetchMarkId, false, { limit: EXPLORE_REMOTE_CHECKIN_LIMIT, error: String(error) });
           throw error;
         }
-        const items = (remote.items || []).filter((item: any) => {
+        const local = demoMode ? [] : await getCheckins();
+        const mergedItems = demoMode
+          ? (remote.items || [])
+          : mergeUniqueCheckins(remote.items || [], local || []);
+
+        const items = mergedItems.filter((item: any) => {
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
-          if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
-          if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
+          if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
           return true;
         });
         const normalizedItems = await normalizeCheckins(items as any);
@@ -607,29 +674,27 @@ export default function Explore() {
 
         const focus = loc || mapFocus || mapCenter;
         const nearbyThresholdKm = 40;
-        const remoteSpots = buildSpotsFromCheckins(seededApplied, focus);
-        const hasNearbyRemote = remoteSpots.some(
+        const mergedSpots = buildSpotsFromCheckins(seededApplied, focus);
+        const hasNearbyMerged = mergedSpots.some(
           (spot: any) => typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance <= nearbyThresholdKm
         );
 
         if (!active) return;
-        setSpots(remoteSpots);
+        setSpots(mergedSpots);
         setStatus(null);
         // If remote is empty or only far-away data, try local + nearby spots fallback.
         // In demo mode, avoid local demo fallbacks to keep cloud as source of truth.
-        if (seededApplied.length === 0 || !hasNearbyRemote) {
+        if (seededApplied.length === 0) {
           if (demoMode) {
             if (active) {
               setStatus({ message: 'No cloud demo data found yet. Seed demo check-ins in Firebase.', tone: 'warning' });
             }
             return;
           }
-          const local = await getCheckins();
-          let localScoped = (local || []).filter((item: any) => {
+          const localScoped = (local || []).filter((item: any) => {
             if (user && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
-            if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
-            if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
+            if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
             return true;
           });
           const normalizedLocal = await normalizeCheckins(localScoped as any);
@@ -649,11 +714,13 @@ export default function Explore() {
             const nearby = await fetchNearbySpots(focus.lat, focus.lng, 2, DEFAULT_FILTERS).catch(() => []);
             if (active && nearby.length > 0) {
               setSpots(nearby);
-              setStatus({ message: 'No recent check-ins yet. Showing nearby spots.', tone: 'info' });
-            } else if (active && seededApplied.length > 0) {
-              setStatus({ message: 'Most recent check-ins are outside your area. Tap location to recenter.', tone: 'info' });
+              setStatus({ message: 'No check-ins yet. Showing nearby spots.', tone: 'info' });
+            } else if (active) {
+              setStatus({ message: 'No check-ins found yet.', tone: 'info' });
             }
           }
+        } else if (!hasNearbyMerged && active) {
+          setStatus({ message: 'Showing all check-ins. None are near your current location yet.', tone: 'info' });
         }
         setLoading(false);
         void syncPendingCheckins(1);
@@ -669,8 +736,7 @@ export default function Explore() {
         let fallback = (local || []).filter((item: any) => {
           if (user && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
-          if (item.visibility === 'friends' && (!user || !friendIdSet.has(item.userId))) return false;
-          if (item.visibility === 'close' && (!user || !friendIdSet.has(item.userId))) return false;
+          if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
           return true;
         });
 
@@ -726,8 +792,39 @@ export default function Explore() {
   }, [loc, mapFocus]);
 
   const displaySpots = useMemo<any[]>(() => {
-    if (intelV1Enabled && intelFetched) return normalizeSpotsForExplore(intelSpots) as any[];
-    return normalizeSpotsForExplore(spots) as any[];
+    const checkinSpots = normalizeSpotsForExplore(spots) as any[];
+    if (!intelV1Enabled || !intelFetched) return checkinSpots;
+
+    const enrichedSpots = normalizeSpotsForExplore(intelSpots) as any[];
+    if (!enrichedSpots.length) return checkinSpots;
+
+    const keyed = new Map<string, any>();
+    const keyFor = (item: any) => {
+      const placeId = item?.example?.spotPlaceId || item?.placeId || item?.example?.placeId;
+      return spotKey(placeId, item?.name || 'spot');
+    };
+
+    checkinSpots.forEach((item: any) => {
+      keyed.set(keyFor(item), item);
+    });
+
+    enrichedSpots.forEach((item: any) => {
+      const key = keyFor(item);
+      const existing = keyed.get(key);
+      if (existing) {
+        keyed.set(key, {
+          ...existing,
+          ...item,
+          example: item?.example || existing?.example,
+          count: item?.count ?? existing?.count,
+          hereNowCount: item?.hereNowCount ?? existing?.hereNowCount,
+        });
+      } else {
+        keyed.set(key, item);
+      }
+    });
+
+    return Array.from(keyed.values());
   }, [intelV1Enabled, intelFetched, intelSpots, spots]);
 
   const filteredSpots = useMemo(() => {
@@ -766,11 +863,6 @@ export default function Explore() {
       .filter((spot: any) => {
       const name = String(spot?.name || '').toLowerCase();
       if (q && !name.includes(q)) return false;
-
-      const maxDistanceKm = Math.max(0.5, Math.min(5, filters.distance)) * 1.60934;
-      if (loc && !spot?.isSeeded) {
-        if (typeof spot?.distance === 'number' && spot.distance !== Infinity && spot.distance > maxDistanceKm) return false;
-      }
 
       if (derivedOpenNowFilter && spot?.openNow !== true) return false;
 
@@ -823,8 +915,8 @@ export default function Explore() {
   }, [displaySpots, deferredQuery, filters, parsedQuery, rankingIntent]);
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
-  const listData = useMemo(() => (deferredQuery.trim() ? filteredSpots : filteredSpots.slice(0, 12)), [filteredSpots, deferredQuery]);
-  const markerCandidates = useMemo(() => filteredSpots.slice(0, 160), [filteredSpots]);
+  const listData = useMemo(() => filteredSpots, [filteredSpots]);
+  const markerCandidates = useMemo(() => filteredSpots, [filteredSpots]);
   const mapPreview = useMemo(() => {
     if (!mapKey || !mapCenter) return null;
     const center = `${mapCenter.lat},${mapCenter.lng}`;

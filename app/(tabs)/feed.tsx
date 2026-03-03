@@ -18,7 +18,7 @@ import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemot
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
-import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
+import { formatCheckinTime, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { getReactions, type ReactionType } from '@/services/social';
 import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
@@ -961,6 +961,7 @@ function FeedPhoto({
 			});
 			return Object.values(map).map((v) => ({ ...v.item, groupCount: v.live, totalCount: v.total })) as any[];
 			}, [visibleItems]);
+		const feedItems = useMemo(() => visibleItems as any[], [visibleItems]);
 
 		const trendingSpots = useMemo(() => {
 			return [...collapsedItems]
@@ -969,11 +970,11 @@ function FeedPhoto({
 				.slice(0, 3);
 		}, [collapsedItems]);
 
-		const liveCount = collapsedItems.reduce((sum, it) => sum + ((it as any).groupCount || 0), 0);
+		const feedCount = feedItems.length;
 		const demoMode = isDemoMode();
 
 		useEffect(() => {
-			const ids = collapsedItems
+			const ids = feedItems
 				.map((item: any) => String((item as any).id || (item as any).clientId || ''))
 				.filter(Boolean)
 				.slice(0, 12)
@@ -992,21 +993,21 @@ function FeedPhoto({
 				active = false;
 				task.cancel();
 			};
-		}, [collapsedItems, reactionByCheckin, loadReactionsForCheckin]);
+		}, [feedItems, reactionByCheckin, loadReactionsForCheckin]);
 
 	useEffect(() => {
 		if (initialLoading || firstItemMarkedRef.current) return;
 		const stop = screenLoadStopRef.current;
 		screenLoadStopRef.current = null;
 		if (stop) void stop();
-		void markPerfEvent('feed_initial_data_ready', { itemCount: collapsedItems.length });
-	}, [initialLoading, collapsedItems.length]);
+		void markPerfEvent('feed_initial_data_ready', { itemCount: feedItems.length });
+	}, [initialLoading, feedItems.length]);
 
 	return (
 		<ThemedView style={styles.container}>
 			<Atmosphere />
 			<FlatList
-				data={collapsedItems}
+				data={feedItems}
 				keyExtractor={(i, index) => i.id || (i as any).clientId || `${(i as any).userId || 'anon'}-${toMillis((i as any).createdAt) || index}-${(i as any).spotPlaceId || (i as any).spotName || 'spot'}`}
 				contentContainerStyle={styles.listContent}
 				initialNumToRender={6}
@@ -1025,16 +1026,16 @@ function FeedPhoto({
 					<View style={styles.header}>
 						<View style={[styles.heroCard, { backgroundColor: card, borderColor: border }]}>
 						<View style={[styles.heroBadge, { backgroundColor: badgeFill }]}>
-								<Label style={{ marginBottom: 0, color: accent }}>Live now</Label>
+								<Label style={{ marginBottom: 0, color: accent }}>Community feed</Label>
 							</View>
 							<H1 style={{ color: text }}>Your friends are out there.</H1>
 							<Body style={{ color: muted }}>
 								See where people are studying and working, then tap in with a photo and a quick note.
 							</Body>
 									<Text style={{ color: muted, marginTop: 6 }}>
-									{liveCount
-										? `${liveCount} check-in${liveCount === 1 ? '' : 's'} in the last 24h`
-										: 'No check-ins in the last 24h yet.'}
+									{feedCount
+										? `${feedCount} check-in${feedCount === 1 ? '' : 's'} in your feed`
+										: 'No check-ins in your feed yet.'}
 									</Text>
 							<Text style={{ color: muted, marginTop: 6 }}>
 								Use the + button above to share where you are.
@@ -1241,11 +1242,18 @@ function FeedPhoto({
 						const now = Date.now();
 						const time = formatCheckinTime(item.createdAt);
 						const isLive = !isCheckinExpired(item, now);
-						const remaining = isLive ? formatTimeRemaining(item) : '';
 						const groupCount = ((item as any).groupCount ?? 0) as number;
-						const isFriend = !!(item.userId && friendIdSet.has(item.userId));
-						const isIncoming = !!(item.userId && incomingById.has(item.userId));
-						const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
+						const probableSelf =
+							!item.userId &&
+							!!user &&
+							(
+								(!!user.handle && typeof item.userHandle === 'string' && item.userHandle === user.handle) ||
+								(!!user.name && typeof item.userName === 'string' && item.userName === user.name)
+							);
+						const targetUserId = item.userId || (probableSelf && user?.id ? user.id : '');
+						const isFriend = !!(targetUserId && friendIdSet.has(targetUserId));
+						const isIncoming = !!(targetUserId && incomingById.has(targetUserId));
+						const isOutgoing = !!(targetUserId && outgoingById.has(targetUserId));
 						const photo = resolvePhotoSrc(item);
 						const reactionCheckinId = String(item.id || (item as any).clientId || '');
 						const reactionSummary = reactionByCheckin[reactionCheckinId];
@@ -1270,13 +1278,13 @@ function FeedPhoto({
 								drinkPriceLabel ? `Price: ${drinkPriceLabel}` : null,
 								drinkQualityLabel ? `Quality: ${drinkQualityLabel}` : null,
 							].filter(Boolean) as string[];
-							const profileActionKey = `profile:${item.userId || 'none'}:${reactionCheckinId}`;
-							const closeActionKey = `close:${item.userId || 'none'}:${reactionCheckinId}`;
-							const blockActionKey = `block:${item.userId || 'none'}`;
+							const profileActionKey = `profile:${targetUserId || 'none'}:${reactionCheckinId}`;
+							const closeActionKey = `close:${targetUserId || 'none'}:${reactionCheckinId}`;
+							const blockActionKey = `block:${targetUserId || 'none'}`;
 							const profilePending = !!pendingActions[profileActionKey];
 							const closePending = !!pendingActions[closeActionKey];
 							const blockPending = !!pendingActions[blockActionKey];
-							const targetIsBlocked = !!(item.userId && blockedIds.includes(item.userId));
+							const targetIsBlocked = !!(targetUserId && blockedIds.includes(targetUserId));
 							return (
 							<PolishedCard
 								variant="elevated"
@@ -1291,13 +1299,17 @@ function FeedPhoto({
 										style={({ pressed }) => [styles.avatarRow, pressed ? { opacity: 0.75 } : null]}
 										onPress={() => {
 											if (profilePending) return;
-											if (!item.userId) {
+											if (!targetUserId) {
 												showToast('Profile unavailable for this check-in.', 'warning');
 												return;
 											}
 											if (!beginAction(profileActionKey)) return;
 											try {
-												router.push(`/profile-view?uid=${encodeURIComponent(item.userId)}`);
+												if (user?.id && targetUserId === user.id) {
+													router.push('/(tabs)/profile');
+												} else {
+													router.push(`/profile-view?uid=${encodeURIComponent(targetUserId)}`);
+												}
 											} catch (error) {
 												devLog('profile open failed', error);
 												showToast('Unable to open profile right now.', 'error');
@@ -1325,18 +1337,17 @@ function FeedPhoto({
 													<Text style={{ color: muted, fontSize: 12 }}>@{effectiveHandle}</Text>
 												) : null}
 												<Text style={{ color: muted, fontSize: 12 }}>{time}</Text>
-											{remaining ? <Text style={{ color: muted, fontSize: 11 }}>{remaining}</Text> : null}
 										</View>
 								</Pressable>
-								{user && item.userId && item.userId !== user.id ? (
+								{user && targetUserId && targetUserId !== user.id ? (
 									<View style={styles.cardActions}>
 										<Pressable
 											onPress={async () => {
 												try {
-													const targetId = item.userId!;
+													const targetId = targetUserId;
 													if (isFriend) {
 														await unfollowUserRemote(user.id, targetId);
-														await logEvent('user_unfollowed', user.id, { target: item.userId });
+														await logEvent('user_unfollowed', user.id, { target: targetId });
 													} else if (isIncoming) {
 														const req = incomingRequests.find((r) => r.fromId === targetId);
 														if (!req?.id || !req?.fromId || !req?.toId) {
@@ -1382,7 +1393,7 @@ function FeedPhoto({
 													if (!user) return;
 													if (!beginAction(closeActionKey)) return;
 													try {
-														const targetId = item.userId!;
+														const targetId = targetUserId;
 														const isClose = (await getCloseFriends(user.id)).includes(targetId);
 														await setCloseFriendRemote(user.id, targetId, !isClose);
 														await logEvent('user_closefriend_toggled', user.id, { target: targetId, close: !isClose });
@@ -1406,13 +1417,20 @@ function FeedPhoto({
 									) : null}
 							</View>
 
-							<FeedPhoto
-								uri={photo}
-								itemId={String((item as any).id || (item as any).clientId || '')}
-								background={background}
-								muted={muted}
-								pending={item.photoPending}
-							/>
+							<Pressable
+								onPress={() => {
+									if (!reactionCheckinId) return;
+									router.push(`/checkin-detail?cid=${encodeURIComponent(reactionCheckinId)}` as any);
+								}}
+							>
+								<FeedPhoto
+									uri={photo}
+									itemId={String((item as any).id || (item as any).clientId || '')}
+									background={background}
+									muted={muted}
+									pending={item.photoPending}
+								/>
+							</Pressable>
 							<View style={styles.cardContent}>
 								<Pressable
 									onPress={() => {
@@ -1426,7 +1444,7 @@ function FeedPhoto({
 									<Text style={[styles.spot, { color: text }]}>{item.spotName || item.spot}</Text>
 								</Pressable>
 								{groupCount > 1 ? (
-									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here in the last 24h</Text>
+									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here</Text>
 								) : null}
 									{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
 										<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
@@ -1454,7 +1472,6 @@ function FeedPhoto({
 									/>
 								) : null}
 								<Text style={[styles.date, { color: muted }]}>{time}</Text>
-								{remaining ? <Text style={{ color: muted, marginTop: 4 }}>{remaining}</Text> : null}
 								<View style={[styles.cardDivider, { backgroundColor: border }]} />
 								<View style={styles.cardFooter}>
 									<Pressable
@@ -1503,20 +1520,20 @@ function FeedPhoto({
 									>
 										<Text style={{ color: muted }}>Report</Text>
 									</Pressable>
-									{user && item.userId && item.userId !== user.id ? (
+									{user && targetUserId && targetUserId !== user.id ? (
 										<Pressable
 											hitSlop={8}
 											onPress={async () => {
 												if (!beginAction(blockActionKey)) return;
 												try {
 													if (targetIsBlocked) {
-														await unblockUserRemote(user.id, item.userId);
-														setBlockedIds((prev) => prev.filter((id) => id !== item.userId));
+														await unblockUserRemote(user.id, targetUserId);
+														setBlockedIds((prev) => prev.filter((id) => id !== targetUserId));
 														showToast('User unblocked.', 'success');
 													} else {
-														await blockUserRemote(user.id, item.userId);
-														setBlockedIds((prev) => (prev.includes(item.userId) ? prev : [...prev, item.userId]));
-														setItems((prev) => prev.filter((p: any) => p.userId !== item.userId));
+														await blockUserRemote(user.id, targetUserId);
+														setBlockedIds((prev) => (prev.includes(targetUserId) ? prev : [...prev, targetUserId]));
+														setItems((prev) => prev.filter((p: any) => p.userId !== targetUserId));
 														showToast('User blocked and hidden from your feed.', 'success');
 													}
 													await refreshFriendRequests();

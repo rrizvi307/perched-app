@@ -11,17 +11,19 @@ type Props = {
   onDismiss: () => void;
 };
 
+// Keep plain-text badges so labels render consistently across iOS/Android/web.
 const FACTOR_LABELS: { key: keyof ScoreBreakdown; label: string; icon: string }[] = [
-  { key: 'wifi', label: 'WiFi', icon: '📶' },
-  { key: 'outlet', label: 'Outlets', icon: '🔌' },
-  { key: 'noise', label: 'Noise', icon: '🔇' },
-  { key: 'busyness', label: 'Busyness', icon: '👥' },
-  { key: 'laptop', label: 'Laptop Friendly', icon: '💻' },
-  { key: 'tags', label: 'Tags', icon: '🏷️' },
-  { key: 'externalRating', label: 'External Rating', icon: '⭐' },
-  { key: 'venueType', label: 'Venue Type', icon: '🏢' },
-  { key: 'openStatus', label: 'Open / Closed', icon: '🕐' },
-  { key: 'momentum', label: 'Trend', icon: '📈' },
+  { key: 'wifi', label: 'WiFi', icon: 'W' },
+  { key: 'outlet', label: 'Outlets', icon: 'P' },
+  { key: 'noise', label: 'Noise', icon: 'N' },
+  { key: 'busyness', label: 'Busyness', icon: 'C' },
+  { key: 'laptop', label: 'Laptop Friendly', icon: 'L' },
+  { key: 'drinkQuality', label: 'Drink Quality', icon: 'Q' },
+  { key: 'tags', label: 'Tags', icon: '#' },
+  { key: 'externalRating', label: 'External Rating', icon: '*' },
+  { key: 'venueType', label: 'Venue Type', icon: 'V' },
+  { key: 'openStatus', label: 'Open / Closed', icon: 'O' },
+  { key: 'momentum', label: 'Trend', icon: 'T' },
 ];
 
 function sourceLabel(source: ScoreFactorSource): string {
@@ -190,3 +192,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 });
+
+

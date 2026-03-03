@@ -28,6 +28,12 @@ export interface UserStats {
   spotVisits: Record<string, number>; // spotId -> count
 }
 
+export interface AchievementProgressDetails {
+  current: number;
+  target: number;
+  percent: number;
+}
+
 // Achievement definitions
 export const ACHIEVEMENTS: Achievement[] = [
   // Explorer achievements
@@ -377,30 +383,63 @@ async function getUnlockedAchievementIds(): Promise<string[]> {
 /**
  * Get achievement progress
  */
-export function getAchievementProgress(achievement: Achievement, stats: UserStats): number {
-  // Simple progress calculation based on achievement type
+export function getAchievementProgressDetails(
+  achievement: Achievement,
+  stats: UserStats
+): AchievementProgressDetails {
+  const progressFor = (current: number, target: number): AchievementProgressDetails => ({
+    current: Math.max(0, current),
+    target,
+    percent: Math.max(0, Math.min(100, (current / target) * 100)),
+  });
+
   switch (achievement.id) {
     case 'explorer_bronze':
-      return Math.min(100, (stats.uniqueSpots / 5) * 100);
+      return progressFor(stats.uniqueSpots, 5);
     case 'explorer_silver':
-      return Math.min(100, (stats.uniqueSpots / 25) * 100);
+      return progressFor(stats.uniqueSpots, 25);
     case 'explorer_gold':
-      return Math.min(100, (stats.uniqueSpots / 100) * 100);
+      return progressFor(stats.uniqueSpots, 100);
+
     case 'social_bronze':
-      return Math.min(100, (stats.friendsCount / 10) * 100);
+      return progressFor(stats.friendsCount, 10);
     case 'social_silver':
-      return Math.min(100, (stats.friendsCount / 50) * 100);
+      return progressFor(stats.friendsCount, 50);
+
     case 'streak_bronze':
-      return Math.min(100, (stats.streakDays / 3) * 100);
+      return progressFor(stats.streakDays, 3);
     case 'streak_silver':
-      return Math.min(100, (stats.streakDays / 7) * 100);
+      return progressFor(stats.streakDays, 7);
     case 'streak_gold':
-      return Math.min(100, (stats.streakDays / 30) * 100);
+      return progressFor(stats.streakDays, 30);
     case 'streak_platinum':
-      return Math.min(100, (stats.streakDays / 100) * 100);
-    default:
-      return achievement.condition(stats) ? 100 : 0;
+      return progressFor(stats.streakDays, 100);
+
+    case 'night_owl':
+      return progressFor(stats.nightOwlCheckins, 10);
+    case 'early_bird':
+      return progressFor(stats.earlyBirdCheckins, 10);
+    case 'weekend_warrior':
+      return progressFor(stats.weekendCheckins, 20);
+
+    case 'loyal_bronze':
+      return progressFor(stats.returnVisits, 5);
+    case 'loyal_silver':
+      return progressFor(stats.returnVisits, 20);
+
+    case 'trendsetter':
+      return progressFor(stats.firstDiscoveries, 5);
+
+    default: {
+      const target = 1;
+      const current = achievement.condition(stats) ? 1 : 0;
+      return progressFor(current, target);
+    }
   }
+}
+
+export function getAchievementProgress(achievement: Achievement, stats: UserStats): number {
+  return getAchievementProgressDetails(achievement, stats).percent;
 }
 
 /**
