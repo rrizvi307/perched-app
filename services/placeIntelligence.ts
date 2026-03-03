@@ -115,7 +115,7 @@ type BuildIntelligenceInput = {
 
 const INTELLIGENCE_TTL_MS = 15 * 60 * 1000;
 const MOMENTUM_WINDOW_DAYS = 7;
-const PLACE_INTEL_MODEL_VERSION = '2026-02-11-r3';
+const PLACE_INTEL_MODEL_VERSION = '2026-03-03-r4';
 const INTEL_TELEMETRY_SAMPLE_RATE = 0.08;
 const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
 const WEATHER_TTL_MS = 30 * 60 * 1000;
@@ -125,6 +125,44 @@ const proxyInflight = new Map<string, Promise<ExternalPlaceSignal[]>>();
 const weatherSignalCache = new Map<string, { ts: number; payload: ContextSignal[] }>();
 const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
 const telemetryThrottle = new Map<string, number>();
+
+const POSITIVE_WORK_TAG_TOKENS = [
+  'wifi',
+  'wi-fi',
+  'outlet',
+  'power',
+  'quiet',
+  'study',
+  'focus',
+  'productive',
+  'work',
+  'laptop',
+  'seat',
+  'desk',
+  'table',
+];
+
+const NEGATIVE_WORK_TAG_TOKENS = [
+  'loud',
+  'noisy',
+  'crowded',
+  'packed',
+  'chaotic',
+  'party',
+  'club',
+  'slow wifi',
+  'no wifi',
+];
+
+type WorkTagSignal = {
+  positiveStrength: number;
+  negativeStrength: number;
+};
+
+type WorkIntentSignal = {
+  positive: number;
+  negative: number;
+};
 
 function getFallbackPlaceIntelligence(): PlaceIntelligence {
   return {
@@ -224,6 +262,195 @@ function toOutletAvailabilityLevel(value: unknown) {
   if (normalized === 'few') return 2;
   if (normalized === 'none') return 1;
   return null;
+}
+
+// Normalize heterogeneous user tags into a small scoring vocabulary so
+// different wording ("wi-fi", "internet", "power") contributes consistently.
+function canonicalWorkTag(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (/(wifi|wi-fi|internet)/.test(normalized)) return 'Wi-Fi';
+  if (/(outlet|power|plug)/.test(normalized)) return 'Outlets';
+  if (/(seat|chair|table|desk|spacious)/.test(normalized)) return 'Seating';
+  if (/(quiet|silent|calm)/.test(normalized)) return 'Quiet';
+  if (/(study|focus|productive|deep work|work|laptop)/.test(normalized)) return 'Study';
+  if (/(loud|noisy|crowded|packed|chaotic)/.test(normalized)) return 'Crowded';
+  return null;
+}
+
+function mergeTagScores(base: Record<string, number>, next: Record<string, number>) {
+  const merged: Record<string, number> = { ...base };
+  Object.entries(next || {}).forEach(([key, value]) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return;
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    merged[normalizedKey] = (merged[normalizedKey] || 0) + Math.max(0, value);
+  });
+  return merged;
+}
+
+// Derive productivity tag signals directly from check-in fields so places with
+// sparse explicit tag votes still have meaningful evidence.
+function deriveTagScoresFromCheckins(checkins: any[]): Record<string, number> {
+  const scores: Record<string, number> = {};
+  const add = (key: string, amount = 1) => {
+    if (!key) return;
+    scores[key] = (scores[key] || 0) + amount;
+  };
+
+  checkins.forEach((checkin: any) => {
+    if (Array.isArray(checkin?.tags)) {
+      checkin.tags.forEach((tag: unknown) => {
+        const canonical = canonicalWorkTag(tag);
+        if (canonical) add(canonical, 1);
+      });
+    }
+    if (typeof checkin?.wifiSpeed === 'number') {
+      if (checkin.wifiSpeed >= 4) add('Wi-Fi', 1);
+      if (checkin.wifiSpeed <= 2) add('Crowded', 0.6);
+    }
+    const outlets = toOutletAvailabilityLevel(checkin?.outletAvailability);
+    if (typeof outlets === 'number') {
+      if (outlets >= 3) add('Outlets', 1);
+      if (outlets <= 1.4) add('Crowded', 0.4);
+    }
+    const noise = toNoiseLevel(checkin?.noiseLevel);
+    if (typeof noise === 'number') {
+      if (noise <= 2.4) add('Quiet', 1);
+      if (noise >= 4) add('Crowded', 1);
+    }
+    if (typeof checkin?.busyness === 'number') {
+      if (checkin.busyness <= 2.4) add('Quiet', 0.6);
+      if (checkin.busyness >= 4) add('Crowded', 1);
+    }
+    if (checkin?.laptopFriendly === true) add('Study', 1);
+
+    if (Array.isArray(checkin?.visitIntent)) {
+      checkin.visitIntent.forEach((intent: unknown) => {
+        const normalizedIntent = typeof intent === 'string' ? intent.trim().toLowerCase() : '';
+        if (!normalizedIntent) return;
+        if (['deep_work', 'quiet_reading', 'group_study'].includes(normalizedIntent)) add('Study', 1);
+        if (['deep_work', 'quiet_reading'].includes(normalizedIntent)) add('Quiet', 0.8);
+        if (normalizedIntent === 'group_study') add('Seating', 0.7);
+        if (['hangout_friends', 'quick_pickup'].includes(normalizedIntent)) add('Crowded', 0.3);
+      });
+    }
+  });
+
+  return scores;
+}
+
+// Convert raw tag frequencies into dampened strengths to avoid overreacting to
+// a few repeated tags while preserving directional signal.
+function computeWorkTagSignal(tagScores: Record<string, number>): WorkTagSignal {
+  let positive = 0;
+  let negative = 0;
+  Object.entries(tagScores || {}).forEach(([rawTag, rawCount]) => {
+    if (typeof rawCount !== 'number' || !Number.isFinite(rawCount) || rawCount <= 0) return;
+    const tag = rawTag.trim().toLowerCase();
+    if (!tag) return;
+    if (POSITIVE_WORK_TAG_TOKENS.some((token) => tag.includes(token))) positive += rawCount;
+    if (NEGATIVE_WORK_TAG_TOKENS.some((token) => tag.includes(token))) negative += rawCount;
+  });
+  return {
+    positiveStrength: Math.sqrt(Math.max(0, positive)),
+    negativeStrength: Math.sqrt(Math.max(0, negative)),
+  };
+}
+
+function computeWorkIntentSignal(checkins: any[]): WorkIntentSignal {
+  let positive = 0;
+  let negative = 0;
+  checkins.forEach((checkin: any) => {
+    if (!Array.isArray(checkin?.visitIntent)) return;
+    checkin.visitIntent.forEach((intent: unknown) => {
+      const normalized = typeof intent === 'string' ? intent.trim().toLowerCase() : '';
+      if (!normalized) return;
+      if (['deep_work', 'quiet_reading', 'group_study'].includes(normalized)) positive += 1;
+      if (['hangout_friends', 'quick_pickup', 'date_night'].includes(normalized)) negative += 0.5;
+    });
+  });
+  return { positive, negative };
+}
+
+// Prior score encodes venue/category/external priors so workScore remains
+// realistic when direct check-in metrics are missing or noisy.
+function computePriorWorkScore(input: {
+  typeText: string;
+  workFriendlyType: boolean;
+  mixedUseType: boolean;
+  outdoorOnlyType: boolean;
+  noSeatingHardStop: boolean;
+  openNow?: boolean;
+  inferred?: BuildIntelligenceInput['inferred'];
+  externalRatingAvg: number | null;
+  externalSignalMeta: ExternalSignalMeta;
+  tagScores: Record<string, number>;
+  checkins: any[];
+}): number {
+  if (input.noSeatingHardStop) return 0;
+
+  let prior =
+    input.workFriendlyType ? 62 :
+      input.mixedUseType ? 50 :
+        input.outdoorOnlyType ? 26 :
+          44;
+
+  if (/bar|night_club|casino/.test(input.typeText)) prior -= 14;
+  if (/library|cowork|study|workspace|bookstore/.test(input.typeText)) prior += 6;
+  if (/coffee|cafe|espresso|roastery|tea/.test(input.typeText)) prior += 4;
+  if (/hotel|airport|station/.test(input.typeText)) prior -= 3;
+
+  if (typeof input.externalRatingAvg === 'number') {
+    const ratingDelta = clamp((input.externalRatingAvg - 3.8) * 12, -12, 14);
+    const trustFactor = 0.55 + input.externalSignalMeta.trustScore * 0.45;
+    prior += ratingDelta * trustFactor;
+  }
+
+  const inferredNoise = toNoiseLevel(input.inferred?.noise ?? null);
+  if (input.inferred?.goodForStudying === true) prior += 6;
+  if (input.inferred?.hasWifi === true) prior += 3;
+  if (inferredNoise !== null) {
+    if (inferredNoise <= 2.2) prior += 4;
+    else if (inferredNoise >= 4) prior -= 5;
+  }
+
+  const tagSignal = computeWorkTagSignal(input.tagScores);
+  prior += clamp(tagSignal.positiveStrength * 1.8 - tagSignal.negativeStrength * 2.2, -12, 12);
+
+  const intentSignal = computeWorkIntentSignal(input.checkins);
+  prior += clamp(intentSignal.positive * 1.2 - intentSignal.negative * 1.5, -8, 8);
+
+  if (input.openNow === true) prior += 1;
+  else if (input.openNow === false) prior -= 2;
+
+  return clamp(round(prior, 2), 8, 92);
+}
+
+// Blend weight increases as on-site evidence quality improves; low evidence
+// leans toward prior to prevent unrealistic low/high scores.
+function computeEvidenceWeight(input: {
+  sampleSize: number;
+  observedSignalCount: number;
+  reliabilityScore: number;
+  externalTrustScore: number;
+}) {
+  if (input.observedSignalCount <= 0) return 0.12;
+  const sampleNorm = clamp(Math.log10(1 + input.sampleSize) / 1.3, 0, 1);
+  const signalNorm = clamp(input.observedSignalCount / 6, 0, 1);
+  const reliabilityNorm = clamp(input.reliabilityScore, 0, 1);
+  const externalNorm = clamp(input.externalTrustScore, 0, 1);
+
+  return clamp(
+    0.12 +
+      sampleNorm * 0.38 +
+      signalNorm * 0.25 +
+      reliabilityNorm * 0.2 +
+      externalNorm * 0.05,
+    0.2,
+    0.9
+  );
 }
 
 function bucketHour(hour: number): 'morning' | 'afternoon' | 'evening' | 'late' {
@@ -852,7 +1079,10 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   if (cached && Date.now() - cached.ts < INTELLIGENCE_TTL_MS) return cached.payload;
 
   const checkins = Array.isArray(input.checkins) ? input.checkins : [];
-  const tagScores = input.tagScores || {};
+  // Combine explicit aggregate votes with inferred votes from check-ins to avoid
+  // losing tag intent in views that do not pre-aggregate tagScores.
+  const inferredTagScores = deriveTagScoresFromCheckins(checkins);
+  const tagScores = mergeTagScores(inferredTagScores, input.tagScores || {});
 
   const wifiValues = checkins.map((c: any) => c?.wifiSpeed).filter((v: any) => typeof v === 'number') as number[];
   const outletValues = checkins
@@ -989,10 +1219,12 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     (tagScores['Wi-Fi'] || 0) * 1.4 +
     (tagScores['Outlets'] || 0) * 1.2 +
     (tagScores['Seating'] || 0) * 1 +
-    (tagScores['Quiet'] || 0) * 1.1;
+    (tagScores['Quiet'] || 0) * 1.1 +
+    (tagScores['Study'] || 0) * 1.35 -
+    (tagScores['Crowded'] || 0) * 0.9;
   const typeText = `${input.placeName || ''} ${(input.types || []).join(' ')}`.toLowerCase();
   const seatingSignal = (tagScores['Seating'] || 0) + (tagScores['Outdoor Seating'] || 0) * 0.6;
-  const workFriendlyType = /library|cowork|coffee|cafe|study|workspace|bookstore/.test(typeText);
+  const workFriendlyType = /library|cowork|coffee|cafe|study|workspace|bookstore|espresso|roastery|tea/.test(typeText);
   const mixedUseType = /restaurant|bakery|hotel|lounge/.test(typeText);
   const outdoorOnlyType = /park|trail|playground|stadium|field|outdoor|plaza|beach/.test(typeText);
   const hasLaptopSignals = (laptopPct || 0) >= 35 || checkins.some((c: any) => c?.laptopFriendly === true);
@@ -1019,11 +1251,44 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     openBoost -
     cafePenalty +
     momentumBoost;
-  let workScore = clamp(Math.round(score), 0, 100);
+  // Raw model score from observed metrics.
+  const modelWorkScore = clamp(Math.round(score), 0, 100);
+  const observedSignalCount = [
+    wifiAvg,
+    outletAvg,
+    noiseAvg,
+    adjustedBusynessAvg,
+    laptopPct,
+  ].filter((value) => typeof value === 'number').length + (Object.keys(tagScores).length > 0 ? 1 : 0);
+  const priorWorkScore = computePriorWorkScore({
+    typeText,
+    workFriendlyType,
+    mixedUseType,
+    outdoorOnlyType,
+    noSeatingHardStop,
+    openNow: input.openNow,
+    inferred: inf,
+    externalRatingAvg,
+    externalSignalMeta,
+    tagScores,
+    checkins,
+  });
+  const evidenceWeight = computeEvidenceWeight({
+    sampleSize: checkins.length,
+    observedSignalCount,
+    reliabilityScore: reliability.score,
+    externalTrustScore: externalSignalMeta.trustScore,
+  });
+  // Final score: evidence-weighted blend of observed model and prior baseline.
+  let workScore = clamp(
+    Math.round(modelWorkScore * evidenceWeight + priorWorkScore * (1 - evidenceWeight)),
+    0,
+    100
+  );
   if (noSeatingHardStop) {
     workScore = 0;
   } else if (workScore <= 0) {
-    workScore = workFriendlyType ? 30 : 18;
+    workScore = workFriendlyType ? 42 : 30;
   }
   const scoreBreakdown: ScoreBreakdown = {
     wifi: { value: round((wifiAvg || 0) * 10, 1), source: wifiSource },
@@ -1031,7 +1296,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     noise: { value: round(noiseAvg !== null ? (6 - noiseAvg) * 7 : 0, 1), source: noiseSource },
     busyness: { value: round(adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 6 : 0, 1), source: adjustedBusynessAvg !== null ? 'checkin' : 'none' },
     laptop: { value: round((laptopPct || 0) * 0.22, 1), source: laptopSource },
-    tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 18, 1), source: tagBoost > 0 ? 'checkin' : 'none' },
+    tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 18, 1), source: Object.keys(tagScores).length > 0 ? 'checkin' : 'none' },
     externalRating: { value: round((externalRatingAvg || 0) * 6, 1), source: externalRatingAvg ? 'api' : 'none' },
     venueType: { value: round(venueBaseline + studyTypeBoost - cafePenalty, 1) },
     openStatus: { value: round(openBoost, 1) },

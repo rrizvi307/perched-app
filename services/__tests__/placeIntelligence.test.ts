@@ -93,6 +93,61 @@ describe('buildPlaceIntelligence', () => {
     expect(result.scoreBreakdown.venueType.value).toBeGreaterThanOrEqual(20);
   });
 
+  it('keeps sparse check-in spots out of single-digit scores when only partial signals exist', async () => {
+    // Regression: sparse real check-ins previously collapsed workScore too low.
+    const result = await buildPlaceIntelligence({
+      placeName: 'Brass Tacks',
+      placeId: 'brass-tacks-sparse-1',
+      checkins: [
+        mkCheckin({
+          wifiSpeed: null,
+          busyness: null,
+          noiseLevel: null,
+          laptopFriendly: null,
+          tags: ['Study', 'Quiet'],
+        }),
+      ] as any[],
+    });
+
+    expect(result.workScore).toBeGreaterThanOrEqual(35);
+  });
+
+  it('derives work-tag scoring from check-ins when explicit tagScores are missing', async () => {
+    // Regression: explore/spot paths can pass raw check-ins without aggregate tagScores.
+    // The scorer should still infer tag contribution from those check-ins.
+    const tagged = await buildPlaceIntelligence({
+      placeName: 'Tag Signal Spot',
+      placeId: 'tag-signal-1',
+      checkins: [
+        mkCheckin({
+          wifiSpeed: null,
+          busyness: null,
+          noiseLevel: null,
+          laptopFriendly: null,
+          tags: ['Study', 'Quiet', 'Wi-Fi'],
+        }),
+      ] as any[],
+    });
+
+    const untagged = await buildPlaceIntelligence({
+      placeName: 'Tag Signal Spot',
+      placeId: 'tag-signal-2',
+      checkins: [
+        mkCheckin({
+          wifiSpeed: null,
+          busyness: null,
+          noiseLevel: null,
+          laptopFriendly: null,
+          tags: [],
+        }),
+      ] as any[],
+    });
+
+    expect(tagged.scoreBreakdown.tags.source).toBe('checkin');
+    expect(tagged.scoreBreakdown.tags.value).toBeGreaterThan(0);
+    expect(tagged.scoreBreakdown.tags.value).toBeGreaterThanOrEqual(untagged.scoreBreakdown.tags.value);
+  });
+
   it('raises work score when wifi, laptop-friendliness, and outlets are stronger', async () => {
     const weak = await buildPlaceIntelligence({
       placeName: 'Signals Low',
