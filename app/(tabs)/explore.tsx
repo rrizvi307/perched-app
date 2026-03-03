@@ -306,6 +306,8 @@ export default function Explore() {
   const [locBusy, setLocBusy] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('map');
   const flatListRef = useRef<FlatList>(null);
+  const mapTouchingRef = useRef(false);
+  const [mapInteracting, setMapInteracting] = useState(false);
   const [mapRegion, setMapRegion] = useState<{
     latitude: number;
     longitude: number;
@@ -368,7 +370,8 @@ export default function Explore() {
 
   const mapKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY || null;
   const hasMapKey = !!mapKey;
-  const mapProvider: Provider | undefined = hasMapKey ? (PROVIDER_GOOGLE as Provider) : undefined;
+  // Use Apple Maps on iOS (native support); Google Maps on Android/web only
+  const mapProvider: Provider | undefined = hasMapKey && Platform.OS !== 'ios' ? (PROVIDER_GOOGLE as Provider) : undefined;
   const canShowInteractiveMap = typeof MapView === 'function' && (!Platform.OS || Platform.OS !== 'web' || hasMapKey);
 
   const activeFilterCount = useMemo(() => getActiveFilterCount(filters), [filters]);
@@ -1149,95 +1152,6 @@ export default function Explore() {
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
 
-      {viewMode === 'map' && canShowInteractiveMap ? (
-        <View pointerEvents="box-none" style={[styles.mapCard, { backgroundColor: card, borderColor: border, marginHorizontal: 20 }]}>
-          <MapView
-            ref={mapViewRef}
-            provider={mapProvider}
-            style={styles.map}
-            initialRegion={{
-              latitude: mapCenter.lat,
-              longitude: mapCenter.lng,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
-            }}
-            onRegionChangeComplete={handleRegionChange}
-            scrollEnabled
-            zoomEnabled
-            rotateEnabled={false}
-            pitchEnabled={false}
-            showsUserLocation
-            showsMyLocationButton
-          >
-            {loc ? (
-              <Marker
-                key="you"
-                coordinate={{ latitude: loc.lat, longitude: loc.lng }}
-                title="You"
-                pinColor={primary}
-              />
-            ) : null}
-
-            {clusteredMarkers.map((cluster) => {
-              if (cluster.count === 1 && cluster.spot) {
-                const spot = cluster.spot;
-                const coords = spot?._coords || spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
-                if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
-                const markerKey = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
-                return (
-                  <Marker
-                    key={markerKey}
-                    coordinate={{ latitude: coords.lat, longitude: coords.lng }}
-                    title={spot.name}
-                    description={spot.description || `${spot.count || 0} check-ins`}
-                    pinColor={spot.hereNowCount ? success : primary}
-                    onPress={() => openSpotSheet(spot)}
-                  />
-                );
-              }
-
-              return (
-                <Marker
-                  key={cluster.key}
-                  coordinate={{ latitude: cluster.lat, longitude: cluster.lng }}
-                  title={`${cluster.count} spots`}
-                  pinColor={accent}
-                  onPress={() => handleClusterPress(cluster)}
-                >
-                  <View style={[styles.clusterBubble, { backgroundColor: accent, borderColor: withAlpha(accent, 0.35) }]}>
-                    <Text style={styles.clusterText}>{cluster.count}</Text>
-                  </View>
-                </Marker>
-              );
-            })}
-          </MapView>
-        </View>
-      ) : viewMode === 'map' && mapPreview ? (
-        <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, marginHorizontal: 20 }]}>
-          <SpotImage source={{ uri: mapPreview }} style={styles.mapImage} />
-        </View>
-      ) : viewMode === 'map' ? (
-        <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, marginHorizontal: 20, alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={{ color: muted }}>Map unavailable.</Text>
-        </View>
-      ) : null}
-
-      {viewMode === 'map' ? (
-        <View style={[styles.mapOverlayRow, { marginHorizontal: 20 }]}>
-          <Pressable
-            onPress={handleLocateMe}
-            disabled={locBusy}
-            style={({ pressed }) => [
-              styles.mapOverlayChip,
-              { borderColor: border, backgroundColor: pressed ? highlight : card },
-              locBusy ? { opacity: 0.6 } : null,
-            ]}
-          >
-            <IconSymbol name="location.fill" size={16} color={loc ? primary : muted} />
-          </Pressable>
-        </View>
-      ) : null}
-
       <FlatList
         ref={flatListRef}
         style={{ flex: 1 }}
@@ -1247,7 +1161,7 @@ export default function Explore() {
         initialNumToRender={6}
         maxToRenderPerBatch={6}
         windowSize={8}
-        scrollEnabled
+        scrollEnabled={!mapInteracting}
         removeClippedSubviews={Platform.OS !== 'web'}
         onViewableItemsChanged={onViewableItemsChangedRef.current}
         viewabilityConfig={viewabilityConfigRef.current}
@@ -1383,6 +1297,112 @@ export default function Explore() {
                 ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}${rankingIntent !== 'any' ? ` • ranked for ${getDiscoveryIntentMeta(rankingIntent).shortLabel.toLowerCase()}` : ''}`
                 : 'No spots match current filters.'}
             </Text>
+
+            {viewMode === 'map' && canShowInteractiveMap ? (
+              <View
+                onTouchStart={() => {
+                  mapTouchingRef.current = true;
+                  setMapInteracting(true);
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: false });
+                }}
+                onTouchEnd={() => {
+                  mapTouchingRef.current = false;
+                  setMapInteracting(false);
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
+                }}
+                onTouchCancel={() => {
+                  mapTouchingRef.current = false;
+                  setMapInteracting(false);
+                  flatListRef.current?.setNativeProps?.({ scrollEnabled: true });
+                }}
+                style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}
+              >
+                <MapView
+                  ref={mapViewRef}
+                  provider={mapProvider}
+                  style={styles.map}
+                  initialRegion={{
+                    latitude: mapCenter.lat,
+                    longitude: mapCenter.lng,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
+                  onRegionChangeComplete={handleRegionChange}
+                  scrollEnabled
+                  zoomEnabled
+                  rotateEnabled={false}
+                  pitchEnabled={false}
+                  showsUserLocation
+                  showsMyLocationButton
+                >
+                  {loc ? (
+                    <Marker
+                      key="you"
+                      coordinate={{ latitude: loc.lat, longitude: loc.lng }}
+                      title="You"
+                      pinColor={primary}
+                    />
+                  ) : null}
+
+                  {clusteredMarkers.map((cluster) => {
+                    if (cluster.count === 1 && cluster.spot) {
+                      const spot = cluster.spot;
+                      const coords = spot?._coords || spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
+                      if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
+                      const markerKey = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
+                      return (
+                        <Marker
+                          key={markerKey}
+                          coordinate={{ latitude: coords.lat, longitude: coords.lng }}
+                          title={spot.name}
+                          description={spot.description || `${spot.count || 0} check-ins`}
+                          pinColor={spot.hereNowCount ? success : primary}
+                          onPress={() => openSpotSheet(spot)}
+                        />
+                      );
+                    }
+
+                    return (
+                      <Marker
+                        key={cluster.key}
+                        coordinate={{ latitude: cluster.lat, longitude: cluster.lng }}
+                        title={`${cluster.count} spots`}
+                        pinColor={accent}
+                        onPress={() => handleClusterPress(cluster)}
+                      >
+                        <View style={[styles.clusterBubble, { backgroundColor: accent, borderColor: withAlpha(accent, 0.35) }]}>
+                          <Text style={styles.clusterText}>{cluster.count}</Text>
+                        </View>
+                      </Marker>
+                    );
+                  })}
+                </MapView>
+              </View>
+            ) : viewMode === 'map' && mapPreview ? (
+              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border }]}>
+                <SpotImage source={{ uri: mapPreview }} style={styles.mapImage} />
+              </View>
+            ) : viewMode === 'map' ? (
+              <View style={[styles.mapCard, { backgroundColor: card, borderColor: border, alignItems: 'center', justifyContent: 'center' }]}>
+                <Text style={{ color: muted }}>Map unavailable.</Text>
+              </View>
+            ) : null}
+
+            {viewMode === 'map' ? (
+              <View style={styles.mapOverlayRow}>
+                <Pressable
+                  onPress={handleLocateMe}
+                  disabled={locBusy}
+                  style={({ pressed }) => [
+                    styles.mapOverlayChip,
+                    { borderColor: border, backgroundColor: pressed ? highlight : card },
+                    locBusy ? { opacity: 0.6 } : null,
+                  ]}
+                >
+                  <IconSymbol name="location.fill" size={16} color={loc ? primary : muted} />
+                </Pressable>
+              </View>
+            ) : null}
 
             <RecommendationsCard
               userLocation={loc}
