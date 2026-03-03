@@ -426,6 +426,16 @@ async function getCachedSecret(secretName: string): Promise<string> {
   return value;
 }
 
+function normalizeReferralCode(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function referralCodeFromHandle(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 // =============================================================================
 // REFERRAL FUNCTIONS
 // =============================================================================
@@ -438,33 +448,69 @@ export const processReferral = functions.firestore
   .document('referrals/{referralId}')
   .onCreate(async (snap, context) => {
     const data = snap.data();
-    const { referralCode, status } = data;
+    const rawReferralCode = data.referralCode;
+    const referralCode = normalizeReferralCode(rawReferralCode);
+    const { status } = data;
 
     if (status !== 'pending') {
+      return null;
+    }
+    if (!referralCode) {
+      await snap.ref.update({ status: 'invalid_code' });
       return null;
     }
 
     try {
       // Find the referrer by their referral code
-      // Referral codes are based on user handles or user IDs
-      const usersSnapshot = await db.collection('users')
-        .where('handle', '==', referralCode.toLowerCase())
+      let referrerId: string | null = null;
+      const normalizedHandle = referralCode.toLowerCase();
+
+      // Preferred match: precomputed canonical referralCode on user profile.
+      const byReferralCodeSnapshot = await db.collection('users')
+        .where('referralCode', '==', referralCode)
         .limit(1)
         .get();
+      if (!byReferralCodeSnapshot.empty) {
+        referrerId = byReferralCodeSnapshot.docs[0].id;
+      }
 
-      let referrerId: string | null = null;
+      // Legacy match: exact handle.
+      if (!referrerId) {
+        const usersSnapshot = await db.collection('users')
+          .where('handle', '==', normalizedHandle)
+          .limit(1)
+          .get();
+        if (!usersSnapshot.empty) {
+          referrerId = usersSnapshot.docs[0].id;
+        }
+      }
 
-      if (!usersSnapshot.empty) {
-        referrerId = usersSnapshot.docs[0].id;
-      } else {
-        // Try finding by partial user ID match
+      // Legacy fallback: handle prefix scan + canonicalized comparison.
+      if (!referrerId && normalizedHandle.length >= 3) {
+        const prefix = normalizedHandle.slice(0, Math.min(4, normalizedHandle.length));
+        const prefixEnd = `${prefix}\uf8ff`;
+        const handleCandidates = await db.collection('users')
+          .where('handle', '>=', prefix)
+          .where('handle', '<=', prefixEnd)
+          .limit(80)
+          .get();
+        const match = handleCandidates.docs.find((doc) => {
+          const handle = doc.data()?.handle;
+          return referralCodeFromHandle(handle) === referralCode;
+        });
+        if (match) {
+          referrerId = match.id;
+        }
+      }
+
+      // Last fallback: partial user ID match for historical referral links.
+      if (!referrerId) {
         const usersByIdSnapshot = await db.collection('users')
           .orderBy(admin.firestore.FieldPath.documentId())
           .startAt(referralCode)
           .endAt(referralCode + '\uf8ff')
           .limit(1)
           .get();
-
         if (!usersByIdSnapshot.empty) {
           referrerId = usersByIdSnapshot.docs[0].id;
         }
@@ -2044,6 +2090,9 @@ export const b2bGetUsageStats = functions.https.onCall(async (data, context) => 
     return { success: true, stats };
   } catch (error) {
     console.error('Error in b2bGetUsageStats:', error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
     throw new functions.https.HttpsError('internal', 'Failed to get usage stats');
   }
 });
@@ -2405,13 +2454,24 @@ export const updateSpotDisplayData = functions.firestore
       // Aggregate recent check-ins for live data
       const recentWindow = 7 * 24 * 60 * 60 * 1000; // 7 days
       const cutoff = Date.now() - recentWindow;
-
-      const recentCheckins = await db.collection('checkins')
-        .where('spotPlaceId', '==', spotId)
-        .where('timestamp', '>', cutoff)
-        .orderBy('timestamp', 'desc')
-        .limit(20)
-        .get();
+      const cutoffTimestamp = admin.firestore.Timestamp.fromMillis(cutoff);
+      let recentCheckins: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>;
+      try {
+        recentCheckins = await db.collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('createdAt', '>', cutoffTimestamp)
+          .orderBy('createdAt', 'desc')
+          .limit(20)
+          .get();
+      } catch {
+        // Legacy fallback for older rows that only contain numeric `timestamp`.
+        recentCheckins = await db.collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('timestamp', '>', cutoff)
+          .orderBy('timestamp', 'desc')
+          .limit(20)
+          .get();
+      }
 
       // Calculate live aggregation
       const liveData = aggregateLiveDataFromCheckins(recentCheckins.docs.map(d => d.data()));

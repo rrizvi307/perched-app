@@ -27,6 +27,10 @@ export function generateReferralCode(userId: string, handle?: string): string {
   return base.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function normalizeReferralCode(code: string): string {
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 /**
  * Get shareable app download link with referral tracking
  * Uses Firebase Dynamic Links format for proper attribution
@@ -238,10 +242,12 @@ export async function trackReferralSignup(
   referralCode?: string
 ): Promise<void> {
   if (!referralCode) return;
+  const normalizedReferralCode = normalizeReferralCode(referralCode);
+  if (!normalizedReferralCode) return;
 
   track('referral_signup', {
     new_user_id: newUserId,
-    referral_code: referralCode,
+    referral_code: normalizedReferralCode,
   });
 
   const fb = ensureFirebase();
@@ -252,14 +258,14 @@ export async function trackReferralSignup(
 
     // Store referral info on the new user's profile
     await db.collection('users').doc(newUserId).set({
-      referredBy: referralCode.toUpperCase(),
+      referredBy: normalizedReferralCode,
       referredAt: fb.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
     // Create a referral record for tracking and Cloud Function processing
     // Cloud Function should watch this collection to credit premium time
     await db.collection('referrals').add({
-      referralCode: referralCode.toUpperCase(),
+      referralCode: normalizedReferralCode,
       newUserId,
       status: 'pending', // Will be updated to 'credited' by Cloud Function
       createdAt: fb.firestore.FieldValue.serverTimestamp(),
@@ -267,7 +273,7 @@ export async function trackReferralSignup(
 
     track('referral_recorded', {
       new_user_id: newUserId,
-      referral_code: referralCode,
+      referral_code: normalizedReferralCode,
     });
   } catch (error) {
     console.error('Failed to track referral signup:', error);
