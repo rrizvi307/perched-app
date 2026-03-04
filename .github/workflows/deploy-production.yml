@@ -1,0 +1,75 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+      FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+      FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+      FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+      FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+      FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+      FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+      GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      YELP_API_KEY: ${{ secrets.YELP_API_KEY }}
+      FOURSQUARE_API_KEY: ${{ secrets.FOURSQUARE_API_KEY }}
+      APP_CHECK_ALLOWED_APP_IDS: ${{ secrets.APP_CHECK_ALLOWED_APP_IDS }}
+      FIREBASE_FUNCTIONS_REGION: ${{ secrets.FIREBASE_FUNCTIONS_REGION }}
+      GOOGLE_PLACES_REQUIRE_APP_CHECK: "true"
+      PLACE_INTEL_REQUIRE_APP_CHECK: "true"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Install Cloud Functions dependencies
+        run: npm ci --prefix functions --legacy-peer-deps
+
+      - name: Write Firebase service account
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/firebase-service-account.json" <<'EOF'
+          ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          EOF
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
+          echo "FIREBASE_SERVICE_ACCOUNT_PATH=$RUNNER_TEMP/firebase-service-account.json" >> "$GITHUB_ENV"
+
+      - name: Deploy Functions
+        run: npm run deploy:functions -- --project "$FIREBASE_PROJECT_ID"
+
+      - name: Run User Document Migration
+        run: npm run migrate:user-documents:split -- --apply --project "$FIREBASE_PROJECT_ID" --service-account "$FIREBASE_SERVICE_ACCOUNT_PATH"
+
+      - name: Verify User Document Migration
+        run: npm run verify:user-documents:split -- --project "$FIREBASE_PROJECT_ID" --service-account "$FIREBASE_SERVICE_ACCOUNT_PATH"
+
+      - name: Deploy Firestore and Storage Rules
+        run: npm run deploy:rules -- --project "$FIREBASE_PROJECT_ID"
+
+      - name: Post Deploy Smoke Checks
+        run: npm run post-deploy:smoke-check -- --project "$FIREBASE_PROJECT_ID" --service-account "$FIREBASE_SERVICE_ACCOUNT_PATH"
+
+      - name: Build Mobile
+        run: npm run build:mobile
