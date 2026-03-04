@@ -76,7 +76,7 @@ export default function SignUp() {
     'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null
   >(null);
 
-  const { register, user, refreshUser } = useAuth();
+  const { register, user } = useAuth();
   const fbAvailable = isFirebaseConfigured();
   const color = useThemeColor({}, 'text');
   const primary = useThemeColor({}, 'primary');
@@ -214,7 +214,7 @@ export default function SignUp() {
         if (typeof profile?.ambiancePreference === 'string') setAmbiancePreference(profile.ambiancePreference);
       } catch {}
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // GPS bias for city search
   useEffect(() => {

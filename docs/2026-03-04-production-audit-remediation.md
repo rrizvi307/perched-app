@@ -202,6 +202,16 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add focused tests around analytics event payload sanitization and naming
 
+17. Lint and dead-code cleanup
+   - Status: In progress
+   - Goal: reduce warning noise so new production issues are visible and stale code paths do not linger unnoticed.
+   - Current patch:
+     - removed unused friend-search and account-deletion helper paths that no longer had UI entry points
+     - cleaned stale hook dependencies and dead state in `feed`, `profile`, `signup`, `settings`, and `upgrade`
+     - `npm run lint` now passes with zero warnings
+   - Follow-up:
+     - add a CI gate that fails on lint warnings so warning debt does not reaccumulate
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.

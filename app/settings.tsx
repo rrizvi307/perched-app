@@ -6,7 +6,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { clearPushToken, deleteAccountAndData, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
+import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
@@ -15,7 +15,7 @@ import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import * as ExpoLinking from 'expo-linking';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -117,63 +117,6 @@ export default function SettingsScreen() {
     } finally {
       locationToggleInFlight.current = false;
     }
-  }
-
-  async function runDeleteAccount(password?: string) {
-    if (!user) return;
-    if (!fbAvailable) {
-      showToast('Firebase not configured. Unable to delete account.', 'error');
-      return;
-    }
-
-    try {
-      showToast('Deleting account…', 'info');
-      await deleteAccountAndData({ password });
-      await signOut().catch(() => {});
-      showToast('Account deleted.', 'success');
-      router.replace('/signin');
-    } catch (error: any) {
-      if (error?.code === 'auth/requires-recent-login') {
-        showToast('Please sign in again before deleting your account.', 'warning');
-        return;
-      }
-      showToast('Unable to delete account right now.', 'error');
-    }
-  }
-
-  function confirmDeleteAccount() {
-    if (!user) return;
-
-    Alert.alert(
-      'Delete account?',
-      'This permanently deletes your account and check-ins. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            if (user.email) {
-              Alert.prompt(
-                'Confirm password',
-                'Enter your password to delete your account.',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: (value?: string) => void runDeleteAccount(value || undefined),
-                  },
-                ],
-                'secure-text'
-              );
-              return;
-            }
-            void runDeleteAccount();
-          },
-        },
-      ]
-    );
   }
 
   return (
@@ -385,3 +328,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
+

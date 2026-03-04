@@ -26,18 +26,18 @@ import { gapStyle } from '@/utils/layout';
 import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
+import { findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { toMillis } from '@/services/checkinUtils';
-import { isPhoneLike, normalizePhone } from '@/utils/phone';
+import { normalizePhone } from '@/utils/phone';
 import { openExternalLink } from '@/services/externalLinks';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { Button, Platform, Pressable, RefreshControl, SectionList, Share, StyleSheet, Text, TextInput, View, useColorScheme } from 'react-native';
+import { Button, Platform, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useColorScheme } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
 
@@ -74,18 +74,15 @@ export default function ProfileScreen() {
   const separator = withAlpha(textColor, 0.08);
   const [checkins, setCheckins] = useState<any[]>([]);
   const router = useRouter();
-  const [friendIds, setFriendIds] = useState<string[]>([]);
-  const [friends, setFriends] = useState<any[]>([]);
-  const [closeFriendIds, setCloseFriendIds] = useState<string[]>([]);
-  const [recentByUser, setRecentByUser] = useState<Record<string, number>>({});
-  const [activeSuggestions, setActiveSuggestions] = useState<any[]>([]);
-  const [incomingRequests, setIncomingRequests] = useState<any[]>([]);
-  const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
-  const [requestUsers, setRequestUsers] = useState<Record<string, any>>({});
-  const [searchEmail, setSearchEmail] = useState('');
-  const [searchResult, setSearchResult] = useState<any | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [suggestedFriends, setSuggestedFriends] = useState<any[]>([]);
+  const [, setFriendIds] = useState<string[]>([]);
+  const [, setFriends] = useState<any[]>([]);
+  const [, setCloseFriendIds] = useState<string[]>([]);
+  const [, setRecentByUser] = useState<Record<string, number>>({});
+  const [, setActiveSuggestions] = useState<any[]>([]);
+  const [, setIncomingRequests] = useState<any[]>([]);
+  const [, setOutgoingRequests] = useState<any[]>([]);
+  const [, setRequestUsers] = useState<Record<string, any>>({});
+  const [, setSuggestedFriends] = useState<any[]>([]);
   const [cityDraft, setCityDraft] = useState(user?.city || '');
   const [campusDraft, setCampusDraft] = useState(user?.campus || '');
   const [cityQuery, setCityQuery] = useState('');
@@ -106,8 +103,8 @@ export default function ProfileScreen() {
   const [geoBias, setGeoBias] = useState<{ lat: number; lng: number } | null>(null);
   const [editingHandle, setEditingHandle] = useState(false);
   const [handleDraft, setHandleDraft] = useState(user?.handle || '');
-  const [contactMatches, setContactMatches] = useState<any[]>([]);
-  const [contactError, setContactError] = useState<string | null>(null);
+  const [, setContactMatches] = useState<any[]>([]);
+  const [, setContactError] = useState<string | null>(null);
   const [savedSpots, setSavedSpots] = useState<any[]>([]);
   const [showContactsPrimer, setShowContactsPrimer] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -129,7 +126,6 @@ export default function ProfileScreen() {
     const pct = Math.round(((total - missing.length) / total) * 100);
     return { pct, missing };
   }, [user]);
-  const requestUserMap = useMemo(() => ({ ...requestUsers }), [requestUsers]);
   const historySections = useMemo(() => {
     // Posts no longer expire; keep a single newest-first history section.
     const sorted = (checkins || []).slice().sort((a: any, b: any) => createdAtMs(b) - createdAtMs(a));
@@ -664,71 +660,6 @@ export default function ProfileScreen() {
     }
   }
 
-  async function handleSearch() {
-    if (!searchEmail.trim()) return;
-    setSearching(true);
-    try {
-      const trimmed = searchEmail.trim();
-      const res = trimmed.startsWith('@')
-        ? await findUserByHandle(trimmed)
-        : isPhoneLike(trimmed)
-          ? await findUserByPhone(trimmed)
-          : await findUserByEmail(trimmed);
-      setSearchResult(res);
-    } catch {
-      setSearchResult(null);
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  async function sendRequest(targetId: string) {
-    if (!user) return;
-    try {
-      await sendFriendRequest(user.id, targetId);
-      await refreshFriends();
-      showToast('Friend request sent.', 'success');
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      if (message.includes('friend graph permissions')) {
-        setContactError('Friend sync is temporarily unavailable. Please re-open the app and try again.');
-      } else {
-        setContactError('Unable to send friend request right now.');
-      }
-    }
-  }
-
-  async function acceptRequest(request: any) {
-    if (!user) return;
-    try {
-      await acceptFriendRequest(request.id, request.fromId, request.toId);
-      await refreshFriends();
-      showToast('Friend request accepted.', 'success');
-    } catch {
-      setContactError('Unable to accept this request right now.');
-    }
-  }
-
-  async function declineRequest(request: any) {
-    try {
-      await declineFriendRequest(request.id);
-      await refreshFriends();
-    } catch {
-      setContactError('Unable to decline this request right now.');
-    }
-  }
-
-  async function removeFriend(targetId: string) {
-    if (!user) return;
-    try {
-      await unfollowUserRemote(user.id, targetId);
-      await refreshFriends();
-    } catch {
-      setContactError('Unable to remove friend right now.');
-    }
-  }
-
-
   async function loadContacts() {
     setContactError(null);
     const startedAt = Date.now();
@@ -798,16 +729,6 @@ export default function ProfileScreen() {
       });
       setContactError('Unable to load contacts right now. Try again in a moment.');
     }
-  }
-
-  async function inviteFriends() {
-    try {
-      const message = user?.handle
-        ? `Join me on Perched — @${user.handle}\nDownload: https://perched.app`
-        : 'Join me on Perched.\nDownload: https://perched.app';
-      await Share.share({ message });
-      await logEvent('invite_shared', user?.id);
-    } catch {}
   }
 
   return (

@@ -591,7 +591,6 @@ function FeedPhoto({
 				let ok = true;
 				setRefreshing(true);
 				try {
-					const demo = isDemoMode();
 					await pruneInvalidPendingCheckins().catch(() => {});
 					const pendingPromise = getPendingCheckins().catch(() => []);
 					const fetchMarkId = startPerfMark('feed_fetch');
@@ -676,7 +675,7 @@ function FeedPhoto({
 				setInitialLoading(false);
 				void endPerfMark(loadMarkId, ok);
 			}
-			}, [filterExpired, mergeRemoteWithLocal, resolvePhotoSrc, showToast, summarizePending, user]);
+			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
 
 		const loadMore = useCallback(async () => {
 			if (loadingMore || !hasMoreRemote) return;
@@ -945,7 +944,7 @@ function FeedPhoto({
 		}).filter(Boolean);
 
 			return sanitized.filter(Boolean) as Checkin[];
-		}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet, resolvePhotoSrc]);
+		}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet]);
 
 		const collapsedItems = useMemo(() => {
 			const toTs = (value: any) => toMillis(value) || 0;
