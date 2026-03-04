@@ -28,6 +28,7 @@ import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { toMillis } from '@/services/checkinUtils';
@@ -1316,7 +1317,7 @@ export default function ProfileScreen() {
                   style={({ pressed }) => [{ flex: 1, margin: 6, opacity: pressed ? 0.88 : 1 }]}
                 >
                   <SpotImage
-                    source={{ uri: it.photoUrl || it.photoURL || it.imageUrl || it.imageURL || it.image }}
+                    source={{ uri: resolvePhotoUri(it) || '' }}
                     style={[styles.gridImage, { borderColor }]}
                   />
                 </Pressable>

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCheckins } from '@/storage/local';
 import { track } from './analytics';
-import { ensureFirebase, getCheckinsForUserRemote, updateUserRemote } from './firebaseClient';
+import { ensureFirebase, getCheckinsForUserRemote } from './firebaseClient';
 
 export interface Achievement {
   id: string;
@@ -173,6 +173,9 @@ export const ACHIEVEMENTS: Achievement[] = [
 const STORAGE_KEY = '@perched_user_stats';
 const ACHIEVEMENTS_KEY = '@perched_achievements';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REMOTE_USER_STATS_COLLECTION = 'userStats';
+const REMOTE_ACHIEVEMENTS_COLLECTION = 'achievements';
+const gamificationSyncRequests = new Map<string, Promise<boolean>>();
 
 function createDefaultStats(): UserStats {
   return {
@@ -249,6 +252,83 @@ function mergeWithDefaults(raw: Partial<UserStats> | null | undefined): UserStat
     ...(raw || {}),
     spotVisits: raw?.spotVisits && typeof raw.spotVisits === 'object' ? raw.spotVisits : {},
   };
+}
+
+async function writeStatsToLocalStorage(stats: UserStats, userId: string | null): Promise<void> {
+  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
+  await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+}
+
+async function writeAchievementsToLocalStorage(achievements: Achievement[], userId: string | null): Promise<void> {
+  const storageKey = getScopedStorageKey(ACHIEVEMENTS_KEY, userId);
+  await AsyncStorage.setItem(storageKey, JSON.stringify(achievements));
+}
+
+function hydrateAchievement(raw: Record<string, any> | null | undefined): Achievement | null {
+  const id = String(raw?.achievementId || raw?.id || '').trim();
+  if (!id) return null;
+  const base = ACHIEVEMENTS.find((achievement) => achievement.id === id);
+  if (!base) return null;
+  const unlockedAt =
+    toMillis(raw?.unlockedAt) ||
+    (typeof raw?.unlockedAtMs === 'number' ? raw.unlockedAtMs : 0) ||
+    Date.now();
+  return {
+    ...base,
+    unlockedAt,
+  };
+}
+
+async function getRemoteUserStats(userId: string): Promise<UserStats | null> {
+  const fb = ensureFirebase();
+  if (!fb || !userId) return null;
+  try {
+    const doc = await fb.firestore().collection(REMOTE_USER_STATS_COLLECTION).doc(userId).get();
+    if (!doc.exists) return null;
+    return mergeWithDefaults(doc.data() as Partial<UserStats>);
+  } catch {
+    return null;
+  }
+}
+
+async function getRemoteUnlockedAchievements(userId: string): Promise<Achievement[] | null> {
+  const fb = ensureFirebase();
+  if (!fb || !userId) return null;
+  try {
+    const snapshot = await fb.firestore()
+      .collection(REMOTE_ACHIEVEMENTS_COLLECTION)
+      .where('userId', '==', userId)
+      .get();
+    const achievements = snapshot.docs
+      .map((doc: any) => hydrateAchievement({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((achievement: Achievement | null): achievement is Achievement => achievement !== null)
+      .sort((left: Achievement, right: Achievement) => (right.unlockedAt || 0) - (left.unlockedAt || 0));
+    return achievements;
+  } catch {
+    return null;
+  }
+}
+
+async function requestRemoteGamificationSync(userId: string): Promise<boolean> {
+  const fb = ensureFirebase();
+  if (!fb || !userId) return false;
+  const existing = gamificationSyncRequests.get(userId);
+  if (existing) return existing;
+
+  const request = (async () => {
+    try {
+      const callable = fb.functions().httpsCallable('syncMyGamification');
+      await callable({});
+      return true;
+    } catch {
+      return false;
+    } finally {
+      gamificationSyncRequests.delete(userId);
+    }
+  })();
+
+  gamificationSyncRequests.set(userId, request);
+  return request;
 }
 
 function checkinIdentity(item: any): string {
@@ -372,10 +452,10 @@ function buildStatsFromCheckins(checkins: any[], seed: UserStats): UserStats {
 /**
  * Get user stats
  */
-export async function getUserStats(options: { reconcileFromCheckins?: boolean } = {}): Promise<UserStats> {
+export async function getUserStats(options: { reconcileFromCheckins?: boolean; preferRemote?: boolean } = {}): Promise<UserStats> {
   const reconcileFromCheckins = options.reconcileFromCheckins !== false;
+  const preferRemote = options.preferRemote !== false;
   const userId = getActiveUserId();
-  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
   let stats = createDefaultStats();
 
   try {
@@ -383,6 +463,23 @@ export async function getUserStats(options: { reconcileFromCheckins?: boolean } 
     if (stored) stats = mergeWithDefaults(stored);
   } catch (error) {
     console.error('Failed to load user stats:', error);
+  }
+
+  if (preferRemote && userId) {
+    let remoteStats = await getRemoteUserStats(userId);
+    if (!remoteStats) {
+      const synced = await requestRemoteGamificationSync(userId);
+      if (synced) {
+        remoteStats = await getRemoteUserStats(userId);
+      }
+    }
+    if (remoteStats) {
+      stats = remoteStats;
+      try {
+        await writeStatsToLocalStorage(stats, userId);
+      } catch {}
+      return stats;
+    }
   }
 
   if (reconcileFromCheckins && userId) {
@@ -394,7 +491,7 @@ export async function getUserStats(options: { reconcileFromCheckins?: boolean } 
         const nextFingerprint = JSON.stringify(nextStats);
         if (prevFingerprint !== nextFingerprint) {
           stats = nextStats;
-          await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+          await writeStatsToLocalStorage(stats, userId);
           await checkAchievements(stats, userId);
         }
       } else if (stats.totalCheckins !== 0 || stats.uniqueSpots !== 0) {
@@ -410,7 +507,7 @@ export async function getUserStats(options: { reconcileFromCheckins?: boolean } 
           lastCheckinDate: undefined,
           spotVisits: {},
         };
-        await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+        await writeStatsToLocalStorage(stats, userId);
       }
     } catch (error) {
       console.error('Failed to reconcile stats from check-ins:', error);
@@ -428,8 +525,7 @@ export async function updateStatsAfterCheckin(
   timestamp: number = Date.now()
 ): Promise<UserStats> {
   const userId = getActiveUserId();
-  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
-  const stats = await getUserStats({ reconcileFromCheckins: false });
+  const stats = await getUserStats({ reconcileFromCheckins: false, preferRemote: false });
 
   // Increment total
   stats.totalCheckins++;
@@ -505,22 +601,8 @@ export async function updateStatsAfterCheckin(
     stats.weekendCheckins++;
   }
 
-  // Save stats
-  await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+  await writeStatsToLocalStorage(stats, userId);
 
-  // Sync streak to Firestore user doc for campus leaderboard
-  try {
-    const fb = ensureFirebase();
-    const uid = fb?.auth()?.currentUser?.uid;
-    if (uid) {
-      void updateUserRemote(uid, {
-        streakDays: stats.streakDays,
-        longestStreak: stats.longestStreak,
-      });
-    }
-  } catch {}
-
-  // Check for new achievements
   await checkAchievements(stats, userId);
 
   return stats;
@@ -530,11 +612,13 @@ export async function updateStatsAfterCheckin(
  * Update friend count
  */
 export async function updateFriendsCount(count: number): Promise<void> {
+  if (ensureFirebase()) {
+    return;
+  }
   const userId = getActiveUserId();
-  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
-  const stats = await getUserStats({ reconcileFromCheckins: false });
+  const stats = await getUserStats({ reconcileFromCheckins: false, preferRemote: false });
   stats.friendsCount = count;
-  await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+  await writeStatsToLocalStorage(stats, userId);
   await checkAchievements(stats, userId);
 }
 
@@ -542,6 +626,9 @@ export async function updateFriendsCount(count: number): Promise<void> {
  * Check and unlock new achievements
  */
 async function checkAchievements(stats: UserStats, userId: string | null = getActiveUserId()): Promise<Achievement[]> {
+  if (ensureFirebase()) {
+    return [];
+  }
   const unlockedIds = await getUnlockedAchievementIds(userId);
   const newlyUnlocked: Achievement[] = [];
 
@@ -571,20 +658,34 @@ async function checkAchievements(stats: UserStats, userId: string | null = getAc
  * Unlock an achievement
  */
 async function unlockAchievement(achievement: Achievement, userId: string | null = getActiveUserId()): Promise<void> {
-  const storageKey = getScopedStorageKey(ACHIEVEMENTS_KEY, userId);
   const unlocked = await getUnlockedAchievements(userId);
   const updated = {
     ...achievement,
     unlockedAt: Date.now(),
   };
   unlocked.push(updated);
-  await AsyncStorage.setItem(storageKey, JSON.stringify(unlocked));
+  await writeAchievementsToLocalStorage(unlocked, userId);
 }
 
 /**
  * Get all unlocked achievements
  */
 export async function getUnlockedAchievements(userId: string | null = getActiveUserId()): Promise<Achievement[]> {
+  if (userId) {
+    let remoteAchievements = await getRemoteUnlockedAchievements(userId);
+    if (!remoteAchievements) {
+      const synced = await requestRemoteGamificationSync(userId);
+      if (synced) {
+        remoteAchievements = await getRemoteUnlockedAchievements(userId);
+      }
+    }
+    if (remoteAchievements) {
+      try {
+        await writeAchievementsToLocalStorage(remoteAchievements, userId);
+      } catch {}
+      return remoteAchievements;
+    }
+  }
   try {
     const stored = await readStorageWithLegacyFallback<Achievement[]>(ACHIEVEMENTS_KEY, userId);
     if (stored) return stored;

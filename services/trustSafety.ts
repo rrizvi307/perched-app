@@ -4,7 +4,12 @@
  * Handles user reporting, blocking, and safety features
  */
 
-import { ensureFirebase } from './firebaseClient';
+import {
+  blockUserRemote as blockCanonicalUserRemote,
+  ensureFirebase,
+  getBlockedUsers as getCanonicalBlockedUsers,
+  unblockUserRemote as unblockCanonicalUserRemote,
+} from './firebaseClient';
 import { track } from './analytics';
 import { moderateText } from './contentModeration';
 
@@ -36,14 +41,6 @@ interface Report {
   createdAt: number;
   updatedAt: number;
   resolvedAt?: number;
-}
-
-interface BlockedUser {
-  id: string;
-  blockerId: string;
-  blockedId: string;
-  reason?: string;
-  createdAt: number;
 }
 
 interface SafetySettings {
@@ -164,59 +161,17 @@ export async function blockUser(
     if (blockerId === blockedId) {
       return { success: false, error: 'Cannot block yourself' };
     }
-
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Check if already blocked
-    const existingBlock = await db
-      .collection('blockedUsers')
-      .where('blockerId', '==', blockerId)
-      .where('blockedId', '==', blockedId)
-      .get();
-
-    if (!existingBlock.empty) {
+    const blockedUsers = await getCanonicalBlockedUsers(blockerId);
+    if (blockedUsers.includes(blockedId)) {
       return { success: false, error: 'User already blocked' };
     }
 
-    const block: Omit<BlockedUser, 'id'> = {
-      blockerId,
-      blockedId,
-      reason,
-      createdAt: Date.now(),
-    };
-
-    await db.collection('blockedUsers').add(block);
-
-    // Update safety settings
-    const settingsRef = db.collection('safetySettings').doc(blockerId);
-    const settingsDoc = await settingsRef.get();
-
-    if (settingsDoc.exists) {
-      await settingsRef.update({
-        blockedUsers: fb.firestore.FieldValue.arrayUnion(blockedId),
-        updatedAt: Date.now(),
-      });
-    } else {
-      const defaultSettings = getDefaultSafetySettings(blockerId);
-      defaultSettings.blockedUsers = [blockedId];
-      await settingsRef.set(defaultSettings);
-    }
-
-    // Remove from friends if applicable
-    await db.collection('friends').doc(blockerId).update({
-      friendIds: fb.firestore.FieldValue.arrayRemove(blockedId),
-    });
-
-    await db.collection('friends').doc(blockedId).update({
-      friendIds: fb.firestore.FieldValue.arrayRemove(blockerId),
-    });
+    await blockCanonicalUserRemote(blockerId, blockedId);
 
     track('user_blocked', {
       blocker_id: blockerId,
       blocked_id: blockedId,
+      has_reason: Boolean(reason),
     });
 
     return { success: true };
@@ -234,27 +189,7 @@ export async function unblockUser(
   blockedId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Find and delete block
-    const blockSnapshot = await db
-      .collection('blockedUsers')
-      .where('blockerId', '==', blockerId)
-      .where('blockedId', '==', blockedId)
-      .get();
-
-    if (!blockSnapshot.empty) {
-      await Promise.all(blockSnapshot.docs.map((doc: any) => doc.ref.delete()));
-    }
-
-    // Update safety settings
-    await db.collection('safetySettings').doc(blockerId).update({
-      blockedUsers: fb.firestore.FieldValue.arrayRemove(blockedId),
-      updatedAt: Date.now(),
-    });
+    await unblockCanonicalUserRemote(blockerId, blockedId);
 
     track('user_unblocked', {
       blocker_id: blockerId,
@@ -273,18 +208,7 @@ export async function unblockUser(
  */
 export async function getBlockedUsers(userId: string): Promise<string[]> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return [];
-
-    const db = fb.firestore();
-
-    const settingsDoc = await db.collection('safetySettings').doc(userId).get();
-
-    if (settingsDoc.exists) {
-      return settingsDoc.data()?.blockedUsers || [];
-    }
-
-    return [];
+    return await getCanonicalBlockedUsers(userId);
   } catch (error) {
     console.error('Failed to get blocked users:', error);
     return [];
@@ -308,17 +232,31 @@ export async function isUserBlocked(
 export async function getSafetySettings(userId: string): Promise<SafetySettings> {
   try {
     const fb = ensureFirebase();
-    if (!fb) return getDefaultSafetySettings(userId);
+    const blockedUsers = await getCanonicalBlockedUsers(userId);
+    if (!fb) {
+      return {
+        ...getDefaultSafetySettings(userId),
+        blockedUsers,
+      };
+    }
 
     const db = fb.firestore();
 
     const doc = await db.collection('safetySettings').doc(userId).get();
 
     if (doc.exists) {
-      return { userId, ...doc.data() } as SafetySettings;
+      return {
+        ...getDefaultSafetySettings(userId),
+        ...doc.data(),
+        userId,
+        blockedUsers,
+      } as SafetySettings;
     }
 
-    return getDefaultSafetySettings(userId);
+    return {
+      ...getDefaultSafetySettings(userId),
+      blockedUsers,
+    };
   } catch (error) {
     console.error('Failed to get safety settings:', error);
     return getDefaultSafetySettings(userId);
@@ -330,17 +268,19 @@ export async function getSafetySettings(userId: string): Promise<SafetySettings>
  */
 export async function updateSafetySettings(
   userId: string,
-  updates: Partial<Omit<SafetySettings, 'userId' | 'updatedAt'>>
+  updates: Partial<Omit<SafetySettings, 'userId' | 'updatedAt' | 'blockedUsers'>>
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const fb = ensureFirebase();
     if (!fb) return { success: false, error: 'Firebase not initialized' };
 
     const db = fb.firestore();
+    const { blockedUsers: _ignoredBlockedUsers, ...safeUpdates } = updates as Partial<SafetySettings>;
 
     await db.collection('safetySettings').doc(userId).set(
       {
-        ...updates,
+        ...safeUpdates,
+        userId,
         updatedAt: Date.now(),
       },
       { merge: true }

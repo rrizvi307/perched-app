@@ -11,7 +11,9 @@ import { parseCheckinTimestamp, queryCheckinsBySpot } from './schemaHelpers';
 
 export interface APIKey {
   id: string;
-  key: string;
+  keyHash: string;
+  keyPreview: string;
+  keyLast4: string;
   partnerId: string;
   partnerName: string;
   tier: 'free' | 'basic' | 'pro' | 'enterprise';
@@ -34,6 +36,10 @@ export interface APIKey {
   active: boolean;
   createdAt: number;
   expiresAt?: number;
+}
+
+export interface GeneratedAPIKey extends APIKey {
+  plaintextKey: string;
 }
 
 export interface APIUsageLog {
@@ -102,7 +108,7 @@ export async function generateAPIKey(
   tier: APIKey['tier'],
   permissions: APIKey['permissions'],
   expiresInDays?: number
-): Promise<{ success: boolean; apiKey?: APIKey; error?: string }> {
+): Promise<{ success: boolean; apiKey?: GeneratedAPIKey; error?: string }> {
   if (!isTrustedBackendRuntime()) {
     return { success: false, error: getTrustedRuntimeError('generateAPIKey') };
   }
@@ -115,10 +121,13 @@ export async function generateAPIKey(
 
     // Generate secure random key
     const keyString = generateSecureKey();
+    const keyHash = await hashApiKey(keyString);
+    const keyMetadata = buildApiKeyMetadata(keyString);
 
     const now = Date.now();
     const apiKey: Omit<APIKey, 'id'> = {
-      key: keyString,
+      keyHash,
+      ...keyMetadata,
       partnerId,
       partnerName,
       tier,
@@ -140,7 +149,7 @@ export async function generateAPIKey(
 
     return {
       success: true,
-      apiKey: { id: docRef.id, ...apiKey },
+      apiKey: { id: docRef.id, ...apiKey, plaintextKey: keyString },
     };
   } catch (error) {
     console.error('Failed to generate API key:', error);
@@ -163,11 +172,12 @@ export async function validateAPIKey(
     if (!fb) return { valid: false, error: 'Firebase not initialized' };
 
     const db = fb.firestore();
+    const keyHash = await hashApiKey(apiKeyString);
 
     // Find API key
     const snapshot = await db
       .collection('apiKeys')
-      .where('key', '==', apiKeyString)
+      .where('keyHash', '==', keyHash)
       .limit(1)
       .get();
 
@@ -176,7 +186,9 @@ export async function validateAPIKey(
     }
 
     const doc = snapshot.docs[0];
-    const apiKey = { id: doc.id, ...doc.data() } as APIKey;
+    const rawApiKey = doc.data() || {};
+    const apiKey = sanitizeAPIKeyDocument(doc.id, rawApiKey) as APIKey;
+    void selfHealAPIKeyDocument(db, fb, doc.id, rawApiKey, keyHash, apiKeyString).catch(() => {});
 
     // Check if active
     if (!apiKey.active) {
@@ -465,15 +477,104 @@ export async function getAPIUsageStats(
 // Helper functions
 
 function generateSecureKey(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const prefix = 'pk_';
-  let key = prefix;
+  const randomBytes = new Uint8Array(48);
+  const cryptoApi = globalThis.crypto;
 
-  for (let i = 0; i < 48; i++) {
-    key += chars.charAt(Math.floor(Math.random() * chars.length));
+  if (cryptoApi?.getRandomValues) {
+    cryptoApi.getRandomValues(randomBytes);
+  } else {
+    for (let i = 0; i < randomBytes.length; i += 1) {
+      randomBytes[i] = Math.floor(Math.random() * 256);
+    }
   }
 
+  let key = prefix;
+  for (const byte of randomBytes) {
+    key += alphabet.charAt(byte % alphabet.length);
+  }
   return key;
+}
+
+async function hashApiKey(apiKey: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error('Secure crypto unavailable for API key hashing');
+  }
+
+  const encoded = new TextEncoder().encode(apiKey.trim());
+  const digest = await subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function buildApiKeyPreview(apiKey: string): string {
+  const normalized = apiKey.trim();
+  if (normalized.length <= 18) return normalized;
+  return `${normalized.slice(0, 12)}...${normalized.slice(-4)}`;
+}
+
+function buildApiKeyMetadata(apiKey: string) {
+  return {
+    keyPreview: buildApiKeyPreview(apiKey),
+    keyLast4: apiKey.trim().slice(-4),
+  };
+}
+
+function sanitizeAPIKeyDocument(id: string, data: Record<string, any>): APIKey {
+  const previewSource = typeof data.keyPreview === 'string' && data.keyPreview
+    ? data.keyPreview
+    : typeof data.key === 'string'
+      ? data.key
+      : '';
+  const metadata = buildApiKeyMetadata(previewSource);
+  return {
+    id,
+    keyHash: typeof data.keyHash === 'string' ? data.keyHash : '',
+    keyPreview: typeof data.keyPreview === 'string' && data.keyPreview ? data.keyPreview : metadata.keyPreview,
+    keyLast4: typeof data.keyLast4 === 'string' && data.keyLast4 ? data.keyLast4 : metadata.keyLast4,
+    partnerId: data.partnerId,
+    partnerName: data.partnerName,
+    tier: data.tier,
+    rateLimit: data.rateLimit,
+    currentUsage: data.currentUsage,
+    usageResetAt: data.usageResetAt,
+    permissions: data.permissions,
+    active: data.active,
+    createdAt: data.createdAt,
+    expiresAt: data.expiresAt,
+  };
+}
+
+async function selfHealAPIKeyDocument(
+  db: any,
+  fb: any,
+  docId: string,
+  rawData: Record<string, any>,
+  keyHash: string,
+  apiKey: string
+) {
+  const updates: Record<string, any> = {};
+  const metadata = buildApiKeyMetadata(apiKey);
+
+  if (rawData.keyHash !== keyHash) {
+    updates.keyHash = keyHash;
+  }
+  if (rawData.keyPreview !== metadata.keyPreview) {
+    updates.keyPreview = metadata.keyPreview;
+  }
+  if (rawData.keyLast4 !== metadata.keyLast4) {
+    updates.keyLast4 = metadata.keyLast4;
+  }
+  if (typeof rawData.key === 'string' && rawData.key) {
+    updates.key = fb.firestore.FieldValue.delete();
+  }
+
+  if (Object.keys(updates).length === 0) return;
+  updates.updatedAt = Date.now();
+  await db.collection('apiKeys').doc(docId).set(updates, { merge: true });
 }
 
 function calculateWaitTime(busyness: number): number {

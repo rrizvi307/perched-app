@@ -48,7 +48,7 @@ async function resolveGsUrl(gsUrl: string): Promise<string | null> {
 export async function normalizeCheckinPhoto(item: CheckinLike): Promise<CheckinLike> {
   const next = { ...item };
   const resolved = resolvePhotoUri(next);
-  if (!next.photoUrl && resolved) {
+  if (!next.photoUrl && resolved && !resolved.startsWith('gs://')) {
     next.photoUrl = resolved;
   }
   if (typeof next.photoUrl === 'string') {
@@ -59,6 +59,13 @@ export async function normalizeCheckinPhoto(item: CheckinLike): Promise<CheckinL
     } else if (trimmed.startsWith('http://')) {
       next.photoUrl = `https://${trimmed.slice('http://'.length)}`;
     }
+  }
+  if (!next.image && resolved) {
+    next.image = resolved;
+  }
+  if (typeof next.image === 'string' && next.image.startsWith('gs://')) {
+    const resolvedUrl = await resolveGsUrl(next.image);
+    if (resolvedUrl) next.image = resolvedUrl;
   }
   if (next.photoUrl && !next.image) {
     next.image = next.photoUrl;

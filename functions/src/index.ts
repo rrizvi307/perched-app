@@ -5,12 +5,13 @@
  */
 
 import * as admin from 'firebase-admin';
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import * as crypto from 'crypto';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import * as winston from 'winston';
 import * as Joi from 'joi';
 import { validateSpotLive } from '../../services/spotSchema';
+import { normalizePhone } from '../../utils/phone';
 
 admin.initializeApp();
 
@@ -76,6 +77,7 @@ const B2B_NEARBY_CANDIDATE_LIMIT = 40;
 const B2B_NEARBY_BATCH_QUERY_LIMIT = 250;
 const B2B_NEARBY_IN_MAX = 10;
 const B2B_NEARBY_WINDOW_MS = 2 * 60 * 60 * 1000;
+const EARLY_ADOPTER_WEEKLY_TARGET = 3;
 
 const BACKEND_PERF_COLLECTION = 'backendPerformanceMetrics';
 
@@ -106,6 +108,65 @@ async function recordBackendPerf(
 
 function hashApiKey(apiKey: string): string {
   return crypto.createHash('sha256').update(apiKey).digest('hex');
+}
+
+function buildApiKeyPreview(apiKey: string): string {
+  const normalized = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!normalized) return '';
+  if (normalized.length <= 18) return normalized;
+  return `${normalized.slice(0, 12)}...${normalized.slice(-4)}`;
+}
+
+function buildApiKeyMetadata(apiKey: string) {
+  const normalized = typeof apiKey === 'string' ? apiKey.trim() : '';
+  return {
+    keyPreview: buildApiKeyPreview(normalized),
+    keyLast4: normalized ? normalized.slice(-4) : '',
+  };
+}
+
+function sanitizeApiKeyRecordData(data: any) {
+  if (!data || typeof data !== 'object') return {};
+  const next = { ...data };
+  delete next.key;
+  return next;
+}
+
+function maybeSelfHealApiKeyRecord(
+  ref: FirebaseFirestore.DocumentReference,
+  rawData: any,
+  keyHash: string,
+  apiKey: string,
+) {
+  const updates: Record<string, any> = {};
+  const metadata = buildApiKeyMetadata(apiKey);
+  const rawKeyHash = asId(rawData?.keyHash);
+
+  if (rawKeyHash !== keyHash) {
+    updates.keyHash = keyHash;
+  }
+  if (rawData?.keyPreview !== metadata.keyPreview) {
+    updates.keyPreview = metadata.keyPreview;
+  }
+  if (rawData?.keyLast4 !== metadata.keyLast4) {
+    updates.keyLast4 = metadata.keyLast4;
+  }
+  if (typeof rawData?.key === 'string' && rawData.key) {
+    updates.key = admin.firestore.FieldValue.delete();
+  }
+
+  if (Object.keys(updates).length > 0) {
+    updates.updatedAt = Date.now();
+    void ref.set(updates, { merge: true }).catch(() => {});
+  }
+
+  void db.collection(API_KEY_HASH_COLLECTION).doc(keyHash).set(
+    {
+      partnerId: ref.id,
+      updatedAt: Date.now(),
+    },
+    { merge: true },
+  ).catch(() => {});
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -197,6 +258,367 @@ function readCheckinTimeMs(checkin: any): number | null {
   return toMillis(checkin?.createdAt ?? checkin?.timestamp);
 }
 
+function getWeekWindowFromMs(nowMs: number) {
+  const start = new Date(nowMs);
+  start.setHours(0, 0, 0, 0);
+  const dayOffsetFromMonday = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - dayOffsetFromMonday);
+  const weekStartMs = start.getTime();
+  const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000 - 1;
+  const weekKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+  return { weekKey, weekStartMs, weekEndMs };
+}
+
+type GamificationStats = {
+  totalCheckins: number;
+  uniqueSpots: number;
+  friendsCount: number;
+  streakDays: number;
+  longestStreak: number;
+  nightOwlCheckins: number;
+  earlyBirdCheckins: number;
+  weekendCheckins: number;
+  returnVisits: number;
+  firstDiscoveries: number;
+  lastCheckinDate: number | null;
+  spotVisits: Record<string, number>;
+};
+
+type GamificationAchievementDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  tier: 'bronze' | 'silver' | 'gold' | 'platinum';
+  unlocked: (stats: GamificationStats) => boolean;
+};
+
+const GAMIFICATION_ACHIEVEMENTS: GamificationAchievementDefinition[] = [
+  {
+    id: 'explorer_bronze',
+    name: 'Explorer',
+    description: 'Check in at 5 different spots',
+    tier: 'bronze',
+    unlocked: (stats) => stats.uniqueSpots >= 5,
+  },
+  {
+    id: 'explorer_silver',
+    name: 'World Traveler',
+    description: 'Check in at 25 different spots',
+    tier: 'silver',
+    unlocked: (stats) => stats.uniqueSpots >= 25,
+  },
+  {
+    id: 'explorer_gold',
+    name: 'Legendary Explorer',
+    description: 'Check in at 100 different spots',
+    tier: 'gold',
+    unlocked: (stats) => stats.uniqueSpots >= 100,
+  },
+  {
+    id: 'social_bronze',
+    name: 'Social Butterfly',
+    description: 'Connect with 10 friends',
+    tier: 'bronze',
+    unlocked: (stats) => stats.friendsCount >= 10,
+  },
+  {
+    id: 'social_silver',
+    name: 'Connector',
+    description: 'Connect with 50 friends',
+    tier: 'silver',
+    unlocked: (stats) => stats.friendsCount >= 50,
+  },
+  {
+    id: 'streak_bronze',
+    name: 'Getting Started',
+    description: 'Check in 3 days in a row',
+    tier: 'bronze',
+    unlocked: (stats) => stats.streakDays >= 3,
+  },
+  {
+    id: 'streak_silver',
+    name: 'Week Warrior',
+    description: 'Check in 7 days in a row',
+    tier: 'silver',
+    unlocked: (stats) => stats.streakDays >= 7,
+  },
+  {
+    id: 'streak_gold',
+    name: 'Unstoppable',
+    description: 'Check in 30 days in a row',
+    tier: 'gold',
+    unlocked: (stats) => stats.streakDays >= 30,
+  },
+  {
+    id: 'streak_platinum',
+    name: 'Legend',
+    description: 'Check in 100 days in a row',
+    tier: 'platinum',
+    unlocked: (stats) => stats.streakDays >= 100,
+  },
+  {
+    id: 'night_owl',
+    name: 'Night Owl',
+    description: 'Check in after 10pm 10 times',
+    tier: 'bronze',
+    unlocked: (stats) => stats.nightOwlCheckins >= 10,
+  },
+  {
+    id: 'early_bird',
+    name: 'Early Bird',
+    description: 'Check in before 8am 10 times',
+    tier: 'bronze',
+    unlocked: (stats) => stats.earlyBirdCheckins >= 10,
+  },
+  {
+    id: 'weekend_warrior',
+    name: 'Weekend Warrior',
+    description: 'Check in on weekends 20 times',
+    tier: 'silver',
+    unlocked: (stats) => stats.weekendCheckins >= 20,
+  },
+  {
+    id: 'loyal_bronze',
+    name: 'Regular',
+    description: 'Return to the same spot 5 times',
+    tier: 'bronze',
+    unlocked: (stats) => stats.returnVisits >= 5,
+  },
+  {
+    id: 'loyal_silver',
+    name: 'Super Regular',
+    description: 'Return to the same spot 20 times',
+    tier: 'silver',
+    unlocked: (stats) => stats.returnVisits >= 20,
+  },
+  {
+    id: 'trendsetter',
+    name: 'Trendsetter',
+    description: 'Be first to discover 5 new spots',
+    tier: 'silver',
+    unlocked: (stats) => stats.firstDiscoveries >= 5,
+  },
+];
+
+const GAMIFICATION_DAY_MS = 24 * 60 * 60 * 1000;
+
+function createDefaultGamificationStats(friendsCount = 0): GamificationStats {
+  return {
+    totalCheckins: 0,
+    uniqueSpots: 0,
+    friendsCount,
+    streakDays: 0,
+    longestStreak: 0,
+    nightOwlCheckins: 0,
+    earlyBirdCheckins: 0,
+    weekendCheckins: 0,
+    returnVisits: 0,
+    firstDiscoveries: 0,
+    lastCheckinDate: null,
+    spotVisits: {},
+  };
+}
+
+function toDayStartMs(ms: number): number {
+  const date = new Date(ms);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function getGamificationSpotKey(checkin: any): string {
+  const canonicalId = asId(checkin?.spotPlaceId || checkin?.spotId);
+  if (canonicalId) return canonicalId;
+  const fallbackName = asId(checkin?.spotName || checkin?.spot);
+  return fallbackName ? fallbackName.toLowerCase() : '';
+}
+
+function getDiscoverySpotKey(checkin: any): string {
+  return asId(checkin?.spotPlaceId || checkin?.spotId);
+}
+
+function buildGamificationStatsFromCheckins(
+  checkins: any[],
+  friendsCount: number,
+  firstDiscoveries: number,
+): GamificationStats {
+  const normalized = (checkins || [])
+    .map((checkin: any) => ({
+      checkin,
+      ts: readCheckinTimeMs(checkin) || 0,
+    }))
+    .filter((entry) => entry.ts > 0)
+    .sort((a, b) => b.ts - a.ts);
+
+  if (!normalized.length) {
+    return createDefaultGamificationStats(friendsCount);
+  }
+
+  const spotVisits: Record<string, number> = {};
+  let nightOwlCheckins = 0;
+  let earlyBirdCheckins = 0;
+  let weekendCheckins = 0;
+  const dayStarts = new Set<number>();
+
+  normalized.forEach(({ checkin, ts }) => {
+    const spotKey = getGamificationSpotKey(checkin);
+    if (spotKey) {
+      spotVisits[spotKey] = (spotVisits[spotKey] || 0) + 1;
+    }
+    const date = new Date(ts);
+    const hour = date.getHours();
+    const day = date.getDay();
+    if (hour >= 22 || hour < 6) nightOwlCheckins += 1;
+    if (hour >= 5 && hour < 8) earlyBirdCheckins += 1;
+    if (day === 0 || day === 6) weekendCheckins += 1;
+    dayStarts.add(toDayStartMs(ts));
+  });
+
+  const sortedDaysAsc = Array.from(dayStarts).sort((a, b) => a - b);
+  let longestStreak = 0;
+  let rolling = 0;
+  let previousDay: number | null = null;
+  sortedDaysAsc.forEach((dayStart) => {
+    if (previousDay !== null && dayStart - previousDay === GAMIFICATION_DAY_MS) {
+      rolling += 1;
+    } else {
+      rolling = 1;
+    }
+    previousDay = dayStart;
+    if (rolling > longestStreak) longestStreak = rolling;
+  });
+
+  let streakDays = 0;
+  if (sortedDaysAsc.length > 0) {
+    const daySet = new Set(sortedDaysAsc);
+    let cursor = sortedDaysAsc[sortedDaysAsc.length - 1];
+    while (daySet.has(cursor)) {
+      streakDays += 1;
+      cursor -= GAMIFICATION_DAY_MS;
+    }
+  }
+
+  return {
+    totalCheckins: normalized.length,
+    uniqueSpots: Object.keys(spotVisits).length,
+    friendsCount,
+    streakDays,
+    longestStreak,
+    nightOwlCheckins,
+    earlyBirdCheckins,
+    weekendCheckins,
+    returnVisits: Object.values(spotVisits).filter((count) => count >= 3).length,
+    firstDiscoveries,
+    lastCheckinDate: normalized[0]?.ts || null,
+    spotVisits,
+  };
+}
+
+function sameIdList(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+function sameCheckinGamificationFields(before: any, after: any): boolean {
+  return (
+    asId(before?.userId) === asId(after?.userId) &&
+    getGamificationSpotKey(before) === getGamificationSpotKey(after) &&
+    getDiscoverySpotKey(before) === getDiscoverySpotKey(after) &&
+    (readCheckinTimeMs(before) || 0) === (readCheckinTimeMs(after) || 0)
+  );
+}
+
+async function countFirstDiscoveriesForUser(userId: string, discoverySpotIds: string[]): Promise<number> {
+  if (!userId || !discoverySpotIds.length) return 0;
+  let count = 0;
+  for (const spotId of discoverySpotIds) {
+    try {
+      const snapshot = await db.collection('checkins')
+        .where('spotPlaceId', '==', spotId)
+        .orderBy('createdAt', 'asc')
+        .limit(1)
+        .get();
+      const first = snapshot.docs[0];
+      if (first && asId(first.data()?.userId) === userId) {
+        count += 1;
+      }
+    } catch {
+      // Ignore per-spot failures so one bad query does not block all stats.
+    }
+  }
+  return count;
+}
+
+async function syncAchievementUnlocksForUser(userId: string, stats: GamificationStats): Promise<void> {
+  const unlocked = GAMIFICATION_ACHIEVEMENTS.filter((achievement) => achievement.unlocked(stats));
+  if (!unlocked.length) return;
+
+  const existingSnapshot = await db.collection('achievements').where('userId', '==', userId).get();
+  const existingIds = new Set(
+    existingSnapshot.docs
+      .map((doc) => asId(doc.data()?.achievementId))
+      .filter(Boolean),
+  );
+
+  const batch = db.batch();
+  let writes = 0;
+  unlocked.forEach((achievement) => {
+    if (existingIds.has(achievement.id)) return;
+    const ref = db.collection('achievements').doc(`${userId}_${achievement.id}`);
+    batch.set(ref, {
+      userId,
+      achievementId: achievement.id,
+      name: achievement.name,
+      description: achievement.description,
+      tier: achievement.tier,
+      unlockedAt: admin.firestore.FieldValue.serverTimestamp(),
+      unlockedAtMs: Date.now(),
+      source: 'server_gamification',
+    }, { merge: true });
+    writes += 1;
+  });
+
+  if (writes > 0) {
+    await batch.commit();
+  }
+}
+
+async function syncGamificationForUser(userId: string): Promise<void> {
+  if (!userId) return;
+
+  const [userDoc, checkinsSnapshot] = await Promise.all([
+    db.collection('users').doc(userId).get(),
+    db.collection('checkins').where('userId', '==', userId).get(),
+  ]);
+
+  const userData = userDoc.exists ? (userDoc.data() || {}) : {};
+  const friendsCount = normalizeIdList(userData.friends).length;
+  const checkins = checkinsSnapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() || {}) }));
+  const discoverySpotIds = Array.from(new Set(
+    checkins
+      .map((checkin) => getDiscoverySpotKey(checkin))
+      .filter(Boolean),
+  ));
+  const firstDiscoveries = await countFirstDiscoveriesForUser(userId, discoverySpotIds);
+  const stats = buildGamificationStatsFromCheckins(checkins, friendsCount, firstDiscoveries);
+  const timestamp = admin.firestore.FieldValue.serverTimestamp();
+
+  await db.collection('userStats').doc(userId).set({
+    userId,
+    ...stats,
+    updatedAt: timestamp,
+    computedAtMs: Date.now(),
+  }, { merge: true });
+
+  await db.collection('users').doc(userId).set({
+    streakDays: stats.streakDays,
+    longestStreak: stats.longestStreak,
+  }, { merge: true });
+
+  await syncAchievementUnlocksForUser(userId, stats);
+}
+
 type ApiKeyLookup = {
   docId: string;
   ref: FirebaseFirestore.DocumentReference;
@@ -207,7 +629,9 @@ async function resolveApiKeyRecord(apiKey: string): Promise<ApiKeyLookup | null>
   const key = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!key) return null;
 
-  const cached = apiKeyCache.get(key);
+  const keyHash = hashApiKey(key);
+
+  const cached = apiKeyCache.get(keyHash);
   const now = Date.now();
   if (cached && now - cached.ts < API_KEY_CACHE_TTL_MS) {
     return {
@@ -217,40 +641,34 @@ async function resolveApiKeyRecord(apiKey: string): Promise<ApiKeyLookup | null>
     };
   }
 
-  const keyHash = hashApiKey(key);
-
   try {
     const hashDoc = await db.collection(API_KEY_HASH_COLLECTION).doc(keyHash).get();
     const partnerId = asId(hashDoc.data()?.partnerId);
     if (partnerId) {
       const keyDoc = await db.collection('apiKeys').doc(partnerId).get();
       if (keyDoc.exists) {
-        const keyData = keyDoc.data() || {};
-        if (keyData.key === key) {
-          apiKeyCache.set(key, { ts: now, docId: keyDoc.id, data: keyData });
+        const rawKeyData = keyDoc.data() || {};
+        const storedHash = asId(rawKeyData.keyHash);
+        if (!storedHash || storedHash === keyHash) {
+          const keyData = sanitizeApiKeyRecordData(rawKeyData);
+          apiKeyCache.set(keyHash, { ts: now, docId: keyDoc.id, data: keyData });
+          maybeSelfHealApiKeyRecord(keyDoc.ref, rawKeyData, keyHash, key);
           return { docId: keyDoc.id, ref: keyDoc.ref, data: keyData };
         }
       }
     }
   } catch {
-    // Fall through to legacy query.
+    // Fall through to hash query fallback.
   }
 
-  const keysSnapshot = await db.collection('apiKeys').where('key', '==', key).limit(1).get();
+  const keysSnapshot = await db.collection('apiKeys').where('keyHash', '==', keyHash).limit(1).get();
   if (keysSnapshot.empty) return null;
 
   const keyDoc = keysSnapshot.docs[0];
-  const keyData = keyDoc.data() || {};
-  apiKeyCache.set(key, { ts: now, docId: keyDoc.id, data: keyData });
-
-  // Self-heal hash lookup index for subsequent fast lookups.
-  void db.collection(API_KEY_HASH_COLLECTION).doc(keyHash).set(
-    {
-      partnerId: keyDoc.id,
-      updatedAt: Date.now(),
-    },
-    { merge: true },
-  ).catch(() => {});
+  const rawKeyData = keyDoc.data() || {};
+  const keyData = sanitizeApiKeyRecordData(rawKeyData);
+  apiKeyCache.set(keyHash, { ts: now, docId: keyDoc.id, data: keyData });
+  maybeSelfHealApiKeyRecord(keyDoc.ref, rawKeyData, keyHash, key);
 
   return { docId: keyDoc.id, ref: keyDoc.ref, data: keyData };
 }
@@ -271,6 +689,25 @@ function normalizeIdList(value: unknown): string[] {
     items.push(id);
   }
   return items;
+}
+
+function sanitizePublicUserProfile(userId: string, data: Record<string, any> | null | undefined) {
+  const user = data || {};
+  return {
+    id: userId,
+    name: typeof user.name === 'string' ? user.name : null,
+    handle: typeof user.handle === 'string' ? user.handle : null,
+    photoUrl: typeof user.photoUrl === 'string' ? user.photoUrl : null,
+    avatarUrl: typeof user.avatarUrl === 'string' ? user.avatarUrl : null,
+    city: typeof user.city === 'string' ? user.city : null,
+    campus: typeof user.campus === 'string' ? user.campus : null,
+    campusOrCity: typeof user.campusOrCity === 'string' ? user.campusOrCity : null,
+    campusType: typeof user.campusType === 'string' ? user.campusType : null,
+    coffeeIntents: Array.isArray(user.coffeeIntents) ? user.coffeeIntents.slice(0, 3) : [],
+    ambiancePreference: typeof user.ambiancePreference === 'string' ? user.ambiancePreference : null,
+    createdAt: user.createdAt || null,
+    updatedAt: user.updatedAt || null,
+  };
 }
 
 // CORS allowed origins whitelist
@@ -801,6 +1238,58 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
   throw new functions.https.HttpsError('invalid-argument', `Unsupported action: ${action}`);
 });
 
+export const secureUserLookup = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const type = asId(data?.type);
+  const rawQuery = asId(data?.query);
+  if (!type || !rawQuery) {
+    throw new functions.https.HttpsError('invalid-argument', 'type and query are required');
+  }
+
+  const privateUsers = db.collection('userPrivate');
+  let snapshot: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>;
+
+  if (type === 'email') {
+    const normalizedEmail = rawQuery.toLowerCase();
+    snapshot = await privateUsers.where('email', '==', normalizedEmail).limit(1).get();
+  } else if (type === 'phone') {
+    const normalized = normalizePhone(rawQuery);
+    if (!normalized) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid phone');
+    }
+    snapshot = await privateUsers.where('phoneNormalized', '==', normalized).limit(1).get();
+  } else {
+    throw new functions.https.HttpsError('invalid-argument', 'Unsupported lookup type');
+  }
+
+  if (snapshot.empty) {
+    return { user: null };
+  }
+
+  const privateDoc = snapshot.docs[0];
+  const userId = privateDoc.id;
+  const publicDoc = await db.collection('users').doc(userId).get();
+  if (!publicDoc.exists) {
+    return { user: null };
+  }
+
+  return { user: sanitizePublicUserProfile(publicDoc.id, publicDoc.data() || {}) };
+});
+
+export const syncMyGamification = functions.https.onCall(async (_data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  await syncGamificationForUser(userId);
+  return { ok: true };
+});
+
 /**
  * Send notification when a friend request is created
  */
@@ -966,6 +1455,94 @@ export const onCheckinCreated = functions.firestore
     }
   });
 
+export const enterWeeklyRaffleOnCheckin = functions.firestore
+  .document('checkins/{checkinId}')
+  .onCreate(async (snap) => {
+    const data = snap.data() || {};
+    const userId = asId(data.userId);
+    if (!userId) return null;
+
+    const checkinTimeMs = readCheckinTimeMs(data) || Date.now();
+    const { weekKey, weekStartMs, weekEndMs } = getWeekWindowFromMs(checkinTimeMs);
+    const entryId = `${userId}_${weekKey}`;
+    const entryRef = db.collection('weeklyRaffleEntries').doc(entryId);
+
+    try {
+      const existing = await entryRef.get();
+      if (existing.exists) return null;
+
+      const weeklySnapshot = await db.collection('checkins')
+        .where('userId', '==', userId)
+        .where('createdAt', '>=', admin.firestore.Timestamp.fromMillis(weekStartMs))
+        .where('createdAt', '<=', admin.firestore.Timestamp.fromMillis(weekEndMs))
+        .limit(EARLY_ADOPTER_WEEKLY_TARGET)
+        .get();
+
+      if (weeklySnapshot.size < EARLY_ADOPTER_WEEKLY_TARGET) {
+        return null;
+      }
+
+      const serverTimestamp = admin.firestore.FieldValue.serverTimestamp();
+      await entryRef.set({
+        userId,
+        weekKey,
+        weekStartMs,
+        weekEndMs,
+        target: EARLY_ADOPTER_WEEKLY_TARGET,
+        postCount: EARLY_ADOPTER_WEEKLY_TARGET,
+        status: 'entered',
+        qualifiedAt: serverTimestamp,
+        createdAt: serverTimestamp,
+        updatedAt: serverTimestamp,
+      }, { merge: false });
+      return null;
+    } catch (error) {
+      console.error('enterWeeklyRaffleOnCheckin error', error);
+      return null;
+    }
+  });
+
+export const syncGamificationOnCheckinWrite = functions.firestore
+  .document('checkins/{checkinId}')
+  .onWrite(async (change) => {
+    const before = change.before.exists ? (change.before.data() || {}) : null;
+    const after = change.after.exists ? (change.after.data() || {}) : null;
+
+    if (before && after && sameCheckinGamificationFields(before, after)) {
+      return null;
+    }
+
+    const userIds = Array.from(new Set([
+      asId(before?.userId),
+      asId(after?.userId),
+    ].filter(Boolean)));
+
+    try {
+      await Promise.all(userIds.map((userId) => syncGamificationForUser(userId)));
+    } catch (error) {
+      console.error('syncGamificationOnCheckinWrite error', error);
+    }
+    return null;
+  });
+
+export const syncGamificationOnFriendsWrite = functions.firestore
+  .document('users/{userId}')
+  .onWrite(async (change, context) => {
+    const beforeFriends = normalizeIdList(change.before.exists ? change.before.data()?.friends : []);
+    const afterFriends = normalizeIdList(change.after.exists ? change.after.data()?.friends : []);
+
+    if (sameIdList(beforeFriends, afterFriends)) {
+      return null;
+    }
+
+    try {
+      await syncGamificationForUser(asId(context.params.userId));
+    } catch (error) {
+      console.error('syncGamificationOnFriendsWrite error', error);
+    }
+    return null;
+  });
+
 type ExternalSource = 'foursquare' | 'yelp';
 type ExternalPlaceSignal = {
   source: ExternalSource;
@@ -987,14 +1564,6 @@ function parseCloudRuntimeConfig() {
   return {};
 }
 const runtimeConfig = (() => {
-  try {
-    const direct = functions.config();
-    if (direct && typeof direct === 'object' && Object.keys(direct).length > 0) {
-      return direct;
-    }
-  } catch {
-    // Ignore and fallback below.
-  }
   return parseCloudRuntimeConfig();
 })();
 
@@ -1489,6 +2058,8 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
   try {
     // Generate cryptographically secure API key
     const apiKey = generateCryptoKey();
+    const keyHash = hashApiKey(apiKey);
+    const keyMetadata = buildApiKeyMetadata(apiKey);
 
     const rateLimits: Record<string, number> = {
       free: 100,
@@ -1504,8 +2075,8 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
     };
 
     const keyData = {
-      key: apiKey,
-      keyHash: hashApiKey(apiKey),
+      keyHash,
+      ...keyMetadata,
       partnerId,
       partnerName,
       tier: tier || 'free',
@@ -1520,7 +2091,7 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
 
     const batch = db.batch();
     const keyRef = db.collection('apiKeys').doc(partnerId);
-    const hashRef = db.collection(API_KEY_HASH_COLLECTION).doc(keyData.keyHash);
+    const hashRef = db.collection(API_KEY_HASH_COLLECTION).doc(keyHash);
     batch.set(keyRef, keyData);
     batch.set(hashRef, {
       partnerId,
@@ -1528,7 +2099,7 @@ export const b2bGenerateAPIKey = functions.https.onCall(async (data, context) =>
     }, { merge: true });
     await batch.commit();
 
-    apiKeyCache.set(apiKey, { ts: Date.now(), docId: partnerId, data: keyData });
+    apiKeyCache.set(keyHash, { ts: Date.now(), docId: partnerId, data: keyData });
 
     console.log(`Generated API key for partner: ${partnerId}`);
     return { success: true, apiKey, tier: keyData.tier, rateLimit: keyData.rateLimit };

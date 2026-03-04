@@ -1,4 +1,4 @@
-const PHOTO_URL_FIELDS = ['photoUrl', 'photoURL', 'imageUrl', 'imageURL', 'image'] as const;
+const PHOTO_URL_FIELDS = ['photoUrl', 'photoURL', 'photoPath', 'imageUrl', 'imageURL', 'image'] as const;
 
 function isLikelyPath(value: string) {
   return value.startsWith('/') || value.startsWith('./') || value.startsWith('../');
@@ -11,6 +11,7 @@ export function isPhotoUriRenderable(value: unknown): value is string {
   if (candidate === 'null' || candidate === 'undefined' || candidate === '[object Object]') return false;
   if (candidate.startsWith('https://')) return true;
   if (candidate.startsWith('http://')) return false; // iOS ATS blocks many insecure URLs.
+  if (candidate.startsWith('gs://')) return true;
   if (candidate.startsWith('file://')) return true;
   if (candidate.startsWith('blob:')) return true;
   if (candidate.startsWith('data:')) return true;
@@ -51,7 +52,7 @@ export function findInvalidPhotoSeeds(items: any[]): Array<{ id: string; uri: st
       if (raw) invalid.push({ id, uri: raw });
       return;
     }
-    if (!candidate.startsWith('https://') && !candidate.startsWith('file://') && !candidate.startsWith('blob:') && !candidate.startsWith('data:') && !candidate.startsWith('content://') && !candidate.startsWith('ph://') && !candidate.startsWith('assets-library://') && !isLikelyPath(candidate)) {
+    if (!candidate.startsWith('https://') && !candidate.startsWith('gs://') && !candidate.startsWith('file://') && !candidate.startsWith('blob:') && !candidate.startsWith('data:') && !candidate.startsWith('content://') && !candidate.startsWith('ph://') && !candidate.startsWith('assets-library://') && !isLikelyPath(candidate)) {
       invalid.push({ id, uri: candidate });
     }
   });

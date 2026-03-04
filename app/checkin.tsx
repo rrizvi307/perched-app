@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
 import PermissionSheet from '@/components/ui/permission-sheet';
 import StatusBanner from '@/components/ui/status-banner';
-import { Image, InteractionManager, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { InteractionManager, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 // use ImagePicker for camera-launch to avoid direct Camera component on web
 import PlaceSearch from '@/components/place-search';
 import { Body, H1, Label } from '@/components/ui/typography';
@@ -25,6 +25,7 @@ import { getMapsKey, searchPlacesNearby } from '@/services/googleMaps';
 import { devLog } from '@/services/logger';
 import { logEvent } from '@/services/logEvent';
 import { requestForegroundLocation } from '@/services/location';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { clearCheckinDraft, enqueuePendingCheckin, getCheckinDraft, getLastCheckinAt, getPermissionPrimerSeen, recordPlaceEvent, recordPlaceTag, saveCheckin, saveCheckinDraft, setLastCheckinAt, setPermissionPrimerSeen } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useLocalSearchParams, useRootNavigationState, useRouter } from 'expo-router';
@@ -228,11 +229,13 @@ export default function CheckinScreen() {
 						if (check) {
 							if (check.spotName) setSpot(check.spotName);
 						if (check.caption) setCaption(check.caption);
-						if (check.photoUrl) { setImage(check.photoUrl); setCaptured(true); }
+						const resolvedPhoto = resolvePhotoUri(check);
+						if (resolvedPhoto) { setImage(resolvedPhoto); setCaptured(true); }
 						if (Array.isArray(check.tags)) setSelectedTags(check.tags);
 						if (Array.isArray(check.photoTags)) setPhotoTags(check.photoTags.slice(0, 3));
 						if (Array.isArray(check.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(check.visitIntent));
 						if (typeof check.ambiance === 'string') setAmbiance(check.ambiance as any);
+						if (typeof check.visibility === 'string') setVisibility(check.visibility as any);
 						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
 					// Load metrics from edit mode
 					const convertedNoise = toNumericNoiseLevel(check.noiseLevel ?? null);
@@ -251,11 +254,13 @@ export default function CheckinScreen() {
 						const found = (items || []).find((c: any) => String(c.id) === String(editParam));
 						if (found) {
 							if (found.caption) setCaption(found.caption);
-							if (found.photoUrl) { setImage(found.photoUrl); setCaptured(true); }
+							const resolvedPhoto = resolvePhotoUri(found);
+							if (resolvedPhoto) { setImage(resolvedPhoto); setCaptured(true); }
 							if (Array.isArray(found.tags)) setSelectedTags(found.tags);
 							if (Array.isArray(found.photoTags)) setPhotoTags(found.photoTags.slice(0, 3));
 							if (Array.isArray(found.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(found.visitIntent));
 							if (typeof found.ambiance === 'string') setAmbiance(found.ambiance as any);
+							if (typeof found.visibility === 'string') setVisibility(found.visibility as any);
 							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
 							// Load metrics from edit mode (local fallback)
 							const convertedNoiseLocal = toNumericNoiseLevel(found.noiseLevel ?? null);
@@ -674,6 +679,7 @@ export default function CheckinScreen() {
 			if (isEditMode && editId) {
 				try {
 					const fb = await import('@/services/firebaseClient');
+					const existingCheckin = await fb.getCheckinById(editId);
 					const updates: any = {
 						spotName: spot,
 						spotPlaceId: activePlace?.placeId,
@@ -696,6 +702,9 @@ export default function CheckinScreen() {
 						parkingType: parkingType ?? null,
 					};
 					await fb.updateCheckinRemote(editId, updates);
+					if (typeof existingCheckin?.photoPath === 'string' && existingCheckin.photoPath && existingCheckin.visibility !== visibility) {
+						await fb.updateCheckinPhotoVisibility(existingCheckin.photoPath, uid, visibility);
+					}
 					// update local copy
 					const local = await import('@/storage/local');
 					await local.updateCheckinLocalById(editId, updates as any);
@@ -845,6 +854,8 @@ export default function CheckinScreen() {
 					const raffle = await trackWeeklyRaffleProgress(uid);
 					if (raffle?.enteredNow) {
 						showToast('You are entered in this week\'s early adopter raffle!', 'success');
+					} else if (raffle && raffle.qualified && !raffle.entered) {
+						showToast('You qualify for this week\'s early adopter raffle. Entry is being confirmed.', 'info');
 					} else if (raffle && !raffle.entered && raffle.remaining === 1) {
 						showToast('One more post this week to enter the early adopter raffle.', 'info');
 					}
@@ -1061,7 +1072,7 @@ export default function CheckinScreen() {
 					</View>
 				) : (
 					<View>
-						<Image source={{ uri: image as string }} style={[styles.preview, { backgroundColor: inputBorder }]} />
+						<SpotImage source={{ uri: image as string }} style={[styles.preview, { backgroundColor: inputBorder }]} />
 						<Pressable
 							onPress={() => setPlaceModal(true)}
 							style={[styles.input, styles.selectInput, { borderColor: inputBorder, backgroundColor: inputBg }]}

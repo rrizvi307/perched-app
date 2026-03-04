@@ -28,7 +28,6 @@ import {
 } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
-import { updateFriendsCount } from '@/services/gamification';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { trackScreenLoad } from '@/services/perfMonitor';
 
@@ -217,10 +216,6 @@ export default function FriendsScreen() {
       // Track analytics
       void logEvent('friend_request_accepted', user.id, { fromUserId: request.fromUser.id });
       void promptRatingAtMoment(RatingTriggers.FRIEND_ADDED);
-
-      // Update gamification stats
-      const friends = await getUserFriends(user.id);
-      void updateFriendsCount(friends.length);
     } catch (error) {
       devLog('Failed to accept friend request:', error);
       // Revert on error

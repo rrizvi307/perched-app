@@ -399,31 +399,6 @@ async function ensureFriendship(
   userA: string,
   userB: string
 ) {
-  const forwardId = `${userA}__${userB}`;
-  const reverseId = `${userB}__${userA}`;
-
-  await db.collection('friends').doc(forwardId).set(
-    {
-      userId: userA,
-      friendId: userB,
-      status: 'accepted',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  await db.collection('friends').doc(reverseId).set(
-    {
-      userId: userB,
-      friendId: userA,
-      status: 'accepted',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
   await db.collection('users').doc(userA).set(
     { friends: admin.firestore.FieldValue.arrayUnion(userB) },
     { merge: true }

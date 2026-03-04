@@ -28,25 +28,53 @@ service firebase.storage {
       return request.resource.size < 10 * 1024 * 1024;
     }
 
+    function isValidCheckinVisibility(value) {
+      return value in ['public', 'friends', 'close'];
+    }
+
+    function hasFriendAccess(userId) {
+      return firestore.exists(/databases/(default)/documents/users/$(userId)) &&
+        firestore.get(/databases/(default)/documents/users/$(userId)).data.friends.hasAny([request.auth.uid]);
+    }
+
+    function hasCloseFriendAccess(userId) {
+      return firestore.exists(/databases/(default)/documents/users/$(userId)) &&
+        firestore.get(/databases/(default)/documents/users/$(userId)).data.closeFriends.hasAny([request.auth.uid]);
+    }
+
+    function hasValidCheckinMetadata(userId) {
+      return request.resource.metadata.ownerId == userId &&
+        request.resource.metadata.mediaKind == 'checkin' &&
+        isValidCheckinVisibility(request.resource.metadata.visibility);
+    }
+
+    function canReadCheckinMedia(userId) {
+      return isOwner(userId) || (
+        isAuthenticated() &&
+        resource.metadata.ownerId == userId &&
+        resource.metadata.mediaKind == 'checkin' &&
+        (
+          resource.metadata.visibility == 'public' ||
+          (resource.metadata.visibility == 'friends' && hasFriendAccess(userId)) ||
+          (resource.metadata.visibility == 'close' && hasCloseFriendAccess(userId))
+        )
+      );
+    }
+
     // Check-in photos
     match /checkins/{userId}/{filename} {
-      // Anyone can read public check-in photos
-      // (Firestore rules handle visibility filtering)
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinMedia(userId);
 
-      // Only the owner can upload to their folder
       allow create: if isOwner(userId) &&
-                      // TODO(beta->GA): re-enable verification gate (or 7-day grace window)
-                      // before public launch. Matches current Firestore beta policy.
                       isValidImage() &&
-                      isValidSize();
+                      isValidSize() &&
+                      hasValidCheckinMetadata(userId);
 
-      // Only owner can update their own photos
       allow update: if isOwner(userId) &&
                       isValidImage() &&
-                      isValidSize();
+                      isValidSize() &&
+                      hasValidCheckinMetadata(userId);
 
-      // Only owner can delete their photos
       allow delete: if isOwner(userId) || isAdmin();
     }
 

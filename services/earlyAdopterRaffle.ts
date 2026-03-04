@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCheckins } from '@/storage/local';
-import { ensureFirebase } from './firebaseClient';
+import { ensureFirebase, getCheckinsForUserRemote } from './firebaseClient';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RAFFLE_ENTRY_KEY_PREFIX = '@perched_weekly_raffle_entry';
@@ -57,7 +57,7 @@ function checkinKey(item: any) {
   return `sig:${item?.userId || 'anon'}:${item?.spotPlaceId || item?.spotName || item?.spot || 'spot'}:${toMillis(item?.createdAt || item?.timestamp)}`;
 }
 
-async function countWeeklyPostsFromLocal(userId: string, weekStartMs: number, weekEndMs: number) {
+async function countWeeklyPosts(userId: string, weekStartMs: number, weekEndMs: number) {
   const local = await getCheckins().catch(() => []);
   const seen = new Set<string>();
   let count = 0;
@@ -70,6 +70,29 @@ async function countWeeklyPostsFromLocal(userId: string, weekStartMs: number, we
     seen.add(key);
     count += 1;
   });
+
+  try {
+    let cursor: any = undefined;
+    let page = 0;
+    while (page < 5) {
+      const response = await getCheckinsForUserRemote(userId, 80, cursor);
+      const batch = Array.isArray(response) ? response : (response?.items || []);
+      if (!batch.length) break;
+      for (const item of batch) {
+        const ts = toMillis(item?.createdAt || item?.timestamp);
+        if (!ts || ts < weekStartMs || ts > weekEndMs) continue;
+        const key = checkinKey(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        count += 1;
+      }
+      const oldestTs = toMillis(batch[batch.length - 1]?.createdAt || batch[batch.length - 1]?.timestamp);
+      if (batch.length < 80 || (oldestTs && oldestTs < weekStartMs)) break;
+      cursor = response?.lastCursor;
+      page += 1;
+    }
+  } catch {}
+
   return count;
 }
 
@@ -99,35 +122,9 @@ async function isEnteredRemote(entryId: string) {
   }
 }
 
-async function writeRemoteEntry(userId: string, progress: WeeklyRaffleProgress) {
-  try {
-    const fb = ensureFirebase();
-    if (!fb) return false;
-    const serverTimestamp = fb.firestore.FieldValue.serverTimestamp();
-    await fb.firestore().collection('weeklyRaffleEntries').doc(progress.entryId).set(
-      {
-        userId,
-        weekKey: progress.weekKey,
-        weekStartMs: progress.weekStartMs,
-        weekEndMs: progress.weekEndMs,
-        target: progress.target,
-        postCount: progress.postsThisWeek,
-        status: 'entered',
-        qualifiedAt: serverTimestamp,
-        createdAt: serverTimestamp,
-        updatedAt: serverTimestamp,
-      },
-      { merge: true }
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function resolveWeeklyProgress(userId: string, attemptEntry: boolean): Promise<WeeklyRaffleProgress> {
   const { weekKey, weekStartMs, weekEndMs } = getWeekWindow();
-  const postsThisWeek = await countWeeklyPostsFromLocal(userId, weekStartMs, weekEndMs);
+  const postsThisWeek = await countWeeklyPosts(userId, weekStartMs, weekEndMs);
   const target = EARLY_ADOPTER_WEEKLY_TARGET;
   const remaining = Math.max(0, target - postsThisWeek);
   const qualified = postsThisWeek >= target;
@@ -142,22 +139,11 @@ async function resolveWeeklyProgress(userId: string, attemptEntry: boolean): Pro
   }
 
   let enteredNow = false;
-  if (attemptEntry && qualified && !entered) {
-    enteredNow = true;
-    entered = true;
-    await markEnteredLocal(userId, weekKey);
-    void writeRemoteEntry(userId, {
-      weekKey,
-      weekStartMs,
-      weekEndMs,
-      postsThisWeek,
-      target,
-      remaining,
-      qualified,
-      entered,
-      enteredNow,
-      entryId,
-    });
+  if (attemptEntry && qualified && entered) {
+    enteredNow = !(await isEnteredLocal(userId, weekKey));
+    if (enteredNow) {
+      await markEnteredLocal(userId, weekKey);
+    }
   }
 
   return {
@@ -183,4 +169,3 @@ export async function trackWeeklyRaffleProgress(userId: string): Promise<WeeklyR
   if (!userId) return null;
   return resolveWeeklyProgress(userId, true);
 }
-

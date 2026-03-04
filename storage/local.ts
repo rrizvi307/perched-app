@@ -18,8 +18,9 @@ type Checkin = {
   spotName?: string;
   spotPlaceId?: string;
   spotLatLng?: { lat: number; lng: number };
-  image?: string;
-  photoUrl?: string;
+  image?: string | null;
+  photoUrl?: string | null;
+  photoPath?: string | null;
   photoPending?: boolean;
   clientId?: string;
   caption?: string;

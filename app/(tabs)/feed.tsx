@@ -14,7 +14,7 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
+import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportCheckinRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
@@ -33,15 +33,14 @@ import { getWeeklyRaffleProgress, type WeeklyRaffleProgress } from '@/services/e
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
-import { openReportEmail } from '@/services/linkRouting';
-
 type Checkin = {
 	id: string;
 	spot?: string;
 	spotName?: string;
 	spotPlaceId?: string;
-	image?: string;
-	photoUrl?: string;
+	image?: string | null;
+	photoUrl?: string | null;
+	photoPath?: string | null;
 	photoPending?: boolean;
 	caption?: string;
 	createdAt: string;
@@ -303,6 +302,7 @@ function FeedPhoto({
 		},
 		[isWeb]
 	);
+	const shouldInlinePhotoUrl = useCallback((value: string | null) => !!value && !value.startsWith('gs://'), []);
 
 	const { user } = useAuth();
 	const router = useRouter();
@@ -522,7 +522,7 @@ function FeedPhoto({
 			};
 			const normalizedRemote = remoteItems.map((r: any) => {
 				const resolved = resolvePhotoSrc(r);
-				if (resolved && !r.photoUrl) return { ...r, photoUrl: resolved };
+				if (resolved && !r.photoUrl && shouldInlinePhotoUrl(resolved)) return { ...r, photoUrl: resolved };
 				return r;
 			});
 			normalizedRemote.forEach((r: any) => {
@@ -561,7 +561,7 @@ function FeedPhoto({
 				if (!next.image && localMatch.image) next.image = localMatch.image;
 				if (!next.photoUrl) {
 					const fallback = resolvePhotoSrc(localMatch);
-					if (fallback) next.photoUrl = fallback;
+					if (fallback && shouldInlinePhotoUrl(fallback)) next.photoUrl = fallback;
 				}
 				if (!next.userName && localMatch.userName) next.userName = localMatch.userName;
 				if (!next.userHandle && localMatch.userHandle) next.userHandle = localMatch.userHandle;
@@ -575,7 +575,7 @@ function FeedPhoto({
 				const toTs = (it: any) => toMillis(it?.createdAt) || 0;
 			const normalizedCombined = combined.map((it: any) => {
 				const resolved = resolvePhotoSrc(it);
-				if (resolved && !it.photoUrl) return { ...it, photoUrl: resolved };
+				if (resolved && !it.photoUrl && shouldInlinePhotoUrl(resolved)) return { ...it, photoUrl: resolved };
 				return it;
 			});
 			const sorted = normalizedCombined.sort((a: any, b: any) => toTs(b) - toTs(a));
@@ -584,7 +584,7 @@ function FeedPhoto({
 		} catch {
 			return remoteItems;
 		}
-		}, [resolvePhotoSrc]);
+		}, [resolvePhotoSrc, shouldInlinePhotoUrl]);
 
 			const loadLatest = useCallback(async () => {
 				const loadMarkId = startPerfMark('feed_load_latest');
@@ -1328,9 +1328,11 @@ function FeedPhoto({
 							].filter(Boolean) as string[];
 							const profileActionKey = `profile:${targetUserId || 'none'}:${reactionCheckinId}`;
 							const closeActionKey = `close:${targetUserId || 'none'}:${reactionCheckinId}`;
+							const reportActionKey = `report:${reactionCheckinId || 'none'}`;
 							const blockActionKey = `block:${targetUserId || 'none'}`;
 							const profilePending = !!pendingActions[profileActionKey];
 							const closePending = !!pendingActions[closeActionKey];
+							const reportPending = !!pendingActions[reportActionKey];
 							const blockPending = !!pendingActions[blockActionKey];
 							const targetIsBlocked = !!(targetUserId && blockedIds.includes(targetUserId));
 							return (
@@ -1549,24 +1551,29 @@ function FeedPhoto({
 									<Pressable
 										hitSlop={8}
 										onPress={async () => {
+											if (!user?.id || !reactionCheckinId) {
+												showToast('You need to be signed in to report this check-in.', 'warning');
+												return;
+											}
+											if (!beginAction(reportActionKey)) return;
 											try {
-												const spotTitle = (item as any).spotName || item.spot || 'a spot';
-												const subject = encodeURIComponent(`Report: Check-in at ${spotTitle}`);
-												const body = encodeURIComponent(`I&apos;d like to report a check-in.\n\nCheck-in ID: ${item.id}\nSpot: ${spotTitle}\n\nReason:`);
-												const opened = await openReportEmail(subject, body);
-												if (!opened) {
-													showToast('Open your email app to report: perchedappteam@gmail.com', 'info');
-												}
-											} catch {
-												showToast('Open your email app to report: perchedappteam@gmail.com', 'info');
+												await reportCheckinRemote(user.id, reactionCheckinId, 'feed_report', targetUserId || undefined);
+												setItems((prev) => prev.filter((candidate: any) => String(candidate?.id || candidate?.clientId || '') !== String(reactionCheckinId)));
+												showToast('Report submitted. This check-in was hidden from your feed.', 'success');
+											} catch (error) {
+												devLog('report action failed', error);
+												showToast('Unable to report this check-in right now.', 'error');
+											} finally {
+												endAction(reportActionKey);
 											}
 										}}
 										style={({ pressed }) => [
 											styles.footerButton,
 											pressed ? { opacity: 0.6 } : null,
 										]}
+										disabled={reportPending}
 									>
-										<Text style={{ color: muted }}>Report</Text>
+										<Text style={{ color: muted }}>{reportPending ? 'Saving…' : 'Report'}</Text>
 									</Pressable>
 									{user && targetUserId && targetUserId !== user.id ? (
 										<Pressable

@@ -104,6 +104,58 @@ const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
 const CHECKINS_CACHE_MAX = 120;
 const USERS_BY_ID_CACHE_MAX = 160;
 const USER_FRIENDS_CACHE_MAX = 300;
+const USER_PRIVATE_COLLECTION = 'userPrivate';
+const PRIVATE_USER_PROFILE_FIELDS = ['email', 'phone', 'phoneNormalized', 'pushToken'];
+
+function removeUndefinedFields(input: Record<string, any>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+function stripPrivateUserFields<T extends Record<string, any> | null | undefined>(input: T, id?: string) {
+  if (!input) return null;
+  const next: Record<string, any> = { ...(input as Record<string, any>) };
+  PRIVATE_USER_PROFILE_FIELDS.forEach((field) => {
+    delete next[field];
+  });
+  if (id && !next.id) next.id = id;
+  return next;
+}
+
+function splitPublicAndPrivateUserFields(fields: Record<string, any> | null | undefined) {
+  const publicFields: Record<string, any> = {};
+  const privateFields: Record<string, any> = {};
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (PRIVATE_USER_PROFILE_FIELDS.includes(key)) {
+      privateFields[key] = value;
+      return;
+    }
+    publicFields[key] = value;
+  });
+  return { publicFields, privateFields };
+}
+
+async function writeUserPrivateProfile(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length) return;
+  await db.collection(USER_PRIVATE_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function getSanitizedUserById(db: any, userId: string) {
+  const doc = await db.collection('users').doc(userId).get();
+  if (!doc.exists) return null;
+  return stripPrivateUserFields(doc.data() || {}, doc.id);
+}
 
 function getCachedValue<T>(
   cache: Map<string, { ts: number; payload: T }>,
@@ -667,6 +719,24 @@ async function getBase64FromUri(uri: string): Promise<string | null> {
   return null;
 }
 
+type CheckinPhotoVisibility = 'public' | 'friends' | 'close';
+
+type UploadedCheckinPhoto = {
+  downloadURL: string;
+  storagePath: string;
+};
+
+function buildCheckinPhotoMetadata(userId: string, visibility: CheckinPhotoVisibility) {
+  return {
+    contentType: 'image/jpeg',
+    customMetadata: {
+      ownerId: userId,
+      visibility,
+      mediaKind: 'checkin',
+    },
+  };
+}
+
 export async function uploadPhotoToStorage(uri: string, userId?: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized. Run `npm install firebase` and provide config.');
@@ -708,6 +778,75 @@ export async function uploadPhotoToStorage(uri: string, userId?: string) {
   throw lastErr || new Error('Photo upload failed.');
 }
 
+export async function uploadCheckinPhotoToStorage(
+  uri: string,
+  options: {
+    userId?: string;
+    checkinId: string;
+    visibility?: CheckinPhotoVisibility;
+  }
+): Promise<UploadedCheckinPhoto> {
+  const fb = ensureFirebase();
+  if (!fb) throw new Error('Firebase not initialized. Run `npm install firebase` and provide config.');
+  if (!options?.checkinId) throw new Error('Check-in photo upload requires a check-in id.');
+
+  const storage = fb.storage();
+  const resolvedUserId = options.userId || fb.auth()?.currentUser?.uid || 'anonymous';
+  const visibility = options.visibility || 'public';
+  const path = `checkins/${resolvedUserId}/${options.checkinId}.jpg`;
+  const metadata = buildCheckinPhotoMetadata(resolvedUserId, visibility);
+
+  const blob = await getBlobFromUri(uri);
+  const base64 = blob ? null : await getBase64FromUri(uri);
+  if (!blob && !base64) throw new Error('Unable to read photo for upload.');
+
+  let lastErr: any = null;
+  const buckets = getStorageBucketCandidates();
+  const refs = buckets.length
+    ? buckets.map((bucket) => storage.refFromURL(`gs://${bucket}`).child(path))
+    : [storage.ref().child(path)];
+
+  for (const ref of refs) {
+    try {
+      if (blob) {
+        await ref.put(blob, { ...metadata, contentType: blob.type || metadata.contentType });
+        try {
+          if (typeof (blob as any).close === 'function') (blob as any).close();
+        } catch {}
+      } else if (base64) {
+        if (base64.startsWith('data:')) {
+          await ref.putString(base64, 'data_url', metadata);
+        } else {
+          await ref.putString(base64, 'base64', metadata);
+        }
+      }
+      const downloadURL = await ref.getDownloadURL();
+      return {
+        downloadURL: String(downloadURL),
+        storagePath: `gs://${ref.bucket}/${ref.fullPath}`,
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Check-in photo upload failed.');
+}
+
+export async function updateCheckinPhotoVisibility(
+  photoPath: string,
+  userId: string,
+  visibility: CheckinPhotoVisibility
+) {
+  const fb = ensureFirebase();
+  if (!fb || !photoPath || !userId) return;
+  try {
+    const ref = fb.storage().refFromURL(photoPath);
+    await ref.updateMetadata(buildCheckinPhotoMetadata(userId, visibility));
+  } catch {
+    // ignore metadata sync failures; check-in visibility still updates in Firestore
+  }
+}
+
 export async function createCheckinRemote({
   userId,
   userName,
@@ -716,6 +855,7 @@ export async function createCheckinRemote({
   spotName,
   caption,
   photoUrl,
+  photoPath,
   photoPending,
   campusOrCity,
   city,
@@ -751,6 +891,7 @@ export async function createCheckinRemote({
     photoTags: Array.isArray(photoTags) ? photoTags.slice(0, 3) : [],
     ambiance: typeof ambiance === 'string' ? ambiance : null,
     photoUrl: photoUrl || null,
+    photoPath: photoPath || null,
     photoPending: !!photoPending,
     campusOrCity: campusOrCity || city || null,
     city: city || null,
@@ -820,22 +961,7 @@ export async function getUserPreferenceRemote(userId: string) {
 }
 
 export async function recordPlaceTagRemote(payload: { placeId?: string | null; name?: string; tag: string; delta?: number }) {
-  const fb = ensureFirebase();
-  if (!fb) return;
-  try {
-    const db = fb.firestore();
-    const delta = typeof payload.delta === 'number' ? payload.delta : 1;
-    const key = spotKey(payload.placeId || undefined, payload.name || 'unknown');
-    await db.collection('place_tags').doc(key).set({
-      [`tags.${payload.tag}`]: fb.firestore.FieldValue.increment(delta),
-      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    if (payload.placeId) {
-      void invalidateCacheOnMetricUpdate(payload.placeId);
-    }
-  } catch {
-    // ignore
-  }
+  devLog('recordPlaceTagRemote skipped: aggregate tags are server-owned', payload);
 }
 
 export async function getPlaceTagRemote(placeId?: string, name?: string) {
@@ -1249,13 +1375,36 @@ export async function getUserFriendsCached(userId: string, ttlMs = 15000) {
 async function callSocialGraphMutation(action: string, payload: Record<string, any>) {
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).functions !== 'function') return null;
-  const region =
-    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
-    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
-    'us-central1';
-  const callable = (fb as any).app().functions(region).httpsCallable('socialGraphMutation');
+  const callable = getRegionCallable(fb, 'socialGraphMutation');
   const response = await callable({ action, ...payload });
   return response?.data || null;
+}
+
+function getFunctionsRegion() {
+  return (
+    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+    'us-central1'
+  );
+}
+
+function getRegionCallable(fb: any, name: string) {
+  const region =
+    getFunctionsRegion();
+  return (fb as any).app().functions(region).httpsCallable(name);
+}
+
+async function callSecureUserLookup(type: 'email' | 'phone', query: string) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  try {
+    const callable = getRegionCallable(fb, 'secureUserLookup');
+    const response = await callable({ type, query });
+    return response?.data?.user || null;
+  } catch (error) {
+    devLog('secureUserLookup failed', { type, error });
+    return null;
+  }
 }
 
 function raiseSocialGraphPermissionError(action: string): never {
@@ -1763,12 +1912,9 @@ export async function createUserRemote({
   const fb = ensureFirebase();
   if (!fb) return;
 
-  const sanitizeFields = (fields: Record<string, any>) =>
-    Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
-
   const db = fb.firestore();
   const normalizedPhone = normalizePhone(phone || '');
-  const payload = sanitizeFields({
+  const payload = removeUndefinedFields({
     name,
     nameLower: typeof name === 'string' ? name.toLowerCase() : null,
     city: city || null,
@@ -1776,33 +1922,50 @@ export async function createUserRemote({
     campusOrCity: campusOrCity || city || null,
     campusType: campusType || null,
     handle: handle || null,
-    email: email || null,
-    phone: phone || null,
-    phoneNormalized: normalizedPhone || null,
     coffeeIntents: Array.isArray(coffeeIntents) ? coffeeIntents.slice(0, 3) : [],
     ambiancePreference: typeof ambiancePreference === 'string' ? ambiancePreference : null,
     photoUrl: photoUrl || null,
     createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
-  await db.collection('users').doc(userId).set(payload);
+  await db.collection('users').doc(userId).set(payload, { merge: true });
+  await writeUserPrivateProfile(
+    fb,
+    db,
+    userId,
+    {
+      email: email || null,
+      phone: phone || null,
+      phoneNormalized: normalizedPhone || null,
+    },
+    { isCreate: true }
+  );
   usersByIdCache.clear();
 }
 
 export async function updateUserRemote(userId: string, fields: any) {
   const fb = ensureFirebase();
   if (!fb) return;
-  const sanitizeFields = (input: Record<string, any>) =>
-    Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
   const db = fb.firestore();
-  const normalizedPhone = fields?.phone ? normalizePhone(fields.phone) : undefined;
-  const nameLower = typeof fields?.name === 'string' ? fields.name.toLowerCase() : undefined;
-  const payload = sanitizeFields({
-    ...fields,
-    phoneNormalized: normalizedPhone ?? fields?.phoneNormalized,
+  const { publicFields, privateFields } = splitPublicAndPrivateUserFields(fields);
+  const normalizedPhone =
+    Object.prototype.hasOwnProperty.call(privateFields, 'phone')
+      ? normalizePhone(privateFields.phone || '') || null
+      : privateFields.phoneNormalized;
+  const nameLower = typeof publicFields?.name === 'string' ? publicFields.name.toLowerCase() : undefined;
+  const payload = removeUndefinedFields({
+    ...publicFields,
     nameLower: nameLower ?? fields?.nameLower,
     updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    email: fb.firestore.FieldValue.delete(),
+    phone: fb.firestore.FieldValue.delete(),
+    phoneNormalized: fb.firestore.FieldValue.delete(),
+    pushToken: fb.firestore.FieldValue.delete(),
   });
   await db.collection('users').doc(userId).set(payload, { merge: true });
+  await writeUserPrivateProfile(fb, db, userId, {
+    ...privateFields,
+    ...(Object.prototype.hasOwnProperty.call(privateFields, 'phone') ? { phoneNormalized: normalizedPhone } : {}),
+  });
   usersByIdCache.clear();
 }
 
@@ -1812,11 +1975,15 @@ export async function findUserByEmail(email: string) {
     const users = readLocalUsers();
     return users.find((u: any) => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
   }
+  const lookedUp = await callSecureUserLookup('email', email.toLowerCase());
+  if (lookedUp) return stripPrivateUserFields(lookedUp as Record<string, any>);
   const db = fb.firestore();
-  const q = await db.collection('users').where('email', '==', email).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  const currentUser = fb.auth?.()?.currentUser;
+  if (currentUser?.email?.toLowerCase() === email.toLowerCase()) {
+    return await getSanitizedUserById(db, currentUser.uid);
+  }
+  devLog('findUserByEmail blocked: secure server-side lookup required');
+  return null;
 }
 
 export async function findUserByPhone(phone: string) {
@@ -1827,11 +1994,15 @@ export async function findUserByPhone(phone: string) {
     const users = readLocalUsers();
     return users.find((u: any) => normalizePhone(u.phone || '') === normalized) || null;
   }
+  const lookedUp = await callSecureUserLookup('phone', normalized);
+  if (lookedUp) return stripPrivateUserFields(lookedUp as Record<string, any>);
   const db = fb.firestore();
-  const q = await db.collection('users').where('phoneNormalized', '==', normalized).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  const currentUser = fb.auth?.()?.currentUser;
+  if (normalizePhone(currentUser?.phoneNumber || '') === normalized && currentUser?.uid) {
+    return await getSanitizedUserById(db, currentUser.uid);
+  }
+  devLog('findUserByPhone blocked: secure server-side lookup required');
+  return null;
 }
 
 export async function findUserByHandle(handle: string) {
@@ -1846,7 +2017,7 @@ export async function findUserByHandle(handle: string) {
   const q = await db.collection('users').where('handle', '==', normalized).limit(1).get();
   if (q.empty) return null;
   const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  return stripPrivateUserFields(doc.data() || {}, doc.id);
 }
 
 /**
@@ -1880,7 +2051,7 @@ export async function searchUsers(query: string, limit = 10): Promise<any[]> {
       .limit(limit)
       .get();
     for (const doc of handleSnap.docs) {
-      results.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+      results.set(doc.id, stripPrivateUserFields(doc.data() || {}, doc.id));
     }
   } catch {}
 
@@ -1893,7 +2064,7 @@ export async function searchUsers(query: string, limit = 10): Promise<any[]> {
       .get();
     for (const doc of nameSnap.docs) {
       if (!results.has(doc.id)) {
-        results.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+        results.set(doc.id, stripPrivateUserFields(doc.data() || {}, doc.id));
       }
     }
   } catch {}
@@ -1914,7 +2085,7 @@ export async function getUsersByIds(userIds: string[]) {
   for (let i = 0; i < userIds.length; i += 10) {
     const batch = userIds.slice(i, i + 10);
     const snap = await db.collection('users').where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
-    snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    snap.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   }
   return items;
 }
@@ -1932,8 +2103,8 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
     db.collection('users').where('campusOrCity', '==', campusOrCity).limit(limit).get(),
   ]);
   const items: any[] = [];
-  snapCampus.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-  snapLegacy.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+  snapCampus.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
+  snapLegacy.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   const seen = new Set<string>();
   return items.filter((u) => {
     if (!u?.id || seen.has(u.id)) return false;
@@ -2136,6 +2307,28 @@ export async function reportUserRemote(reporterId: string | undefined, targetUse
   await db.collection('reports').add({
     reporterId: reporterId || null,
     reportedUserId: targetUserId,
+    reason: reason || null,
+    status: 'open',
+    createdAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+export async function reportCheckinRemote(
+  reporterId: string | undefined,
+  checkinId: string,
+  reason?: string,
+  reportedUserId?: string
+) {
+  const fb = ensureFirebase();
+  if (!fb) {
+    devLog('reportCheckinRemote (local):', { reporterId, checkinId, reason, reportedUserId });
+    return;
+  }
+  const db = fb.firestore();
+  await db.collection('reports').add({
+    reporterId: reporterId || null,
+    checkinId,
+    reportedUserId: reportedUserId || null,
     reason: reason || null,
     status: 'open',
     createdAt: fb.firestore.FieldValue.serverTimestamp(),

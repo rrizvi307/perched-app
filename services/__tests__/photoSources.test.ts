@@ -13,6 +13,14 @@ describe('photo source normalization', () => {
     expect(isPhotoUriRenderable('file:///tmp/pic.jpg')).toBe(true);
     expect(isPhotoUriRenderable('blob:http://localhost/id')).toBe(true);
     expect(isPhotoUriRenderable('data:image/png;base64,abc')).toBe(true);
+    expect(isPhotoUriRenderable('gs://perched-app.appspot.com/checkins/u1/c1.jpg')).toBe(true);
+  });
+
+  it('resolves storage-backed photo paths', () => {
+    const uri = resolvePhotoUri({
+      photoPath: 'gs://perched-app.appspot.com/checkins/u1/c1.jpg',
+    });
+    expect(uri).toBe('gs://perched-app.appspot.com/checkins/u1/c1.jpg');
   });
 
   it('rejects invalid placeholders', () => {

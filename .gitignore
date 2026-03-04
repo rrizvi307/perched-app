@@ -61,3 +61,4 @@ logs/
 # local/process docs (keep README if present)
 docs/*
 !docs/README.md
+!docs/*.md
