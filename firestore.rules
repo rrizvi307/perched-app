@@ -222,6 +222,13 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Spot aggregates used by explore, spot detail, and recommendations.
+    // These docs are server-managed; clients may read but not mutate them.
+    match /spots/{spotId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if false;
+    }
+
     // Place events/tags (for trending/ranking)
     match /placeEvents/{eventId} {
       allow read: if isAuthenticated();

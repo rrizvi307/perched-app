@@ -179,6 +179,8 @@ This document captures the pre-production audit findings, the release blockers, 
    - Goal: add repeatable Firestore and Storage rules coverage for the privacy and media paths we hardened.
    - Current patch:
      - added `__tests__/securityRules.test.ts` covering `userPrivate` access, public `users` contact-field blocking, verified-email / phone-auth check-in creation, raffle write lockout, and check-in media access rules
+     - added an explicit read-only `spots` rule so deployed Firestore policy matches the app’s direct `spots` reads in explore and recommendations
+     - rules coverage now includes authenticated `spots` reads and a blocked client-side `spots` mutation case
      - added `npm run test:rules` to execute the rules suite through `firebase emulators:exec`
      - removed the repo-wide `ajv` override that was breaking `firebase-tools` by forcing an incompatible major
    - Environment blocker:

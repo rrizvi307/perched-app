@@ -157,6 +157,54 @@ describe('security rules', () => {
         }),
       );
     });
+
+    it('allows authenticated spot reads but blocks client spot writes', async () => {
+      await seedFirestore('spots', 'spot-1', {
+        name: 'Campus Cafe',
+        placeId: 'spot-1',
+        geoHash: '9vk1abc',
+        lat: 29.72,
+        lng: -95.34,
+        intel: {
+          category: 'cafe',
+          avgRating: 4.5,
+          isOpenNow: true,
+          priceLevel: '$$',
+          inferredNoise: 'quiet',
+          inferredNoiseConfidence: 0.8,
+          hasWifi: true,
+          wifiConfidence: 0.9,
+          goodForStudying: true,
+          goodForMeetings: true,
+          source: 'api+nlp',
+          lastUpdated: 1,
+          reviewCount: 24,
+        },
+        live: {
+          noise: 'quiet',
+          busyness: 'some',
+          checkinCount: 12,
+          lastCheckinAt: 1,
+        },
+        display: {
+          noise: 'quiet',
+          noiseSource: 'live',
+          noiseLabel: 'Quiet now',
+          busyness: 'some',
+          busynessSource: 'live',
+          busynessLabel: 'Some activity',
+        },
+      });
+
+      const aliceDb = testEnv.authenticatedContext('alice').firestore();
+
+      await assertSucceeds(aliceDb.collection('spots').doc('spot-1').get());
+      await assertFails(
+        aliceDb.collection('spots').doc('spot-1').set({
+          name: 'Tampered Spot',
+        }, { merge: true }),
+      );
+    });
   });
 
   describe('storage.rules', () => {
