@@ -72,6 +72,12 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.token.email_verified == true;
     }
 
+    function hasPostingAccess() {
+      return isAdmin() ||
+        isVerified() ||
+        (isAuthenticated() && request.auth.token.phone_number != null);
+    }
+
     // Rate limiting helper - approximate check
     function withinRateLimit() {
       // TODO(beta->GA): Replace this no-op with server-side rate limiting
@@ -126,11 +132,10 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid
       );
 
-      // Beta override: do not block unverified users from creating check-ins.
-      // TODO(beta->GA): Re-enable verification gate or 7-day grace logic before public launch.
       allow create: if isAuthenticated() &&
                       request.auth.uid == request.resource.data.userId &&
                       request.resource.data.keys().hasAll(['userId', 'createdAt', 'spotName']) &&
+                      hasPostingAccess() &&
                       withinRateLimit();
 
       // Only owner can update their check-ins

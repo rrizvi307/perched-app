@@ -243,6 +243,7 @@ async function ensureUser(
       password: user.password,
       displayName: user.displayName,
       photoURL: user.photoURL,
+      emailVerified: true,
     });
     uid = created.uid;
     console.log(`  ✓ created auth user ${user.email}`);
@@ -250,6 +251,7 @@ async function ensureUser(
     await auth.updateUser(uid, {
       displayName: user.displayName,
       photoURL: user.photoURL,
+      emailVerified: true,
     }).catch(() => undefined);
     console.log(`  • using existing auth user ${user.email}`);
   }
@@ -257,11 +259,19 @@ async function ensureUser(
   await db.collection('users').doc(uid).set(
     {
       id: uid,
-      email: user.email,
       displayName: user.displayName,
       username: user.username,
       userHandle: user.username,
       photoURL: user.photoURL,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('userPrivate').doc(uid).set(
+    {
+      email: user.email,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },

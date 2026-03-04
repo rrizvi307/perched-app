@@ -42,10 +42,14 @@ const FRIEND_USERS = [
 async function ensureUser(email, password, displayName, claims = null) {
   try {
     const existing = await auth.getUserByEmail(email);
+    await auth.updateUser(existing.uid, {
+      displayName,
+      emailVerified: true,
+    }).catch(() => undefined);
     if (claims) {
       await auth.setCustomUserClaims(existing.uid, { ...(existing.customClaims || {}), ...claims });
     }
-    return existing;
+    return auth.getUser(existing.uid);
   } catch (error) {
     if (error && error.code === 'auth/user-not-found') {
       const created = await auth.createUser({
@@ -95,7 +99,6 @@ async function ensureUserDoc(user, profile = {}) {
   await db.collection('users').doc(user.uid).set(
     {
       id: user.uid,
-      email: user.email,
       name: profile.name || user.displayName || null,
       handle: profile.handle || null,
       photoUrl: null,
@@ -109,6 +112,15 @@ async function ensureUserDoc(user, profile = {}) {
         source: 'free',
       },
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('userPrivate').doc(user.uid).set(
+    {
+      email: user.email,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );

@@ -446,12 +446,19 @@ async function seedUsers() {
 
   for (const user of DEMO_USERS) {
     const userRef = db.collection('users').doc(user.id);
+    const userPrivateRef = db.collection('userPrivate').doc(user.id);
+    const createdAt = Timestamp.fromDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
     batch.set(userRef, {
-      ...user,
-      createdAt: Timestamp.fromDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)), // 30 days ago
+      ...Object.fromEntries(Object.entries(user).filter(([key]) => key !== 'email')),
+      createdAt, // 30 days ago
       updatedAt: Timestamp.now(),
       emailVerified: true,
     });
+    batch.set(userPrivateRef, {
+      email: user.email,
+      createdAt,
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
   }
 
   await batch.commit();

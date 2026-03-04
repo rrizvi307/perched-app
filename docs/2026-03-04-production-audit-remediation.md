@@ -121,6 +121,16 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add backend tests around API key generation, validation, and rate-limit enforcement
 
+10. Posting eligibility hardening
+   - Status: In progress
+   - Goal: stop unverified email accounts from creating production check-ins.
+   - Current patch:
+     - Firestore rules now require check-in creators to be admin, phone-authenticated, or email-verified
+     - demo seeding scripts now mark seeded auth users as email-verified
+     - demo/dev seeders no longer write email into public `users` docs and instead write to `userPrivate`
+   - Follow-up:
+     - add emulator coverage for the verified-email / phone-auth check-in rule path
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
