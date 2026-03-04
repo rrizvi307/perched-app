@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCheckins } from '@/storage/local';
 import { track } from './analytics';
-import { ensureFirebase, updateUserRemote } from './firebaseClient';
+import { ensureFirebase, getCheckinsForUserRemote, updateUserRemote } from './firebaseClient';
 
 export interface Achievement {
   id: string;
@@ -171,21 +172,9 @@ export const ACHIEVEMENTS: Achievement[] = [
 
 const STORAGE_KEY = '@perched_user_stats';
 const ACHIEVEMENTS_KEY = '@perched_achievements';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Get user stats
- */
-export async function getUserStats(): Promise<UserStats> {
-  try {
-    const json = await AsyncStorage.getItem(STORAGE_KEY);
-    if (json) {
-      return JSON.parse(json);
-    }
-  } catch (error) {
-    console.error('Failed to load user stats:', error);
-  }
-
-  // Default stats
+function createDefaultStats(): UserStats {
   return {
     totalCheckins: 0,
     uniqueSpots: 0,
@@ -201,6 +190,236 @@ export async function getUserStats(): Promise<UserStats> {
   };
 }
 
+function getActiveUserId(): string | null {
+  try {
+    const fb = ensureFirebase();
+    return fb?.auth()?.currentUser?.uid || null;
+  } catch {
+    return null;
+  }
+}
+
+function getScopedStorageKey(baseKey: string, userId: string | null) {
+  return userId ? `${baseKey}:${userId}` : baseKey;
+}
+
+async function readStorageWithLegacyFallback<T>(baseKey: string, userId: string | null): Promise<T | null> {
+  const scopedKey = getScopedStorageKey(baseKey, userId);
+  const keysToTry = scopedKey === baseKey ? [baseKey] : [scopedKey, baseKey];
+
+  for (const key of keysToTry) {
+    try {
+      const json = await AsyncStorage.getItem(key);
+      if (!json) continue;
+      const parsed = JSON.parse(json) as T;
+      if (key !== scopedKey) {
+        await AsyncStorage.setItem(scopedKey, json);
+      }
+      return parsed;
+    } catch (error) {
+      console.error(`Failed to read ${key}:`, error);
+    }
+  }
+
+  return null;
+}
+
+function toMillis(value: any): number {
+  if (!value) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value?.toMillis === 'function') {
+    try {
+      return value.toMillis();
+    } catch {}
+  }
+  if (typeof value?.seconds === 'number') return value.seconds * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toDayStart(ms: number): number {
+  const date = new Date(ms);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function mergeWithDefaults(raw: Partial<UserStats> | null | undefined): UserStats {
+  return {
+    ...createDefaultStats(),
+    ...(raw || {}),
+    spotVisits: raw?.spotVisits && typeof raw.spotVisits === 'object' ? raw.spotVisits : {},
+  };
+}
+
+function checkinIdentity(item: any): string {
+  const clientId = typeof item?.clientId === 'string' ? item.clientId.trim() : '';
+  if (clientId) return `client:${clientId}`;
+  const id = typeof item?.id === 'string' ? item.id.trim() : '';
+  if (id) return `id:${id}`;
+  const spotId = String(item?.spotPlaceId || item?.spotName || item?.spot || '').trim();
+  const ts = toMillis(item?.createdAt || item?.timestamp);
+  if (spotId && ts > 0) return `spot:${spotId}:${ts}`;
+  return '';
+}
+
+function mergeUniqueCheckins(remote: any[], local: any[]): any[] {
+  const merged = new Map<string, any>();
+  [...(remote || []), ...(local || [])].forEach((item: any) => {
+    const key = checkinIdentity(item) || `fallback:${merged.size}`;
+    const existing = merged.get(key);
+    if (!existing || toMillis(item?.createdAt || item?.timestamp) >= toMillis(existing?.createdAt || existing?.timestamp)) {
+      merged.set(key, item);
+    }
+  });
+  return Array.from(merged.values());
+}
+
+async function getMergedCheckinsForUser(userId: string): Promise<any[]> {
+  const local = await getCheckins().catch(() => []);
+  const mineLocal = (local || []).filter((item: any) => item?.userId === userId);
+
+  let remoteItems: any[] = [];
+  try {
+    let cursor: any = undefined;
+    let page = 0;
+    const pageSize = 200;
+    while (page < 5) {
+      const response = await getCheckinsForUserRemote(userId, pageSize, cursor);
+      const batch = Array.isArray(response) ? response : (response?.items || []);
+      if (!batch.length) break;
+      remoteItems = remoteItems.concat(batch);
+      if (batch.length < pageSize) break;
+      cursor = response?.lastCursor || batch[batch.length - 1]?.createdAt || batch[batch.length - 1]?.timestamp;
+      if (!cursor) break;
+      page += 1;
+    }
+  } catch {}
+
+  return mergeUniqueCheckins(remoteItems, mineLocal).filter((item: any) => item?.userId === userId);
+}
+
+function buildStatsFromCheckins(checkins: any[], seed: UserStats): UserStats {
+  const normalized = (checkins || [])
+    .map((item: any) => ({ item, ts: toMillis(item?.createdAt || item?.timestamp) }))
+    .filter((entry) => entry.ts > 0)
+    .sort((a, b) => b.ts - a.ts);
+
+  const spotVisits: Record<string, number> = {};
+  let nightOwlCheckins = 0;
+  let earlyBirdCheckins = 0;
+  let weekendCheckins = 0;
+  const dayStarts = new Set<number>();
+
+  normalized.forEach(({ item, ts }) => {
+    const spotId = String(item?.spotPlaceId || item?.spotName || item?.spot || '').trim();
+    if (spotId) {
+      spotVisits[spotId] = (spotVisits[spotId] || 0) + 1;
+    }
+    const date = new Date(ts);
+    const hour = date.getHours();
+    const day = date.getDay();
+    if (hour >= 22 || hour < 6) nightOwlCheckins += 1;
+    if (hour >= 5 && hour < 8) earlyBirdCheckins += 1;
+    if (day === 0 || day === 6) weekendCheckins += 1;
+    dayStarts.add(toDayStart(ts));
+  });
+
+  const sortedDaysAsc = Array.from(dayStarts).sort((a, b) => a - b);
+  let longestStreak = 0;
+  let rolling = 0;
+  let previousDay: number | null = null;
+  sortedDaysAsc.forEach((dayStart) => {
+    if (previousDay !== null && dayStart - previousDay === DAY_MS) {
+      rolling += 1;
+    } else {
+      rolling = 1;
+    }
+    previousDay = dayStart;
+    if (rolling > longestStreak) longestStreak = rolling;
+  });
+
+  let streakDays = 0;
+  if (sortedDaysAsc.length > 0) {
+    const daySet = new Set(sortedDaysAsc);
+    let cursor = sortedDaysAsc[sortedDaysAsc.length - 1];
+    while (daySet.has(cursor)) {
+      streakDays += 1;
+      cursor -= DAY_MS;
+    }
+  }
+
+  const uniqueSpots = Object.keys(spotVisits).length;
+  const returnVisits = Object.values(spotVisits).filter((count) => count >= 3).length;
+  const totalCheckins = normalized.length;
+  const latestCheckinTs = normalized[0]?.ts || seed.lastCheckinDate;
+
+  return {
+    ...seed,
+    totalCheckins,
+    uniqueSpots,
+    streakDays,
+    longestStreak: Math.max(seed.longestStreak || 0, longestStreak),
+    nightOwlCheckins,
+    earlyBirdCheckins,
+    weekendCheckins,
+    returnVisits,
+    lastCheckinDate: latestCheckinTs,
+    spotVisits,
+    firstDiscoveries: seed.firstDiscoveries || 0,
+  };
+}
+
+/**
+ * Get user stats
+ */
+export async function getUserStats(options: { reconcileFromCheckins?: boolean } = {}): Promise<UserStats> {
+  const reconcileFromCheckins = options.reconcileFromCheckins !== false;
+  const userId = getActiveUserId();
+  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
+  let stats = createDefaultStats();
+
+  try {
+    const stored = await readStorageWithLegacyFallback<UserStats>(STORAGE_KEY, userId);
+    if (stored) stats = mergeWithDefaults(stored);
+  } catch (error) {
+    console.error('Failed to load user stats:', error);
+  }
+
+  if (reconcileFromCheckins && userId) {
+    try {
+      const mine = await getMergedCheckinsForUser(userId);
+      if (mine.length > 0) {
+        const nextStats = buildStatsFromCheckins(mine, stats);
+        const prevFingerprint = JSON.stringify(stats);
+        const nextFingerprint = JSON.stringify(nextStats);
+        if (prevFingerprint !== nextFingerprint) {
+          stats = nextStats;
+          await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+          await checkAchievements(stats, userId);
+        }
+      } else if (stats.totalCheckins !== 0 || stats.uniqueSpots !== 0) {
+        stats = {
+          ...stats,
+          totalCheckins: 0,
+          uniqueSpots: 0,
+          streakDays: 0,
+          nightOwlCheckins: 0,
+          earlyBirdCheckins: 0,
+          weekendCheckins: 0,
+          returnVisits: 0,
+          lastCheckinDate: undefined,
+          spotVisits: {},
+        };
+        await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+      }
+    } catch (error) {
+      console.error('Failed to reconcile stats from check-ins:', error);
+    }
+  }
+
+  return stats;
+}
+
 /**
  * Update user stats after check-in
  */
@@ -208,7 +427,9 @@ export async function updateStatsAfterCheckin(
   spotId: string,
   timestamp: number = Date.now()
 ): Promise<UserStats> {
-  const stats = await getUserStats();
+  const userId = getActiveUserId();
+  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
+  const stats = await getUserStats({ reconcileFromCheckins: false });
 
   // Increment total
   stats.totalCheckins++;
@@ -285,7 +506,7 @@ export async function updateStatsAfterCheckin(
   }
 
   // Save stats
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stats));
+  await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
 
   // Sync streak to Firestore user doc for campus leaderboard
   try {
@@ -300,7 +521,7 @@ export async function updateStatsAfterCheckin(
   } catch {}
 
   // Check for new achievements
-  await checkAchievements(stats);
+  await checkAchievements(stats, userId);
 
   return stats;
 }
@@ -309,17 +530,19 @@ export async function updateStatsAfterCheckin(
  * Update friend count
  */
 export async function updateFriendsCount(count: number): Promise<void> {
-  const stats = await getUserStats();
+  const userId = getActiveUserId();
+  const storageKey = getScopedStorageKey(STORAGE_KEY, userId);
+  const stats = await getUserStats({ reconcileFromCheckins: false });
   stats.friendsCount = count;
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(stats));
-  await checkAchievements(stats);
+  await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+  await checkAchievements(stats, userId);
 }
 
 /**
  * Check and unlock new achievements
  */
-async function checkAchievements(stats: UserStats): Promise<Achievement[]> {
-  const unlockedIds = await getUnlockedAchievementIds();
+async function checkAchievements(stats: UserStats, userId: string | null = getActiveUserId()): Promise<Achievement[]> {
+  const unlockedIds = await getUnlockedAchievementIds(userId);
   const newlyUnlocked: Achievement[] = [];
 
   for (const achievement of ACHIEVEMENTS) {
@@ -329,7 +552,7 @@ async function checkAchievements(stats: UserStats): Promise<Achievement[]> {
 
     if (achievement.condition(stats)) {
       // Unlock achievement
-      await unlockAchievement(achievement);
+      await unlockAchievement(achievement, userId);
       newlyUnlocked.push(achievement);
 
       // Track analytics
@@ -347,25 +570,24 @@ async function checkAchievements(stats: UserStats): Promise<Achievement[]> {
 /**
  * Unlock an achievement
  */
-async function unlockAchievement(achievement: Achievement): Promise<void> {
-  const unlocked = await getUnlockedAchievements();
+async function unlockAchievement(achievement: Achievement, userId: string | null = getActiveUserId()): Promise<void> {
+  const storageKey = getScopedStorageKey(ACHIEVEMENTS_KEY, userId);
+  const unlocked = await getUnlockedAchievements(userId);
   const updated = {
     ...achievement,
     unlockedAt: Date.now(),
   };
   unlocked.push(updated);
-  await AsyncStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(unlocked));
+  await AsyncStorage.setItem(storageKey, JSON.stringify(unlocked));
 }
 
 /**
  * Get all unlocked achievements
  */
-export async function getUnlockedAchievements(): Promise<Achievement[]> {
+export async function getUnlockedAchievements(userId: string | null = getActiveUserId()): Promise<Achievement[]> {
   try {
-    const json = await AsyncStorage.getItem(ACHIEVEMENTS_KEY);
-    if (json) {
-      return JSON.parse(json);
-    }
+    const stored = await readStorageWithLegacyFallback<Achievement[]>(ACHIEVEMENTS_KEY, userId);
+    if (stored) return stored;
   } catch (error) {
     console.error('Failed to load achievements:', error);
   }
@@ -375,8 +597,8 @@ export async function getUnlockedAchievements(): Promise<Achievement[]> {
 /**
  * Get unlocked achievement IDs
  */
-async function getUnlockedAchievementIds(): Promise<string[]> {
-  const unlocked = await getUnlockedAchievements();
+async function getUnlockedAchievementIds(userId: string | null = getActiveUserId()): Promise<string[]> {
+  const unlocked = await getUnlockedAchievements(userId);
   return unlocked.map((a) => a.id);
 }
 
@@ -446,8 +668,14 @@ export function getAchievementProgress(achievement: Achievement, stats: UserStat
  * Reset stats (for testing)
  */
 export async function resetStats(): Promise<void> {
-  await AsyncStorage.removeItem(STORAGE_KEY);
-  await AsyncStorage.removeItem(ACHIEVEMENTS_KEY);
+  const userId = getActiveUserId();
+  const keys = Array.from(new Set([
+    STORAGE_KEY,
+    ACHIEVEMENTS_KEY,
+    getScopedStorageKey(STORAGE_KEY, userId),
+    getScopedStorageKey(ACHIEVEMENTS_KEY, userId),
+  ]));
+  await AsyncStorage.multiRemove(keys);
 }
 
 export default {

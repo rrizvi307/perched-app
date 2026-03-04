@@ -104,6 +104,18 @@ describe('spotNormalizer', () => {
     expect(normalized.openNow).toBe(false);
   });
 
+  it('ignores stale intel openNow when no explicit value exists', () => {
+    const normalized = normalizeSpotForExplore({
+      intel: {
+        ...getDefaultIntel(),
+        isOpenNow: false,
+        lastUpdated: Date.now() - 3 * 60 * 60 * 1000,
+      },
+    } as any);
+
+    expect(normalized.openNow).toBeUndefined();
+  });
+
   it('derives rating from intel.avgRating when rating missing', () => {
     const normalized = normalizeSpotForExplore({
       intel: {

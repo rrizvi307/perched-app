@@ -40,6 +40,7 @@ describe('buildPlaceIntelligence', () => {
     jest.clearAllMocks();
     (global as any).PLACE_INTEL_ENDPOINT = 'https://intel.test/proxy';
     (global as any).FIREBASE_APP_CHECK_TOKEN = undefined;
+    (global as any).GOOGLE_MAPS_API_KEY = undefined;
     (Constants as any).expoConfig.extra = {};
     (global as any).fetch = jest.fn(async () => mkFetchResponse({ externalSignals: [] }, true));
   });
@@ -47,6 +48,7 @@ describe('buildPlaceIntelligence', () => {
   afterEach(() => {
     delete (global as any).PLACE_INTEL_ENDPOINT;
     delete (global as any).FIREBASE_APP_CHECK_TOKEN;
+    delete (global as any).GOOGLE_MAPS_API_KEY;
   });
 
   it('returns stable baseline intelligence with minimal input', async () => {
@@ -109,7 +111,25 @@ describe('buildPlaceIntelligence', () => {
       ] as any[],
     });
 
-    expect(result.workScore).toBeGreaterThanOrEqual(35);
+    expect(result.workScore).toBeGreaterThanOrEqual(45);
+  });
+
+  it('applies known-work-spot priors for The Nook even with sparse data', async () => {
+    const result = await buildPlaceIntelligence({
+      placeName: 'The Nook',
+      placeId: 'the-nook-sparse-1',
+      checkins: [
+        mkCheckin({
+          wifiSpeed: null,
+          busyness: null,
+          noiseLevel: null,
+          laptopFriendly: null,
+          tags: ['Study'],
+        }),
+      ] as any[],
+    });
+
+    expect(result.workScore).toBeGreaterThanOrEqual(45);
   });
 
   it('derives work-tag scoring from check-ins when explicit tagScores are missing', async () => {
@@ -368,6 +388,93 @@ describe('buildPlaceIntelligence', () => {
     expect(result.externalSignalMeta.providerCount).toBe(1);
     expect(result.externalSignalMeta.totalReviewCount).toBe(120);
     expect(result.externalSignalMeta.trustScore).toBeGreaterThan(0);
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes live Google details in aggregate rating, hours, and open status', async () => {
+    (global as any).GOOGLE_MAPS_API_KEY = 'maps-key';
+    (global as any).fetch = jest.fn(async (url: string) => {
+      if (url.includes('places.googleapis.com/v1/places/google-live-1')) {
+        return mkFetchResponse({
+          id: 'google-live-1',
+          displayName: { text: 'Google Live Spot' },
+          formattedAddress: 'Houston, TX',
+          location: { latitude: 29.76, longitude: -95.37 },
+          rating: 4.7,
+          userRatingCount: 321,
+          priceLevel: 'PRICE_LEVEL_MODERATE',
+          currentOpeningHours: {
+            openNow: true,
+            weekdayDescriptions: [
+              'Monday: 7:00 AM - 6:00 PM',
+              'Tuesday: 7:00 AM - 6:00 PM',
+              'Wednesday: 7:00 AM - 6:00 PM',
+              'Thursday: 7:00 AM - 6:00 PM',
+              'Friday: 7:00 AM - 6:00 PM',
+              'Saturday: 8:00 AM - 4:00 PM',
+              'Sunday: 8:00 AM - 4:00 PM',
+            ],
+          },
+          reviews: [
+            {
+              text: { text: 'Quiet tables and reliable wifi.' },
+              rating: 5,
+              publishTime: '2026-03-01T12:00:00Z',
+            },
+          ],
+          types: ['cafe', 'coffee_shop'],
+        });
+      }
+      if (url === 'https://intel.test/proxy') {
+        return mkFetchResponse({
+          externalSignals: [{ source: 'yelp', rating: 4.2, reviewCount: 120 }],
+        });
+      }
+      return mkFetchResponse({});
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Google Live Spot',
+      placeId: 'google-live-1',
+      location: { lat: 29.76, lng: -95.37 },
+      checkins: [mkCheckin({ wifiSpeed: 4.2, busyness: 2.4, noiseLevel: 'quiet' })],
+    });
+
+    expect(result.externalSignals.map((signal) => signal.source)).toEqual(
+      expect.arrayContaining(['google', 'yelp'])
+    );
+    expect(result.aggregateRating).toBeGreaterThan(4.4);
+    expect(result.aggregateReviewCount).toBe(441);
+    expect(result.priceLevel).toBe('$$');
+    expect(result.openNow).toBe(true);
+    expect(result.openNowSource).toBe('google');
+    expect(result.hours?.[0]).toContain('Monday');
+  });
+
+  it('uses distinct intelligence cache entries when open status changes for the same place', async () => {
+    (global as any).fetch = jest.fn(async () => mkFetchResponse({ externalSignals: [] }));
+
+    const shared = {
+      placeName: 'Cache Open Spot',
+      placeId: 'cache-open-spot',
+      location: { lat: 8, lng: 8 },
+      checkins: [mkCheckin({ wifiSpeed: 3.8, busyness: 2.8, noiseLevel: 'moderate' })],
+    };
+
+    const open = await buildPlaceIntelligence({
+      ...shared,
+      openNow: true,
+    });
+    const closed = await buildPlaceIntelligence({
+      ...shared,
+      openNow: false,
+    });
+
+    expect(open.openNow).toBe(true);
+    expect(open.openNowSource).toBe('input');
+    expect(closed.openNow).toBe(false);
+    expect(closed.openNowSource).toBe('input');
+    expect(open.workScore).toBeGreaterThanOrEqual(closed.workScore);
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
   });
 

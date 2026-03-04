@@ -16,15 +16,24 @@ export function getMapsKey() {
   );
 }
 
-type PlaceSearchResult = {
+export type GooglePlaceReview = {
+  text: string;
+  rating: number;
+  time: number;
+};
+
+export type PlaceSearchResult = {
   placeId: string;
   name: string;
   address?: string;
   location?: { lat: number; lng: number };
   rating?: number;
   ratingCount?: number;
+  priceLevel?: string;
   openNow?: boolean;
   types?: string[];
+  reviews?: GooglePlaceReview[];
+  hours?: string[];
 };
 
 const searchCache = new Map<string, { ts: number; payload: PlaceSearchResult[] }>();
@@ -72,6 +81,56 @@ async function fetchJson(url: string) {
     throw new Error(message);
   }
   return json;
+}
+
+function normalizeGooglePriceLevel(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value <= 0) return undefined;
+    return '$'.repeat(Math.max(1, Math.min(4, Math.round(value))));
+  }
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  if (/^\$+$/.test(normalized)) return normalized.slice(0, 4);
+  const match = normalized.match(/PRICE_LEVEL_(FREE|INEXPENSIVE|MODERATE|EXPENSIVE|VERY_EXPENSIVE)/i);
+  if (!match) return undefined;
+  if (match[1] === 'FREE') return undefined;
+  if (match[1] === 'INEXPENSIVE') return '$';
+  if (match[1] === 'MODERATE') return '$$';
+  if (match[1] === 'EXPENSIVE') return '$$$';
+  if (match[1] === 'VERY_EXPENSIVE') return '$$$$';
+  return undefined;
+}
+
+function normalizeGoogleReviewText(value: any): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value?.text === 'string' && value.text.trim()) return value.text.trim();
+  return null;
+}
+
+function normalizeGoogleReviewTime(value: any): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function normalizeGoogleReviews(value: unknown): GooglePlaceReview[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reviews = value
+    .map((review: any) => {
+      const text = normalizeGoogleReviewText(review?.text);
+      if (!text) return null;
+      return {
+        text,
+        rating: typeof review?.rating === 'number' ? review.rating : 0,
+        time: normalizeGoogleReviewTime(review?.publishTime ?? review?.time),
+      } satisfies GooglePlaceReview;
+    })
+    .filter(Boolean) as GooglePlaceReview[];
+  return reviews.length ? reviews : undefined;
 }
 
 function pickCityFromGeocode(result: any): string | null {
@@ -132,7 +191,7 @@ export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearc
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': key,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours,places.types',
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.types',
           },
           body: JSON.stringify({ textQuery: query, languageCode: 'en' }),
         });
@@ -149,6 +208,7 @@ export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearc
           location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
           rating: typeof p.rating === 'number' ? p.rating : undefined,
           ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+          priceLevel: normalizeGooglePriceLevel(p.priceLevel),
           openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
           types: Array.isArray(p.types) ? p.types : undefined,
         }));
@@ -167,6 +227,7 @@ export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearc
         location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
         rating: typeof r.rating === 'number' ? r.rating : undefined,
         ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
+        priceLevel: normalizeGooglePriceLevel(r.price_level),
         openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
         types: Array.isArray(r.types) ? r.types : undefined,
       }));
@@ -199,7 +260,7 @@ export async function searchPlacesWithBias(
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': key,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours,places.types',
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.types',
         },
         body: JSON.stringify({
           textQuery: query,
@@ -225,6 +286,7 @@ export async function searchPlacesWithBias(
         location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
         rating: typeof p.rating === 'number' ? p.rating : undefined,
         ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+        priceLevel: normalizeGooglePriceLevel(p.priceLevel),
         openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
         types: Array.isArray(p.types) ? p.types : undefined,
       }));
@@ -243,6 +305,7 @@ export async function searchPlacesWithBias(
       location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
       rating: typeof r.rating === 'number' ? r.rating : undefined,
       ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
+      priceLevel: normalizeGooglePriceLevel(r.price_level),
       openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
       types: Array.isArray(r.types) ? r.types : undefined,
     }));
@@ -268,7 +331,7 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
       const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
         headers: {
           'X-Goog-Api-Key': key,
-          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,types,currentOpeningHours',
+          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,types,rating,userRatingCount,priceLevel,reviews,currentOpeningHours',
         },
       });
       if (res.ok) {
@@ -278,8 +341,15 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
           name: r.displayName?.text || 'Unknown',
           address: r.formattedAddress,
           location: r.location ? { lat: r.location.latitude, lng: r.location.longitude } : undefined,
+          rating: typeof r.rating === 'number' ? r.rating : undefined,
+          ratingCount: typeof r.userRatingCount === 'number' ? r.userRatingCount : undefined,
+          priceLevel: normalizeGooglePriceLevel(r.priceLevel),
           types: Array.isArray(r.types) ? r.types : undefined,
           openNow: typeof r.currentOpeningHours?.openNow === 'boolean' ? r.currentOpeningHours.openNow : undefined,
+          reviews: normalizeGoogleReviews(r.reviews),
+          hours: Array.isArray(r.currentOpeningHours?.weekdayDescriptions)
+            ? r.currentOpeningHours.weekdayDescriptions.filter((item: any) => typeof item === 'string' && item.trim())
+            : undefined,
         };
         cacheSet(detailsCache, cacheKey, payload);
         return payload;
@@ -287,7 +357,7 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
     } catch {}
 
     const id = encodeURIComponent(placeId);
-    const fields = encodeURIComponent('name,formatted_address,geometry,types,opening_hours');
+    const fields = encodeURIComponent('name,formatted_address,geometry,types,opening_hours,rating,user_ratings_total,price_level,reviews');
     const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${id}&fields=${fields}&key=${key}&language=en`;
     const json = await fetchJson(url);
     if (!json || !json.result) return null;
@@ -297,8 +367,15 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
       name: r.name,
       address: r.formatted_address,
       location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
+      rating: typeof r.rating === 'number' ? r.rating : undefined,
+      ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
+      priceLevel: normalizeGooglePriceLevel(r.price_level),
       types: Array.isArray(r.types) ? r.types : undefined,
       openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
+      reviews: normalizeGoogleReviews(r.reviews),
+      hours: Array.isArray(r.opening_hours?.weekday_text)
+        ? r.opening_hours.weekday_text.filter((item: any) => typeof item === 'string' && item.trim())
+        : undefined,
     };
       cacheSet(detailsCache, cacheKey, payload);
       return payload;
@@ -331,7 +408,7 @@ export async function searchPlacesNearby(
         headers: {
           'Content-Type': 'application/json',
           'X-Goog-Api-Key': key,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.currentOpeningHours,places.types',
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.types',
         },
         body: JSON.stringify({
           locationRestriction: {
@@ -359,6 +436,7 @@ export async function searchPlacesNearby(
         location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
         rating: typeof p.rating === 'number' ? p.rating : undefined,
         ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
+        priceLevel: normalizeGooglePriceLevel(p.priceLevel),
         openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
         types: Array.isArray(p.types) ? p.types : undefined,
       }));
@@ -377,6 +455,7 @@ export async function searchPlacesNearby(
       location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
       rating: typeof r.rating === 'number' ? r.rating : undefined,
       ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
+      priceLevel: normalizeGooglePriceLevel(r.price_level),
       openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
       types: Array.isArray(r.types) ? r.types : undefined,
     }));

@@ -127,14 +127,50 @@ function getCrowdLevelColor(level: PlaceIntelligence['crowdLevel'], muted: strin
   return muted;
 }
 
-function buildSpotTags(spot: any) {
+function buildSpotTags(spot: any, intelligence?: PlaceIntelligence | null) {
   const tags: string[] = [];
-  if (spot.openNow === true) tags.push('Open now');
-  if (spot.openNow === false) tags.push('Closed now');
-  if (spot?.intel?.goodForStudying) tags.push('Good for studying');
-  if (spot?.intel?.goodForMeetings) tags.push('Good for meetings');
-  if (spot?.display?.noise) tags.push(String(spot.display.noise));
+  const checkinCount = Array.isArray(spot?._checkins) ? spot._checkins.length : spot?.count || 0;
+  const liveOpenKnown = intelligence?.openNowSource === 'google';
+
+  if (liveOpenKnown && intelligence?.openNow === true) tags.push('Open now');
+  if (liveOpenKnown && intelligence?.openNow === false) tags.push('Closed now');
+  if (intelligence?.recommendations?.goodForStudying && (intelligence.recommendations.studyingConfidence || 0) >= 0.6) {
+    tags.push('Good for studying');
+  }
+  if (intelligence?.recommendations?.goodForMeetings && (intelligence.recommendations.meetingsConfidence || 0) >= 0.58) {
+    tags.push('Good for meetings');
+  }
+  if (spot?.display?.noise && (checkinCount >= 2 || (intelligence?.confidence || 0) >= 0.55)) {
+    tags.push(String(spot.display.noise));
+  }
   return Array.from(new Set(tags)).slice(0, 3);
+}
+
+function getEffectiveSpotRating(spot: any) {
+  if (typeof spot?.intel?.avgRating === 'number') return spot.intel.avgRating;
+  if (typeof spot?.rating === 'number') return spot.rating;
+  return null;
+}
+
+function getTodayHoursLine(hours?: string[]) {
+  if (!Array.isArray(hours) || hours.length === 0) return null;
+  const dayIndex = (new Date().getDay() + 6) % 7;
+  const line = hours[dayIndex];
+  return typeof line === 'string' && line.trim() ? line.trim() : null;
+}
+
+function getProviderTone(source?: string) {
+  if (source === 'google') return '#2563EB';
+  if (source === 'yelp') return '#DC2626';
+  if (source === 'foursquare') return '#0891B2';
+  return '#64748B';
+}
+
+function getProviderLabel(source?: string) {
+  if (source === 'google') return 'Google';
+  if (source === 'yelp') return 'Yelp';
+  if (source === 'foursquare') return 'Foursquare';
+  return 'Source';
 }
 
 function aggregateSpotMetrics(checkins: any[]) {
@@ -231,7 +267,6 @@ function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number 
         example: item,
         seededCount: 0,
         isSeeded: false,
-        openNow: typeof item.openNow === 'boolean' ? item.openNow : undefined,
         _checkins: [],
       };
     }
@@ -242,7 +277,6 @@ function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number 
       grouped[key].isSeeded = true;
     }
     grouped[key]._checkins.push(item);
-    if (typeof item.openNow === 'boolean') grouped[key].openNow = item.openNow;
   });
 
   const spots = Object.values(grouped).map((spot: any) => {
@@ -488,10 +522,6 @@ export default function Explore() {
     (queryRef: any, nextFilters: FilterState) => {
       let next = queryRef;
 
-      if (nextFilters.openNow) {
-        next = next.where('intel.isOpenNow', '==', true);
-      }
-
       if (nextFilters.priceLevel.length > 0) {
         next = next.where('intel.priceLevel', 'in', nextFilters.priceLevel);
       }
@@ -567,7 +597,7 @@ export default function Explore() {
 
           const displayNoise = String(spot?.display?.noise || spot?.live?.noise || spot?.intel?.inferredNoise || '').toLowerCase();
           const displayBusyness = String(spot?.display?.busyness || spot?.live?.busyness || '').toLowerCase();
-          const rating = typeof spot?.intel?.avgRating === 'number' ? spot.intel.avgRating : spot?.rating || 0;
+          const rating = getEffectiveSpotRating(spot) || 0;
 
           if (safeFilters.noiseLevel !== 'any' && displayNoise !== safeFilters.noiseLevel) return null;
           if (safeFilters.notCrowded && displayBusyness === 'packed') return null;
@@ -881,7 +911,7 @@ export default function Explore() {
       }
 
       if (derivedHighRatedFilter) {
-        const rating = typeof spot?.intel?.avgRating === 'number' ? spot.intel.avgRating : spot?.rating || 0;
+        const rating = getEffectiveSpotRating(spot) || 0;
         if (rating < 4) return false;
       }
 
@@ -1065,16 +1095,16 @@ export default function Explore() {
     setSelectedSpot(null);
   }, []);
 
+  const [intelligenceMap, setIntelligenceMap] = useState<Map<string, PlaceIntelligence>>(new Map());
+
   const spotTagsMap = useMemo(() => {
     const map = new Map<string, string[]>();
     filteredSpots.forEach((spot) => {
       const key = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
-      map.set(key, buildSpotTags(spot));
+      map.set(key, buildSpotTags(spot, intelligenceMap.get(key) || null));
     });
     return map;
-  }, [filteredSpots]);
-
-  const [intelligenceMap, setIntelligenceMap] = useState<Map<string, PlaceIntelligence>>(new Map());
+  }, [filteredSpots, intelligenceMap]);
 
   useEffect(() => {
     let active = true;
@@ -1101,12 +1131,17 @@ export default function Explore() {
                   hasWifi: spot.intel.hasWifi,
                   wifiConfidence: spot.intel.wifiConfidence,
                   goodForStudying: spot.intel.goodForStudying,
+                  goodForMeetings: spot.intel.goodForMeetings,
                   goodForDates: spot.intel.goodForDates,
                   goodForGroups: spot.intel.goodForGroups,
                   instagramWorthy: spot.intel.instagramWorthy,
                   foodQualitySignal: spot.intel.foodQualitySignal,
                   aestheticVibe: spot.intel.aestheticVibe,
                   musicAtmosphere: spot.intel.musicAtmosphere,
+                  avgRating: spot.intel.avgRating,
+                  reviewCount: spot.intel.reviewCount,
+                  priceLevel: spot.intel.priceLevel,
+                  isOpenNow: spot.intel.isOpenNow,
                 }
               : null,
           });
@@ -1142,6 +1177,7 @@ export default function Explore() {
   }, [selectedSpotKey, intelligenceMap]);
   const shouldRenderLegacyIntel = useMemo(() => {
     if (!selectedSpot) return false;
+    if (selectedSpotIntelligence) return false;
     const intel = selectedSpot?.intel || {};
     const display = selectedSpot?.display || {};
     return Boolean(
@@ -1154,7 +1190,7 @@ export default function Explore() {
         display?.noise ||
         display?.busyness
     );
-  }, [selectedSpot]);
+  }, [selectedSpot, selectedSpotIntelligence]);
   const breakdownIntelligence = useMemo(
     () => (breakdownSpotKey ? intelligenceMap.get(breakdownSpotKey) || null : null),
     [breakdownSpotKey, intelligenceMap],
@@ -1211,12 +1247,17 @@ export default function Explore() {
                   hasWifi: selectedSpot.intel.hasWifi,
                   wifiConfidence: selectedSpot.intel.wifiConfidence,
                   goodForStudying: selectedSpot.intel.goodForStudying,
+                  goodForMeetings: selectedSpot.intel.goodForMeetings,
                   goodForDates: selectedSpot.intel.goodForDates,
                   goodForGroups: selectedSpot.intel.goodForGroups,
                   instagramWorthy: selectedSpot.intel.instagramWorthy,
                   foodQualitySignal: selectedSpot.intel.foodQualitySignal,
                   aestheticVibe: selectedSpot.intel.aestheticVibe,
                   musicAtmosphere: selectedSpot.intel.musicAtmosphere,
+                  avgRating: selectedSpot.intel.avgRating,
+                  reviewCount: selectedSpot.intel.reviewCount,
+                  priceLevel: selectedSpot.intel.priceLevel,
+                  isOpenNow: selectedSpot.intel.isOpenNow,
                 }
               : null,
           });
@@ -1635,9 +1676,78 @@ export default function Explore() {
               </View>
             ) : null}
 
-            {selectedSpot?.intel?.avgRating ? (
+            {selectedSpotIntelligence ? (
+              <>
+                <View style={styles.sheetMetaRow}>
+                  {typeof selectedSpotIntelligence.aggregateRating === 'number' ? (
+                    <View style={[styles.sheetMetaChip, { borderColor: border }]}>
+                      <Text style={{ color: text, fontWeight: '800' }}>
+                        {selectedSpotIntelligence.aggregateRating.toFixed(1)} stars
+                      </Text>
+                      {selectedSpotIntelligence.aggregateReviewCount > 0 ? (
+                        <Text style={{ color: muted, fontSize: 11 }}>
+                          {selectedSpotIntelligence.aggregateReviewCount} reviews
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                  {selectedSpotIntelligence.priceLevel ? (
+                    <View style={[styles.sheetMetaChip, { borderColor: border }]}>
+                      <Text style={{ color: text, fontWeight: '700' }}>{selectedSpotIntelligence.priceLevel}</Text>
+                    </View>
+                  ) : null}
+                  {selectedSpotIntelligence.openNowSource === 'google' && selectedSpotIntelligence.openNow !== null ? (
+                    <View style={[styles.sheetMetaChip, { borderColor: border }]}>
+                      <Text
+                        style={{
+                          color: selectedSpotIntelligence.openNow ? '#22C55E' : '#F97316',
+                          fontWeight: '700',
+                        }}
+                      >
+                        {selectedSpotIntelligence.openNow ? 'Open now' : 'Closed now'}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                {getTodayHoursLine(selectedSpotIntelligence.hours) ? (
+                  <Text style={{ color: muted, marginTop: 8 }}>
+                    {getTodayHoursLine(selectedSpotIntelligence.hours)}
+                  </Text>
+                ) : null}
+                {selectedSpotIntelligence.externalSignals.length ? (
+                  <View style={styles.snapshotChipRow}>
+                    {selectedSpotIntelligence.externalSignals.map((signal) => (
+                      <View
+                        key={`sheet-src-${signal.source}`}
+                        style={[
+                          styles.snapshotChip,
+                          {
+                            borderColor: withAlpha(getProviderTone(signal.source), 0.2),
+                            backgroundColor: withAlpha(getProviderTone(signal.source), 0.08),
+                          },
+                        ]}
+                      >
+                        <Text style={{ color: getProviderTone(signal.source), fontSize: 11, fontWeight: '800' }}>
+                          {getProviderLabel(signal.source)}
+                        </Text>
+                        {typeof signal.rating === 'number' ? (
+                          <Text style={{ color: text, fontSize: 11, fontWeight: '700' }}>
+                            {signal.rating.toFixed(1)}
+                          </Text>
+                        ) : null}
+                        {typeof signal.reviewCount === 'number' && signal.reviewCount > 0 ? (
+                          <Text style={{ color: muted, fontSize: 11, fontWeight: '600' }}>
+                            {signal.reviewCount.toLocaleString()} reviews
+                          </Text>
+                        ) : null}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            ) : typeof selectedSpot?.intel?.avgRating === 'number' ? (
               <Text style={{ color: muted, marginTop: 8 }}>
-                {`${selectedSpot.intel.avgRating.toFixed(1)} ★`}
+                {`${selectedSpot.intel.avgRating.toFixed(1)} stars`}
               </Text>
             ) : null}
 
@@ -1930,10 +2040,25 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   snapshotChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     borderRadius: 999,
     borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  sheetMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  sheetMetaChip: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   sheetActions: {
     flexDirection: 'row',
@@ -1956,3 +2081,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
+
+

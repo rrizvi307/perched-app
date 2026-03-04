@@ -149,6 +149,10 @@ export default function ProfileScreen() {
       // Keep full history in Profile; Feed/Explore handle "live now" filtering separately.
       setCheckins(merged);
       setStatus(null);
+      try {
+        const refreshedStats = await getUserStats();
+        setUserStats(refreshedStats);
+      } catch {}
       if (wasOfflineRef.current) {
         showToast('Back online. Profile updated.', 'success');
         wasOfflineRef.current = false;
@@ -164,6 +168,10 @@ export default function ProfileScreen() {
       const mine = local.filter((c: any) => c.id?.startsWith(user?.id || 'local-') || c.userId === user?.id);
       setCheckins(mine);
       setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
+      try {
+        const refreshedStats = await getUserStats();
+        setUserStats(refreshedStats);
+      } catch {}
       wasOfflineRef.current = true;
     } finally {
       setRefreshing(false);

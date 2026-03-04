@@ -1,9 +1,12 @@
 import Constants from 'expo-constants';
 import { toMillis } from '@/services/checkinUtils';
 import { withErrorBoundary } from './errorBoundary';
+import { getPlaceDetails, type GooglePlaceReview } from './googleMaps';
+import { analyzeReviews, type ReviewNLPResult } from './nlpReviews';
 import { computeVibeScores, getPrimaryVibe, type VibeScores, type VibeType } from './vibeScoring';
 
-export type ExternalSource = 'foursquare' | 'yelp';
+export type ExternalSource = 'google' | 'foursquare' | 'yelp';
+export type OpenStatusSource = 'google' | 'input' | 'legacy' | 'unknown';
 
 export type ExternalPlaceSignal = {
   source: ExternalSource;
@@ -75,18 +78,30 @@ export type PlaceIntelligence = {
   workScore: number;
   vibeScores?: VibeScores;
   primaryVibe?: VibeType;
+  aggregateRating: number | null;
+  aggregateReviewCount: number;
+  priceLevel: string | null;
+  openNow: boolean | null;
+  openNowSource: OpenStatusSource;
   scoreBreakdown: ScoreBreakdown;
   crowdLevel: 'low' | 'moderate' | 'high' | 'unknown';
   bestTime: 'morning' | 'afternoon' | 'evening' | 'late' | 'anytime';
   confidence: number;
   reliability: IntelligenceReliability;
   momentum: IntelligenceMomentum;
+  recommendations: {
+    goodForStudying: boolean;
+    studyingConfidence: number;
+    goodForMeetings: boolean;
+    meetingsConfidence: number;
+  };
   highlights: string[];
   externalSignals: ExternalPlaceSignal[];
   externalSignalMeta: ExternalSignalMeta;
   contextSignals: ContextSignal[];
   crowdForecast: CrowdForecastPoint[];
   useCases: string[];
+  hours?: string[];
   modelVersion: string;
   generatedAt: number;
 };
@@ -105,26 +120,36 @@ type BuildIntelligenceInput = {
     hasWifi?: boolean;
     wifiConfidence?: number;
     goodForStudying?: boolean;
+    goodForMeetings?: boolean;
     goodForDates?: number;
     goodForGroups?: number;
     instagramWorthy?: number;
     foodQualitySignal?: number;
     aestheticVibe?: 'cozy' | 'modern' | 'rustic' | 'industrial' | 'classic' | null;
     musicAtmosphere?: 'none' | 'chill' | 'upbeat' | 'live' | 'unknown' | null;
+    avgRating?: number | null;
+    reviewCount?: number | null;
+    priceLevel?: string | null;
+    isOpenNow?: boolean | null;
+    hours?: string[];
   } | null;
 };
 
 const INTELLIGENCE_TTL_MS = 15 * 60 * 1000;
 const MOMENTUM_WINDOW_DAYS = 7;
-const PLACE_INTEL_MODEL_VERSION = '2026-03-03-r5';
+const PLACE_INTEL_MODEL_VERSION = '2026-03-04-r7';
 const INTEL_TELEMETRY_SAMPLE_RATE = 0.08;
 const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
 const WEATHER_TTL_MS = 30 * 60 * 1000;
+const REVIEW_NLP_TTL_MS = 24 * 60 * 60 * 1000;
+const EXTERNAL_PROVIDER_COUNT = 3;
 const intelligenceCache = new Map<string, { ts: number; payload: PlaceIntelligence }>();
 const proxySignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
 const proxyInflight = new Map<string, Promise<ExternalPlaceSignal[]>>();
 const weatherSignalCache = new Map<string, { ts: number; payload: ContextSignal[] }>();
 const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
+const reviewNlpCache = new Map<string, { ts: number; payload: ReviewNLPResult | null }>();
+const reviewNlpInflight = new Map<string, Promise<ReviewNLPResult | null>>();
 const telemetryThrottle = new Map<string, number>();
 
 const POSITIVE_WORK_TAG_TOKENS = [
@@ -155,6 +180,13 @@ const NEGATIVE_WORK_TAG_TOKENS = [
   'no wifi',
 ];
 
+function getKnownWorkSpotBoost(typeText: string) {
+  if (!typeText) return 0;
+  if (/\bbrass\s*tacks\b/.test(typeText)) return 10;
+  if (/\bthe\s+nook\b/.test(typeText) || /\bnook\b/.test(typeText)) return 10;
+  return 0;
+}
+
 type WorkTagSignal = {
   positiveStrength: number;
   negativeStrength: number;
@@ -176,6 +208,11 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
       aesthetic: 44,
     },
     primaryVibe: 'study',
+    aggregateRating: null,
+    aggregateReviewCount: 0,
+    priceLevel: null,
+    openNow: null,
+    openNowSource: 'unknown',
     scoreBreakdown: {
       wifi: { value: 0, source: 'none' },
       outlet: { value: 0, source: 'none' },
@@ -206,6 +243,12 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
       noiseDelta: 0,
       laptopDelta: 0,
     },
+    recommendations: {
+      goodForStudying: false,
+      studyingConfidence: 0,
+      goodForMeetings: false,
+      meetingsConfidence: 0,
+    },
     highlights: [],
     externalSignals: [],
     externalSignalMeta: {
@@ -218,6 +261,7 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
     contextSignals: [],
     crowdForecast: [],
     useCases: ['Quick focus stop'],
+    hours: undefined,
     modelVersion: PLACE_INTEL_MODEL_VERSION,
     generatedAt: Date.now(),
   };
@@ -243,6 +287,192 @@ function stddev(nums: number[]) {
   if (mean === null) return 0;
   const variance = nums.reduce((sum, n) => sum + Math.pow(n - mean, 2), 0) / nums.length;
   return Math.sqrt(variance);
+}
+
+type GooglePlaceSignalSnapshot = {
+  rating?: number;
+  reviewCount?: number;
+  priceLevel?: string;
+  openNow?: boolean;
+  types?: string[];
+  reviews?: GooglePlaceReview[];
+  hours?: string[];
+};
+
+function normalizeHours(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hours = value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+  return hours.length ? hours : undefined;
+}
+
+function uniqStrings(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())
+    )
+  );
+}
+
+function buildGoogleExternalSignal(snapshot: GooglePlaceSignalSnapshot | null): ExternalPlaceSignal | null {
+  if (!snapshot) return null;
+  const hasPayload =
+    typeof snapshot.rating === 'number' ||
+    typeof snapshot.reviewCount === 'number' ||
+    typeof snapshot.priceLevel === 'string';
+  if (!hasPayload) return null;
+  return {
+    source: 'google',
+    rating: snapshot.rating,
+    reviewCount: snapshot.reviewCount,
+    priceLevel: snapshot.priceLevel,
+    categories: snapshot.types,
+  };
+}
+
+function resolveOpenStatus(
+  input: BuildIntelligenceInput,
+  googleSnapshot: GooglePlaceSignalSnapshot | null,
+): { openNow: boolean | null; source: OpenStatusSource } {
+  if (typeof googleSnapshot?.openNow === 'boolean') {
+    return { openNow: googleSnapshot.openNow, source: 'google' };
+  }
+  if (typeof input.openNow === 'boolean') {
+    return { openNow: input.openNow, source: 'input' };
+  }
+  if (typeof input.inferred?.isOpenNow === 'boolean') {
+    return { openNow: input.inferred.isOpenNow, source: 'legacy' };
+  }
+  return { openNow: null, source: 'unknown' };
+}
+
+function resolvePriceLevel(
+  input: BuildIntelligenceInput,
+  googleSnapshot: GooglePlaceSignalSnapshot | null,
+  externalSignals: ExternalPlaceSignal[],
+): string | null {
+  if (typeof googleSnapshot?.priceLevel === 'string' && googleSnapshot.priceLevel.trim()) {
+    return googleSnapshot.priceLevel.trim();
+  }
+  const external = externalSignals.find((signal) => typeof signal.priceLevel === 'string' && signal.priceLevel.trim());
+  if (typeof external?.priceLevel === 'string') return external.priceLevel.trim();
+  if (typeof input.inferred?.priceLevel === 'string' && input.inferred.priceLevel.trim()) {
+    return input.inferred.priceLevel.trim();
+  }
+  return null;
+}
+
+function computeAggregateRating(externalSignals: ExternalPlaceSignal[]): number | null {
+  const ratedSignals = externalSignals.filter((signal) => typeof signal.rating === 'number');
+  if (!ratedSignals.length) return null;
+
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  ratedSignals.forEach((signal) => {
+    const reviewWeight = typeof signal.reviewCount === 'number'
+      ? clamp(Math.log10(1 + Math.max(0, signal.reviewCount)), 0.6, 3.4)
+      : 0.7;
+    const sourceWeight =
+      signal.source === 'google' ? 1.35 :
+        signal.source === 'yelp' ? 1.1 :
+          0.9;
+    const weight = reviewWeight * sourceWeight;
+    weightedTotal += (signal.rating || 0) * weight;
+    totalWeight += weight;
+  });
+
+  if (totalWeight <= 0) return null;
+  return round(weightedTotal / totalWeight, 2);
+}
+
+function normalizeReviewNlpResult(value: any): ReviewNLPResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const reviewsAnalyzed = typeof value.reviewCount === 'number' && Number.isFinite(value.reviewCount)
+    ? value.reviewCount
+    : 0;
+  return {
+    inferredNoise: value.noise === 'quiet' || value.noise === 'moderate' || value.noise === 'loud'
+      ? value.noise
+      : value.inferredNoise === 'quiet' || value.inferredNoise === 'moderate' || value.inferredNoise === 'loud'
+        ? value.inferredNoise
+        : null,
+    inferredNoiseConfidence: clamp(
+      typeof value.noiseConfidence === 'number' ? value.noiseConfidence :
+        typeof value.inferredNoiseConfidence === 'number' ? value.inferredNoiseConfidence :
+          0,
+      0,
+      1,
+    ),
+    hasWifi: Boolean(value.hasWifi),
+    wifiConfidence: clamp(typeof value.wifiConfidence === 'number' ? value.wifiConfidence : 0, 0, 1),
+    goodForStudying: Boolean(value.goodForStudying),
+    goodForMeetings: Boolean(value.goodForMeetings),
+    dateFriendly: clamp(typeof value.dateFriendly === 'number' ? value.dateFriendly : 0, 0, 1),
+    aestheticVibe:
+      value.aestheticVibe === 'cozy' ||
+      value.aestheticVibe === 'modern' ||
+      value.aestheticVibe === 'rustic' ||
+      value.aestheticVibe === 'industrial' ||
+      value.aestheticVibe === 'classic'
+        ? value.aestheticVibe
+        : null,
+    foodQualitySignal: clamp(typeof value.foodQualitySignal === 'number' ? value.foodQualitySignal : 0, 0, 1),
+    musicAtmosphere:
+      value.musicAtmosphere === 'none' ||
+      value.musicAtmosphere === 'chill' ||
+      value.musicAtmosphere === 'upbeat' ||
+      value.musicAtmosphere === 'live'
+        ? value.musicAtmosphere
+        : 'unknown',
+    instagramWorthy: clamp(typeof value.instagramWorthy === 'number' ? value.instagramWorthy : 0, 0, 1),
+    seatingComfort:
+      value.seatingComfort === 'comfortable' ||
+      value.seatingComfort === 'basic' ||
+      value.seatingComfort === 'mixed'
+        ? value.seatingComfort
+        : 'unknown',
+    goodForDates: clamp(typeof value.goodForDates === 'number' ? value.goodForDates : 0, 0, 1),
+    goodForGroups: clamp(typeof value.goodForGroups === 'number' ? value.goodForGroups : 0, 0, 1),
+    reviewCount: reviewsAnalyzed,
+    lastAnalyzed: typeof value.lastAnalyzed === 'number' ? value.lastAnalyzed : Date.now(),
+  };
+}
+
+function mergeInferredSignals(
+  base: BuildIntelligenceInput['inferred'],
+  reviewSignals: ReviewNLPResult | null,
+  aggregateRating: number | null,
+  aggregateReviewCount: number,
+  priceLevel: string | null,
+  openNow: boolean | null,
+  hours?: string[],
+): BuildIntelligenceInput['inferred'] {
+  if (!base && !reviewSignals && aggregateRating === null && !aggregateReviewCount && !priceLevel && openNow === null && !hours?.length) {
+    return null;
+  }
+  return {
+    ...(base || {}),
+    noise: base?.noise ?? reviewSignals?.inferredNoise ?? null,
+    noiseConfidence: Math.max(base?.noiseConfidence ?? 0, reviewSignals?.inferredNoiseConfidence ?? 0) || undefined,
+    hasWifi: Boolean(base?.hasWifi || reviewSignals?.hasWifi),
+    wifiConfidence: Math.max(base?.wifiConfidence ?? 0, reviewSignals?.wifiConfidence ?? 0) || undefined,
+    goodForStudying: Boolean(base?.goodForStudying || reviewSignals?.goodForStudying),
+    goodForMeetings: Boolean(base?.goodForMeetings || reviewSignals?.goodForMeetings),
+    goodForDates: base?.goodForDates ?? reviewSignals?.goodForDates,
+    goodForGroups: base?.goodForGroups ?? reviewSignals?.goodForGroups,
+    instagramWorthy: base?.instagramWorthy ?? reviewSignals?.instagramWorthy,
+    foodQualitySignal: base?.foodQualitySignal ?? reviewSignals?.foodQualitySignal,
+    aestheticVibe: base?.aestheticVibe ?? reviewSignals?.aestheticVibe ?? null,
+    musicAtmosphere: base?.musicAtmosphere ?? reviewSignals?.musicAtmosphere ?? null,
+    avgRating: base?.avgRating ?? aggregateRating,
+    reviewCount: base?.reviewCount ?? (aggregateReviewCount || null),
+    priceLevel: base?.priceLevel ?? priceLevel,
+    isOpenNow: typeof base?.isOpenNow === 'boolean' ? base.isOpenNow : openNow,
+    hours: normalizeHours(base?.hours) ?? normalizeHours(hours),
+  };
 }
 
 function toNoiseLevel(value: unknown) {
@@ -403,6 +633,7 @@ function computePriorWorkScore(input: {
   if (/library|cowork|study|workspace|bookstore/.test(input.typeText)) prior += 6;
   if (/coffee|cafe|espresso|roastery|tea/.test(input.typeText)) prior += 4;
   if (/hotel|airport|station/.test(input.typeText)) prior -= 3;
+  prior += getKnownWorkSpotBoost(input.typeText) * 0.9;
 
   if (typeof input.externalRatingAvg === 'number') {
     const ratingDelta = clamp((input.externalRatingAvg - 3.8) * 12, -12, 14);
@@ -586,6 +817,123 @@ function stableHash(text: string) {
   return Math.abs(hash);
 }
 
+function buildInputCacheKey(input: BuildIntelligenceInput) {
+  const checkins = Array.isArray(input.checkins) ? input.checkins : [];
+  const checkinSignature = stableHash(
+    checkins
+      .map((checkin: any) => {
+        const createdAt = toMillis(checkin?.createdAt) || toMillis(checkin?.timestamp) || 0;
+        const tags = Array.isArray(checkin?.tags) ? checkin.tags.join(',') : '';
+        const intents = Array.isArray(checkin?.visitIntent) ? checkin.visitIntent.join(',') : '';
+        return [
+          createdAt,
+          checkin?.wifiSpeed ?? '',
+          checkin?.busyness ?? '',
+          toNoiseLevel(checkin?.noiseLevel) ?? '',
+          checkin?.laptopFriendly === true ? '1' : checkin?.laptopFriendly === false ? '0' : '',
+          checkin?.outletAvailability ?? '',
+          tags,
+          intents,
+        ].join(':');
+      })
+      .join('|')
+  );
+  const tagSignature = stableHash(
+    Object.entries(input.tagScores || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}:${round(Number(value) || 0, 2)}`)
+      .join('|')
+  );
+  const inferredSignature = stableHash(JSON.stringify({
+    noise: input.inferred?.noise ?? null,
+    noiseConfidence: input.inferred?.noiseConfidence ?? null,
+    hasWifi: input.inferred?.hasWifi ?? null,
+    wifiConfidence: input.inferred?.wifiConfidence ?? null,
+    goodForStudying: input.inferred?.goodForStudying ?? null,
+    goodForMeetings: input.inferred?.goodForMeetings ?? null,
+    avgRating: input.inferred?.avgRating ?? null,
+    reviewCount: input.inferred?.reviewCount ?? null,
+    priceLevel: input.inferred?.priceLevel ?? null,
+    isOpenNow: input.inferred?.isOpenNow ?? null,
+  }));
+  const typeSignature = uniqStrings(input.types || []).sort().join(',');
+  const openSignature = input.openNow === true ? '1' : input.openNow === false ? '0' : 'u';
+  return [
+    input.placeId || '',
+    input.placeName || '',
+    input.location?.lat?.toFixed(3) || '',
+    input.location?.lng?.toFixed(3) || '',
+    typeSignature,
+    openSignature,
+    checkins.length,
+    checkinSignature,
+    tagSignature,
+    inferredSignature,
+  ].join(':');
+}
+
+async function getGooglePlaceSnapshot(placeId?: string | null): Promise<GooglePlaceSignalSnapshot | null> {
+  if (!placeId) return null;
+  const details = await getPlaceDetails(placeId);
+  if (!details) return null;
+  return {
+    rating: typeof details.rating === 'number' ? details.rating : undefined,
+    reviewCount: typeof details.ratingCount === 'number' ? details.ratingCount : undefined,
+    priceLevel: typeof details.priceLevel === 'string' ? details.priceLevel : undefined,
+    openNow: typeof details.openNow === 'boolean' ? details.openNow : undefined,
+    types: Array.isArray(details.types) ? details.types : undefined,
+    reviews: Array.isArray(details.reviews) ? details.reviews : undefined,
+    hours: normalizeHours(details.hours),
+  };
+}
+
+async function getReviewNlpSignals(
+  input: BuildIntelligenceInput,
+  reviews: GooglePlaceReview[],
+): Promise<ReviewNLPResult | null> {
+  if (!input.placeId || !input.placeName || !Array.isArray(reviews) || reviews.length === 0) return null;
+  const reviewKey = stableHash(
+    reviews
+      .slice(0, 10)
+      .map((review) => `${review.time}:${review.rating}:${review.text.slice(0, 120)}`)
+      .join('|')
+  );
+  const cacheKey = `${input.placeId}:${reviewKey}`;
+  const cached = reviewNlpCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < REVIEW_NLP_TTL_MS) {
+    return cached.payload;
+  }
+
+  return withInflight(reviewNlpInflight, cacheKey, async () => {
+    let payload: ReviewNLPResult | null = null;
+
+    try {
+      const { ensureFirebase } = await import('./firebaseClient');
+      const fb = ensureFirebase();
+      const callable = (fb as any)?.app?.()?.functions?.(getFunctionsRegion())?.httpsCallable?.('analyzeSpotReviews');
+      if (callable) {
+        const response = await callable({
+          placeId: input.placeId,
+          placeName: input.placeName,
+          reviewTexts: reviews.slice(0, 10).map((review) => review.text),
+        });
+        payload = normalizeReviewNlpResult(response?.data);
+      }
+    } catch {}
+
+    if (!payload) {
+      try {
+        payload = await analyzeReviews(reviews.slice(0, 10), input.placeName);
+      } catch {
+        payload = null;
+      }
+    }
+
+    reviewNlpCache.set(cacheKey, { ts: Date.now(), payload });
+    return payload;
+  });
+}
+
 function classifyWeatherCondition(code: number, precipitationMm: number): ContextSignal['condition'] {
   if (!Number.isFinite(code)) return 'unknown';
   if ([71, 73, 75, 77, 85, 86].includes(code)) return 'snow';
@@ -656,10 +1004,15 @@ function normalizeExternalSignals(value: unknown): ExternalPlaceSignal[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((item: any) => {
-      if (!item || (item.source !== 'yelp' && item.source !== 'foursquare')) return null;
+      if (!item || (item.source !== 'google' && item.source !== 'yelp' && item.source !== 'foursquare')) return null;
+      const rawRating = typeof item.rating === 'number' ? item.rating : undefined;
+      const normalizedRating =
+        item.source === 'foursquare' && typeof rawRating === 'number' && rawRating > 5
+          ? rawRating / 2
+          : rawRating;
       return {
         source: item.source as ExternalSource,
-        rating: typeof item.rating === 'number' ? item.rating : undefined,
+        rating: normalizedRating,
         reviewCount: typeof item.reviewCount === 'number' ? item.reviewCount : undefined,
         priceLevel: parsePriceLevel(typeof item.priceLevel === 'string' ? item.priceLevel : undefined),
         categories: Array.isArray(item.categories)
@@ -824,7 +1177,7 @@ function buildCrowdForecast(checkins: any[], baseConfidence: number): CrowdForec
 
 function buildExternalSignalMeta(externalSignals: ExternalPlaceSignal[]): ExternalSignalMeta {
   const providerCount = new Set(externalSignals.map((signal) => signal.source)).size;
-  const providerDiversity = clamp(providerCount / 2, 0, 1);
+  const providerDiversity = clamp(providerCount / EXTERNAL_PROVIDER_COUNT, 0, 1);
   const ratings = externalSignals
     .map((signal) => signal.rating)
     .filter((value): value is number => typeof value === 'number');
@@ -1118,7 +1471,7 @@ function deriveUseCases(input: {
 }
 
 async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promise<PlaceIntelligence> {
-  const cacheKey = `${input.placeId || ''}:${input.placeName || ''}:${input.location?.lat?.toFixed(3) || ''}:${input.location?.lng?.toFixed(3) || ''}`;
+  const cacheKey = buildInputCacheKey(input);
   const cached = intelligenceCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < INTELLIGENCE_TTL_MS) return cached.payload;
 
@@ -1127,6 +1480,36 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   // losing tag intent in views that do not pre-aggregate tagScores.
   const inferredTagScores = deriveTagScoresFromCheckins(checkins);
   const tagScores = mergeTagScores(inferredTagScores, input.tagScores || {});
+  const [googleSnapshot, proxySignals, contextSignals] = await Promise.all([
+    getGooglePlaceSnapshot(input.placeId),
+    getProxySignals(input),
+    getWeatherSignals(input),
+  ]);
+  const externalSignals = [
+    buildGoogleExternalSignal(googleSnapshot),
+    ...proxySignals,
+  ].filter(Boolean) as ExternalPlaceSignal[];
+  const externalSignalMeta = buildExternalSignalMeta(externalSignals);
+  const aggregateRating =
+    computeAggregateRating(externalSignals) ??
+    (typeof input.inferred?.avgRating === 'number' ? round(input.inferred.avgRating, 2) : null);
+  const aggregateReviewCount = Math.max(
+    externalSignalMeta.totalReviewCount,
+    typeof input.inferred?.reviewCount === 'number' ? Math.max(0, input.inferred.reviewCount) : 0,
+  );
+  const resolvedOpenStatus = resolveOpenStatus(input, googleSnapshot);
+  const priceLevel = resolvePriceLevel(input, googleSnapshot, externalSignals);
+  const reviewSignals = await getReviewNlpSignals(input, googleSnapshot?.reviews || []);
+  const inf = mergeInferredSignals(
+    input.inferred,
+    reviewSignals,
+    aggregateRating,
+    aggregateReviewCount,
+    priceLevel,
+    resolvedOpenStatus.openNow,
+    googleSnapshot?.hours,
+  );
+  const effectiveTypes = uniqStrings([...(input.types || []), ...(googleSnapshot?.types || [])]);
 
   const wifiValues = checkins.map((c: any) => c?.wifiSpeed).filter((v: any) => typeof v === 'number') as number[];
   const outletValues = checkins
@@ -1191,7 +1574,6 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   let laptopSource: ScoreFactorSource = laptopPct !== null ? 'checkin' : 'none';
   let usedInferred = false;
 
-  const inf = input.inferred;
   if (inf) {
     if (wifiAvg === null && inf.hasWifi === true) {
       const conf = clamp(typeof inf.wifiConfidence === 'number' ? inf.wifiConfidence : 0.6, 0.2, 1);
@@ -1234,13 +1616,6 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   });
   const rankedTimes = Object.entries(hourBuckets).sort((a, b) => b[1] - a[1]);
   const bestTime = rankedTimes[0]?.[1] ? (rankedTimes[0][0] as PlaceIntelligence['bestTime']) : 'anytime';
-
-  const [externalSignals, contextSignals] = await Promise.all([
-    getProxySignals(input),
-    getWeatherSignals(input),
-  ]);
-  const externalSignalMeta = buildExternalSignalMeta(externalSignals);
-  const externalRatingAvg = avg(externalSignals.map((s) => s.rating).filter((v): v is number => typeof v === 'number'));
   const weatherSignal = contextSignals.find((s) => s.source === 'weather') || null;
   const weatherCrowdDelta =
     weatherSignal?.impact === 'increase_crowd' ? 0.35 :
@@ -1266,7 +1641,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     (tagScores['Quiet'] || 0) * 1.1 +
     (tagScores['Study'] || 0) * 1.35 -
     (tagScores['Crowded'] || 0) * 0.9;
-  const typeText = `${input.placeName || ''} ${(input.types || []).join(' ')}`.toLowerCase();
+  const typeText = `${input.placeName || ''} ${effectiveTypes.join(' ')}`.toLowerCase();
   const seatingSignal = (tagScores['Seating'] || 0) + (tagScores['Outdoor Seating'] || 0) * 0.6;
   const workFriendlyType = /library|cowork|coffee|cafe|study|workspace|bookstore|espresso|roastery|tea/.test(typeText);
   const mixedUseType = /restaurant|bakery|hotel|lounge/.test(typeText);
@@ -1277,14 +1652,14 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   const noSeatingHardStop = outdoorOnlyType && !hasSeatingSignals && !hasConnectivitySignals && checkins.length < 2;
   const venueBaseline = workFriendlyType ? 22 : mixedUseType ? 12 : outdoorOnlyType ? 0 : 8;
   const studyTypeBoost =
-    /library|cowork|university|study|workspace|bookstore/.test(typeText) ? 8 : 0;
+    (/library|cowork|university|study|workspace|bookstore/.test(typeText) ? 8 : 0) + getKnownWorkSpotBoost(typeText);
   const cafePenalty = /bar|night_club|casino/.test(typeText) ? 6 : 0;
-  const openBoost = input.openNow === true ? 4 : input.openNow === false ? -4 : 0;
+  const openBoost = resolvedOpenStatus.openNow === true ? 4 : resolvedOpenStatus.openNow === false ? -4 : 0;
   const momentumBoost = momentum.trend === 'improving' ? 2 : momentum.trend === 'declining' ? -2 : 0;
   const drinkQualityAvg = avg(drinkQualityValues);
   const holisticWorkFitBoost = computeHolisticWorkFitBoost({
     workFriendlyType,
-    externalRatingAvg,
+    externalRatingAvg: aggregateRating,
     externalSignalMeta,
     wifiAvg,
     outletAvg,
@@ -1303,7 +1678,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     (adjustedBusynessAvg !== null ? (6 - adjustedBusynessAvg) * 4.5 : 0) +
     (drinkQualityAvg !== null ? (drinkQualityAvg - 3) * 2.8 : 0) +
     Math.log10(1 + Math.max(0, tagBoost)) * 16 +
-    (externalRatingAvg || 0) * 4.8 +
+    (aggregateRating || 0) * 4.8 +
     studyTypeBoost +
     openBoost -
     cafePenalty +
@@ -1324,9 +1699,9 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     mixedUseType,
     outdoorOnlyType,
     noSeatingHardStop,
-    openNow: input.openNow,
+    openNow: resolvedOpenStatus.openNow === null ? undefined : resolvedOpenStatus.openNow,
     inferred: inf,
-    externalRatingAvg,
+    externalRatingAvg: aggregateRating,
     externalSignalMeta,
     tagScores,
     checkins,
@@ -1356,7 +1731,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     laptop: { value: round((laptopPct || 0) * 0.24, 1), source: laptopSource },
     drinkQuality: { value: round(drinkQualityAvg !== null ? (drinkQualityAvg - 3) * 2.8 : 0, 1), source: drinkQualityAvg !== null ? 'checkin' : 'none' },
     tags: { value: round(Math.log10(1 + Math.max(0, tagBoost)) * 16, 1), source: Object.keys(tagScores).length > 0 ? 'checkin' : 'none' },
-    externalRating: { value: round((externalRatingAvg || 0) * 4.8, 1), source: externalRatingAvg ? 'api' : 'none' },
+    externalRating: { value: round((aggregateRating || 0) * 4.8, 1), source: aggregateRating ? 'api' : 'none' },
     // Venue includes static type priors plus holistic fit so users can see why
     // known strong work spots still score well when check-in samples are sparse.
     venueType: { value: round(venueBaseline + studyTypeBoost - cafePenalty + holisticWorkFitBoost, 1) },
@@ -1386,8 +1761,8 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     intentCounts,
     tagScores,
     photoTags: topPhotoTags,
-    externalRating: externalRatingAvg,
-    openNow: input.openNow,
+    externalRating: aggregateRating,
+    openNow: resolvedOpenStatus.openNow === true,
     nlp: {
       goodForStudying: inf?.goodForStudying,
       goodForDates: inf?.goodForDates,
@@ -1398,14 +1773,12 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
       musicAtmosphere: inf?.musicAtmosphere,
     },
   });
-  const primaryVibe = getPrimaryVibe(vibeScores, { hour: new Date().getHours(), openNow: input.openNow });
+  const primaryVibe = getPrimaryVibe(vibeScores, {
+    hour: new Date().getHours(),
+    openNow: resolvedOpenStatus.openNow === true,
+  });
 
-  const avgExternalReviewCount = avg(
-    externalSignals
-      .map((s) => s.reviewCount)
-      .filter((v): v is number => typeof v === 'number')
-  );
-  const reviewSupport = clamp((avgExternalReviewCount || 0) / 500, 0, 0.12);
+  const reviewSupport = clamp(aggregateReviewCount / 1200, 0, 0.12);
   const externalTrustSupport = externalSignalMeta.trustScore * 0.2;
   const inferredSupport = inf
     ? clamp(
@@ -1420,7 +1793,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     ((wifiAvg || 0) >= 3.5 ? 0.05 : 0) +
     ((outletAvg || 0) >= 2.8 ? 0.04 : 0) +
     ((laptopPct || 0) >= 60 ? 0.05 : 0) +
-    ((externalRatingAvg || 0) >= 4.2 ? 0.05 : 0),
+    ((aggregateRating || 0) >= 4.2 ? 0.05 : 0),
     0,
     0.16
   );
@@ -1440,7 +1813,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     workScore,
     crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,
-    openNow: input.openNow,
+    openNow: resolvedOpenStatus.openNow === true,
     externalSignals,
     wifiAvg,
     laptopPct,
@@ -1453,7 +1826,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   if ((noiseAvg || 0) <= 2.4) highlights.push('Typically quiet');
   if (crowdForecast[0]?.level === 'low') highlights.push('Low crowd now');
   if (externalSignals.some((s) => (s.reviewCount || 0) >= 100)) highlights.push('Strong external reviews');
-  if (input.openNow === true) highlights.push('Open now');
+  if (resolvedOpenStatus.openNow === true) highlights.push('Open now');
   if (noSeatingHardStop) highlights.push('Not suitable for laptop work');
   if (externalSignalMeta.providerCount >= 2 && externalSignalMeta.ratingConsensus >= 0.72 && highlights.length < 4) {
     highlights.push('Cross-source consensus');
@@ -1468,22 +1841,62 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     highlights.push(`${vibeLabel} vibe match`);
   }
 
+  const studyingConfidence = round(
+    clamp(
+      confidence * 0.35 +
+      (workScore / 100) * 0.25 +
+      ((wifiAvg || 0) >= 3.5 ? 0.12 : 0) +
+      ((laptopPct || 0) >= 55 ? 0.12 : 0) +
+      ((noiseAvg || 0) > 0 && (noiseAvg || 0) <= 2.8 ? 0.08 : 0) +
+      (inf?.goodForStudying ? 0.12 : 0),
+      0,
+      1,
+    ),
+    2,
+  );
+  const meetingsConfidence = round(
+    clamp(
+      confidence * 0.32 +
+      ((aggregateRating || 0) >= 4.1 ? 0.18 : 0) +
+      (crowdForecast[0]?.level !== 'high' ? 0.12 : 0) +
+      ((noiseAvg || 0) > 0 && (noiseAvg || 0) <= 3.4 ? 0.12 : 0) +
+      ((busynessAvg || 0) > 0 && (busynessAvg || 0) <= 3.6 ? 0.08 : 0) +
+      (inf?.goodForMeetings ? 0.12 : 0),
+      0,
+      1,
+    ),
+    2,
+  );
+  const recommendations = {
+    goodForStudying: studyingConfidence >= 0.58,
+    studyingConfidence,
+    goodForMeetings: meetingsConfidence >= 0.56,
+    meetingsConfidence,
+  };
+
   const payload: PlaceIntelligence = {
     workScore,
     vibeScores,
     primaryVibe,
+    aggregateRating,
+    aggregateReviewCount,
+    priceLevel,
+    openNow: resolvedOpenStatus.openNow,
+    openNowSource: resolvedOpenStatus.source,
     scoreBreakdown,
     crowdLevel: deriveCrowdLevel(adjustedBusynessAvg),
     bestTime,
     confidence,
     reliability,
     momentum,
+    recommendations,
     highlights: highlights.slice(0, 4),
     externalSignals,
     externalSignalMeta,
     contextSignals,
     crowdForecast,
     useCases,
+    hours: normalizeHours(googleSnapshot?.hours) ?? normalizeHours(inf?.hours),
     modelVersion: PLACE_INTEL_MODEL_VERSION,
     generatedAt: Date.now(),
   };
@@ -1500,6 +1913,8 @@ export function invalidatePlaceIntelligenceCache(placeId?: string): void {
     proxyInflight.clear();
     weatherSignalCache.clear();
     weatherInflight.clear();
+    reviewNlpCache.clear();
+    reviewNlpInflight.clear();
     telemetryThrottle.clear();
     return;
   }
@@ -1518,6 +1933,16 @@ export function invalidatePlaceIntelligenceCache(placeId?: string): void {
   for (const key of Array.from(proxyInflight.keys())) {
     if (key.startsWith(prefix)) {
       proxyInflight.delete(key);
+    }
+  }
+  for (const key of Array.from(reviewNlpCache.keys())) {
+    if (key.startsWith(prefix)) {
+      reviewNlpCache.delete(key);
+    }
+  }
+  for (const key of Array.from(reviewNlpInflight.keys())) {
+    if (key.startsWith(prefix)) {
+      reviewNlpInflight.delete(key);
     }
   }
   // Weather cache is location-scoped and not place-scoped, keep it hot.

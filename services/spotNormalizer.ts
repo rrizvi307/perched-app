@@ -87,12 +87,16 @@ export function normalizeSpotForExplore(rawSpot: Partial<Spot> | null | undefine
         : getDefaultDisplay().busynessLabel,
   };
 
+  const intelIsFresh =
+    typeof intel.lastUpdated === 'number' &&
+    Number.isFinite(intel.lastUpdated) &&
+    Date.now() - intel.lastUpdated < 2 * 60 * 60 * 1000;
   const openNow =
     typeof base.openNow === 'boolean'
       ? base.openNow
-      : typeof intel.isOpenNow === 'boolean'
-      ? intel.isOpenNow
-      : undefined;
+      : intelIsFresh && typeof intel.isOpenNow === 'boolean'
+        ? intel.isOpenNow
+        : undefined;
 
   const rating = toNumber(base.rating) ?? toNumber(intel.avgRating) ?? undefined;
   const priceLevel = typeof intel.priceLevel === 'string' ? intel.priceLevel : base.priceLevel || null;

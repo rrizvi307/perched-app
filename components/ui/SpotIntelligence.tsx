@@ -196,7 +196,7 @@ export function SpotIntelligence({
       ) : null}
 
       {showAttribution ? (
-        <Text style={[styles.attribution, { color: muted }]}>Ratings from Google + Yelp</Text>
+        <Text style={[styles.attribution, { color: muted }]}>Ratings from Google + Yelp + Foursquare</Text>
       ) : null}
     </View>
   );

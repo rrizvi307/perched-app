@@ -517,6 +517,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Weekly early-adopter raffle entries
+    match /weeklyRaffleEntries/{entryId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid &&
+                      request.resource.data.weekKey is string &&
+                      request.resource.data.status == 'entered';
+      allow update: if isAdmin() || (
+                      isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.weekKey == resource.data.weekKey
+                    );
+      allow delete: if isAdmin();
+    }
+
     // B2B keys/logs must be server-managed
     match /apiKeys/{apiKeyId} {
       allow read: if isAdmin();

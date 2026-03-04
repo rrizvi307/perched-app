@@ -26,6 +26,20 @@ type SpotListItemProps = {
   formatDistance: (distanceKm?: number) => string;
 };
 
+function getProviderTone(source?: string) {
+  if (source === 'google') return '#2563EB';
+  if (source === 'yelp') return '#DC2626';
+  if (source === 'foursquare') return '#0891B2';
+  return '#64748B';
+}
+
+function getProviderLabel(source?: string) {
+  if (source === 'google') return 'Google';
+  if (source === 'yelp') return 'Yelp';
+  if (source === 'foursquare') return 'Foursquare';
+  return 'Source';
+}
+
 // Memoized component to prevent unnecessary re-renders
 const SpotListItem = React.memo<SpotListItemProps>(({
   item,
@@ -59,8 +73,8 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const coords = item.example?.spotLatLng || item.example?.location;
   const intelNoise = item?.display?.noise || item?.live?.noise || item?.intel?.inferredNoise;
   const intelNoiseSource = item?.display?.noiseSource || (item?.live?.noise ? 'live' : item?.intel?.inferredNoise ? 'inferred' : null);
-  const intelRating = item?.intel?.avgRating || item?.rating;
-  const intelPrice = item?.intel?.priceLevel;
+  const intelRating = intelligence?.aggregateRating ?? item?.intel?.avgRating ?? item?.rating;
+  const intelPrice = intelligence?.priceLevel ?? item?.intel?.priceLevel;
   const workScore = intelligence?.workScore;
   const workScoreTone = typeof workScore === 'number'
     ? workScore >= 78
@@ -72,6 +86,18 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const smartHighlight = intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null;
   const intentMeta = getDiscoveryIntentMeta(activeIntent);
   const intentPercent = typeof intentScore === 'number' ? Math.round(intentScore * 100) : null;
+  const providerSignals = (intelligence?.externalSignals || [])
+    .slice()
+    .sort((a, b) => {
+      const order = (source?: string) =>
+        source === 'google' ? 0 :
+          source === 'yelp' ? 1 :
+            source === 'foursquare' ? 2 :
+              9;
+      return order(a?.source) - order(b?.source);
+    })
+    .filter((signal) => typeof signal?.rating === 'number')
+    .slice(0, 3);
 
   return (
     <Pressable
@@ -287,6 +313,29 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             ) : null}
           </View>
         ) : null}
+        {providerSignals.length ? (
+          <View style={styles.providerRow}>
+            {providerSignals.map((signal) => (
+              <View
+                key={`${item.name}-${signal.source}`}
+                style={[
+                  styles.providerChip,
+                  {
+                    borderColor: withAlpha(getProviderTone(signal.source), 0.22),
+                    backgroundColor: withAlpha(getProviderTone(signal.source), 0.08),
+                  },
+                ]}
+              >
+                <Text style={{ color: getProviderTone(signal.source), fontSize: 10, fontWeight: '800' }}>
+                  {getProviderLabel(signal.source)}
+                </Text>
+                <Text style={{ color: text, fontSize: 10, fontWeight: '700' }}>
+                  {signal.rating?.toFixed(1)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         {intelV1Enabled && !intelNoise && !intelRating && !intelPrice ? (
           <Text style={{ color: muted, marginTop: 6, fontSize: 11 }}>No ratings yet</Text>
         ) : null}
@@ -332,6 +381,10 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     prevProps.showRanks === nextProps.showRanks &&
     prevProps.intelligence?.workScore === nextProps.intelligence?.workScore &&
     prevProps.intelligence?.bestTime === nextProps.intelligence?.bestTime &&
+    prevProps.intelligence?.aggregateRating === nextProps.intelligence?.aggregateRating &&
+    prevProps.intelligence?.priceLevel === nextProps.intelligence?.priceLevel &&
+    prevProps.intelligence?.openNow === nextProps.intelligence?.openNow &&
+    JSON.stringify(prevProps.intelligence?.externalSignals || []) === JSON.stringify(nextProps.intelligence?.externalSignals || []) &&
     (prevProps.intelligence?.highlights?.[0] || '') === (nextProps.intelligence?.highlights?.[0] || '') &&
     (prevProps.intelligence?.useCases?.[0] || '') === (nextProps.intelligence?.useCases?.[0] || '') &&
     prevProps.activeIntent === nextProps.activeIntent &&
@@ -432,6 +485,21 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
   },
+  providerRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  providerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
   countBar: {
     height: 4,
     borderRadius: 2,
@@ -478,3 +546,4 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 });
+

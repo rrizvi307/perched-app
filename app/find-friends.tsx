@@ -261,7 +261,7 @@ export default function FindFriendsScreen() {
       animated
       delay={index * 50}
       pressable
-      onPress={() => router.push(`/profile-view?userId=${userResult.id}`)}
+      onPress={() => router.push(`/profile-view?uid=${userResult.id}`)}
       style={styles.userCard}
     >
       <View style={styles.userContent}>

@@ -5,7 +5,15 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { getCheckinsForUserRemote, getOutgoingFriendRequests, getUsersByIds, sendFriendRequest, findUserByHandle } from '@/services/firebaseClient';
+import {
+  getCheckinsForUserRemote,
+  getIncomingFriendRequests,
+  getOutgoingFriendRequests,
+  getUserFriendsCached,
+  getUsersByIds,
+  sendFriendRequest,
+  findUserByHandle,
+} from '@/services/firebaseClient';
 import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { getCheckins } from '@/storage/local';
@@ -57,14 +65,16 @@ export default function ProfileView() {
   const card = useThemeColor({}, 'card');
   const primary = useThemeColor({}, 'primary');
 
-  const uid = typeof params.uid === 'string' ? params.uid : '';
+  const uidParam = typeof params.uid === 'string' ? params.uid : '';
+  const userIdParam = typeof params.userId === 'string' ? params.userId : '';
+  const uid = uidParam || userIdParam;
   const handle = typeof params.handle === 'string' ? params.handle.replace(/^@/, '') : '';
 
   const [profile, setProfile] = useState<any | null>(null);
   const [checkins, setCheckins] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [requesting, setRequesting] = useState(false);
-  const [requestSent, setRequestSent] = useState(false);
+  const [relationship, setRelationship] = useState<'none' | 'friend' | 'outgoing' | 'incoming'>('none');
 
   useEffect(() => {
     (async () => {
@@ -117,15 +127,30 @@ export default function ProfileView() {
   useEffect(() => {
     (async () => {
       if (!user?.id || !profile?.id || user.id === profile.id) {
-        setRequestSent(false);
+        setRelationship('none');
         return;
       }
       try {
-        const outgoing = await getOutgoingFriendRequests(user.id);
-        const exists = outgoing.some((request: any) => request?.toId === profile.id);
-        setRequestSent(exists);
+        const [friends, outgoing, incoming] = await Promise.all([
+          getUserFriendsCached(user.id, 0),
+          getOutgoingFriendRequests(user.id),
+          getIncomingFriendRequests(user.id),
+        ]);
+        if ((friends || []).includes(profile.id)) {
+          setRelationship('friend');
+          return;
+        }
+        if ((outgoing || []).some((request: any) => request?.toId === profile.id)) {
+          setRelationship('outgoing');
+          return;
+        }
+        if ((incoming || []).some((request: any) => request?.fromId === profile.id)) {
+          setRelationship('incoming');
+          return;
+        }
+        setRelationship('none');
       } catch {
-        setRequestSent(false);
+        setRelationship('none');
       }
     })();
   }, [user?.id, profile?.id]);
@@ -233,20 +258,39 @@ export default function ProfileView() {
         {profile && canAdd ? (
           <Pressable
             onPress={async () => {
-              if (!user || !profile || requesting || requestSent) return;
+              if (!user || !profile || requesting) return;
+              if (relationship === 'friend' || relationship === 'outgoing') return;
+              if (relationship === 'incoming') {
+                router.push('/(tabs)/friends');
+                return;
+              }
               setRequesting(true);
               try {
                 await sendFriendRequest(user.id, profile.id);
-                setRequestSent(true);
+                setRelationship('outgoing');
               } finally {
                 setRequesting(false);
               }
             }}
-            style={[styles.cta, { backgroundColor: primary, opacity: requesting || requestSent ? 0.6 : 1 }]}
-            disabled={requesting || requestSent}
+            style={[
+              styles.cta,
+              {
+                backgroundColor: primary,
+                opacity: requesting || relationship === 'friend' || relationship === 'outgoing' ? 0.6 : 1,
+              },
+            ]}
+            disabled={requesting || relationship === 'friend' || relationship === 'outgoing'}
           >
             <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
-              {requestSent ? 'Request sent' : requesting ? 'Sending...' : 'Add friend'}
+              {relationship === 'friend'
+                ? 'Friends'
+                : relationship === 'outgoing'
+                ? 'Request sent'
+                : relationship === 'incoming'
+                ? 'Respond in Friends'
+                : requesting
+                ? 'Sending...'
+                : 'Add friend'}
             </Text>
           </Pressable>
         ) : null}

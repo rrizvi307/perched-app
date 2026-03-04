@@ -437,17 +437,22 @@ export default function SpotDetail() {
 	            ? {
 	                noise: place.intel.inferredNoise ?? null,
 	                noiseConfidence: place.intel.inferredNoiseConfidence,
-	                hasWifi: place.intel.hasWifi,
-	                wifiConfidence: place.intel.wifiConfidence,
-	                goodForStudying: place.intel.goodForStudying,
-	                goodForDates: place.intel.goodForDates,
-	                goodForGroups: place.intel.goodForGroups,
-	                instagramWorthy: place.intel.instagramWorthy,
-	                foodQualitySignal: place.intel.foodQualitySignal,
-	                aestheticVibe: place.intel.aestheticVibe,
-	                musicAtmosphere: place.intel.musicAtmosphere,
-	              }
-	            : null,
+                hasWifi: place.intel.hasWifi,
+                wifiConfidence: place.intel.wifiConfidence,
+                goodForStudying: place.intel.goodForStudying,
+                goodForMeetings: place.intel.goodForMeetings,
+                goodForDates: place.intel.goodForDates,
+                goodForGroups: place.intel.goodForGroups,
+                instagramWorthy: place.intel.instagramWorthy,
+                foodQualitySignal: place.intel.foodQualitySignal,
+                aestheticVibe: place.intel.aestheticVibe,
+                musicAtmosphere: place.intel.musicAtmosphere,
+                avgRating: place.intel.avgRating,
+                reviewCount: place.intel.reviewCount,
+                priceLevel: place.intel.priceLevel,
+                isOpenNow: place.intel.isOpenNow,
+              }
+            : null,
         });
         if (active) setIntelligence(payload);
       } catch {
@@ -607,6 +612,22 @@ export default function SpotDetail() {
             <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
               Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
             </Text>
+            {typeof intelligence.aggregateRating === 'number' ? (
+              <Text style={{ color: muted, marginTop: 6, fontSize: 12 }}>
+                Rating: {intelligence.aggregateRating.toFixed(1)} stars
+                {intelligence.aggregateReviewCount > 0 ? ` · ${intelligence.aggregateReviewCount} reviews` : ''}
+              </Text>
+            ) : null}
+            {intelligence.openNowSource === 'google' && intelligence.openNow !== null ? (
+              <Text style={{ color: intelligence.openNow ? '#22C55E' : '#F97316', marginTop: 6, fontSize: 12, fontWeight: '700' }}>
+                {intelligence.openNow ? 'Open now' : 'Closed now'}
+              </Text>
+            ) : null}
+            {intelligence.hours?.length ? (
+              <Text style={{ color: muted, marginTop: 6, fontSize: 12 }}>
+                {intelligence.hours[(new Date().getDay() + 6) % 7]}
+              </Text>
+            ) : null}
             {intelligence.externalSignals.length ? (
               <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
                 External signals: {intelligence.externalSignals.map((s) => s.source).join(' + ')}

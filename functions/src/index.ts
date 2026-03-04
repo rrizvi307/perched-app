@@ -1100,7 +1100,7 @@ async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: 
     : undefined;
   return {
     source: 'foursquare',
-    rating: typeof place.rating === 'number' ? place.rating : undefined,
+    rating: typeof place.rating === 'number' ? place.rating / 2 : undefined,
     priceLevel: parsePriceLevel(place.price?.toString()),
     categories,
   };
@@ -1186,12 +1186,21 @@ export const placeSignalsProxy = functions
   );
   const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
 
-  // Temporary fail-safe: disable Foursquare provider unless explicitly enabled.
   const enableFoursquareRaw = readFirstNonEmpty(
     process.env.PLACE_INTEL_ENABLE_FOURSQUARE,
     runtimeConfig?.places?.enable_foursquare,
   );
-  const enableFoursquare = ['1', 'true', 'yes', 'on'].includes((enableFoursquareRaw || '').toLowerCase());
+  const foursquareKeyPresent = Boolean(
+    readFirstNonEmpty(
+      process.env.FOURSQUARE_API_KEY,
+      runtimeConfig?.places?.foursquare_api_key,
+      runtimeConfig?.places?.foursquare,
+      runtimeConfig?.foursquare_api_key,
+      runtimeConfig?.foursquare,
+    )
+  );
+  const enableFoursquare = foursquareKeyPresent &&
+    !['0', 'false', 'no', 'off'].includes((enableFoursquareRaw || '').toLowerCase());
 
   if (!hasSecretBypass) {
     const uid = await verifyFirebaseUserFromRequest(req);

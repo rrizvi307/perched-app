@@ -1108,20 +1108,58 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     }
 
     const db = fb.firestore();
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    const isOwnProfile = currentUserId === userId;
+
+    let allowedVisibility: string[] = [];
+    if (!isOwnProfile) {
+      allowedVisibility = ['public'];
+      if (currentUserId) {
+        try {
+          const targetUserDoc = await db.collection('users').doc(userId).get();
+          const targetUserData = targetUserDoc.data() || {};
+          const targetFriends = normalizeStringArray(targetUserData.friends);
+          const targetCloseFriends = normalizeStringArray(targetUserData.closeFriends);
+          if (targetFriends.includes(currentUserId)) {
+            allowedVisibility.push('friends');
+          }
+          if (targetCloseFriends.includes(currentUserId)) {
+            if (!allowedVisibility.includes('friends')) allowedVisibility.push('friends');
+            allowedVisibility.push('close');
+          }
+        } catch {
+          // Keep public-only fallback if relationship lookup fails.
+        }
+      }
+    }
+
+    const applyVisibilityFilter = (queryRef: any) => {
+      if (isOwnProfile) return queryRef;
+      if (allowedVisibility.length <= 1) {
+        return queryRef.where('visibility', '==', allowedVisibility[0] || 'public');
+      }
+      return queryRef.where('visibility', 'in', allowedVisibility);
+    };
 
     // Use schema helper with automatic fallback for legacy data.
     // If query fails (permissions/index/network/auth timing), degrade to empty state.
     let snapshot: any;
     try {
-      snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
+      if (isOwnProfile) {
+        snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
+      } else {
+        let queryRef: any = db.collection('checkins').where('userId', '==', userId);
+        queryRef = applyVisibilityFilter(queryRef);
+        queryRef = queryRef.orderBy('createdAt', 'desc');
+        if (startAfter) queryRef = queryRef.startAfter(startAfter);
+        snapshot = await queryRef.limit(limit).get();
+      }
     } catch (error) {
       devLog('getCheckinsForUserRemote index fallback to unordered query', error);
       try {
-        const fallbackSnapshot = await db
-          .collection('checkins')
-          .where('userId', '==', userId)
-          .limit(limit)
-          .get();
+        let fallbackQuery: any = db.collection('checkins').where('userId', '==', userId);
+        fallbackQuery = applyVisibilityFilter(fallbackQuery);
+        const fallbackSnapshot = await fallbackQuery.limit(limit).get();
         const fallbackItems: any[] = [];
         fallbackSnapshot.forEach((doc: any) => fallbackItems.push({ id: doc.id, ...(doc.data() || {}) }));
         fallbackItems.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));

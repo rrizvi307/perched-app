@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useState, useEffect, useRef } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ACHIEVEMENTS, getUserStats, getUnlockedAchievements, UserStats } from '@/services/gamification';
 import { AchievementCard } from '@/components/ui/achievement-card';
@@ -37,23 +37,27 @@ export default function AchievementsScreen() {
   const [showCelebration, setShowCelebration] = useState(false);
   const prevUnlockedCountRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [statsData, unlockedData] = await Promise.all([
-          getUserStats(),
-          getUnlockedAchievements(),
-        ]);
-        setStats(statsData);
-        setUnlocked(unlockedData);
-      } catch (error) {
-        console.error('Failed to load achievements:', error);
-      } finally {
-        setLoading(false);
-      }
+  const loadAchievements = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [statsData, unlockedData] = await Promise.all([
+        getUserStats(),
+        getUnlockedAchievements(),
+      ]);
+      setStats(statsData);
+      setUnlocked(unlockedData);
+    } catch (error) {
+      console.error('Failed to load achievements:', error);
+    } finally {
+      setLoading(false);
     }
-    load();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadAchievements();
+    }, [loadAchievements])
+  );
 
   const unlockedIds = unlocked.map(a => a.id);
   const unlockedCount = unlockedIds.length;
