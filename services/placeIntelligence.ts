@@ -144,8 +144,13 @@ const WEATHER_TTL_MS = 30 * 60 * 1000;
 const REVIEW_NLP_TTL_MS = 24 * 60 * 60 * 1000;
 const EXTERNAL_PROVIDER_COUNT = 3;
 const intelligenceCache = new Map<string, { ts: number; payload: PlaceIntelligence }>();
-const proxySignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
-const proxyInflight = new Map<string, Promise<ExternalPlaceSignal[]>>();
+type ProxyPlacePayload = {
+  externalSignals: ExternalPlaceSignal[];
+  googleSnapshot: GooglePlaceSignalSnapshot | null;
+};
+
+const proxySignalCache = new Map<string, { ts: number; payload: ProxyPlacePayload }>();
+const proxyInflight = new Map<string, Promise<ProxyPlacePayload>>();
 const weatherSignalCache = new Map<string, { ts: number; payload: ContextSignal[] }>();
 const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
 const reviewNlpCache = new Map<string, { ts: number; payload: ReviewNLPResult | null }>();
@@ -305,6 +310,61 @@ function normalizeHours(value: unknown): string[] | undefined {
     .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     .map((item) => item.trim());
   return hours.length ? hours : undefined;
+}
+
+function normalizeGoogleReviewText(value: any): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value?.text === 'string' && value.text.trim()) return value.text.trim();
+  return null;
+}
+
+function normalizeGoogleReviewTime(value: any): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function normalizeGoogleReviews(value: unknown): GooglePlaceReview[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reviews = value
+    .map((review: any) => {
+      const text = normalizeGoogleReviewText(review?.text ?? review);
+      if (!text) return null;
+      return {
+        text,
+        rating: typeof review?.rating === 'number' ? review.rating : 0,
+        time: normalizeGoogleReviewTime(review?.publishTime ?? review?.time),
+      } satisfies GooglePlaceReview;
+    })
+    .filter(Boolean) as GooglePlaceReview[];
+  return reviews.length ? reviews : undefined;
+}
+
+function normalizeGoogleProxySnapshot(value: unknown): GooglePlaceSignalSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, any>;
+  const snapshot: GooglePlaceSignalSnapshot = {
+    rating: typeof raw.rating === 'number' ? raw.rating : undefined,
+    reviewCount: typeof raw.reviewCount === 'number' ? raw.reviewCount : undefined,
+    priceLevel: typeof raw.priceLevel === 'string' && raw.priceLevel.trim() ? raw.priceLevel.trim() : undefined,
+    openNow: typeof raw.openNow === 'boolean' ? raw.openNow : undefined,
+    types: Array.isArray(raw.types)
+      ? raw.types.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : undefined,
+    reviews: normalizeGoogleReviews(raw.reviews),
+    hours: normalizeHours(raw.hours),
+  };
+  const hasPayload =
+    typeof snapshot.rating === 'number' ||
+    typeof snapshot.reviewCount === 'number' ||
+    typeof snapshot.priceLevel === 'string' ||
+    typeof snapshot.openNow === 'boolean' ||
+    Boolean(snapshot.hours?.length) ||
+    Boolean(snapshot.reviews?.length);
+  return hasPayload ? snapshot : null;
 }
 
 function uniqStrings(values: Array<string | null | undefined>) {
@@ -1023,10 +1083,10 @@ function normalizeExternalSignals(value: unknown): ExternalPlaceSignal[] {
     .filter(Boolean) as ExternalPlaceSignal[];
 }
 
-async function getProxySignals(input: BuildIntelligenceInput): Promise<ExternalPlaceSignal[]> {
-  if (!input.placeName || !input.location) return [];
+async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlacePayload> {
+  if (!input.placeName || !input.location) return { externalSignals: [], googleSnapshot: null };
   const endpoint = getPlaceSignalEndpoint();
-  if (!endpoint) return [];
+  if (!endpoint) return { externalSignals: [], googleSnapshot: null };
   const cacheKey = `${input.placeId || ''}:${input.placeName}:${input.location.lat.toFixed(3)}:${input.location.lng.toFixed(3)}`;
   const cached = proxySignalCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < INTELLIGENCE_TTL_MS) {
@@ -1051,7 +1111,10 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ExternalP
       },
       2400,
     );
-    const next = normalizeExternalSignals(payload?.externalSignals);
+    const next: ProxyPlacePayload = {
+      externalSignals: normalizeExternalSignals(payload?.externalSignals),
+      googleSnapshot: normalizeGoogleProxySnapshot(payload?.googleSnapshot),
+    };
     proxySignalCache.set(cacheKey, { ts: Date.now(), payload: next });
     return next;
   });
@@ -1480,14 +1543,14 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
   // losing tag intent in views that do not pre-aggregate tagScores.
   const inferredTagScores = deriveTagScoresFromCheckins(checkins);
   const tagScores = mergeTagScores(inferredTagScores, input.tagScores || {});
-  const [googleSnapshot, proxySignals, contextSignals] = await Promise.all([
-    getGooglePlaceSnapshot(input.placeId),
+  const [proxyPayload, contextSignals] = await Promise.all([
     getProxySignals(input),
     getWeatherSignals(input),
   ]);
+  const googleSnapshot = proxyPayload.googleSnapshot ?? await getGooglePlaceSnapshot(input.placeId);
   const externalSignals = [
     buildGoogleExternalSignal(googleSnapshot),
-    ...proxySignals,
+    ...proxyPayload.externalSignals,
   ].filter(Boolean) as ExternalPlaceSignal[];
   const externalSignalMeta = buildExternalSignalMeta(externalSignals);
   const aggregateRating =

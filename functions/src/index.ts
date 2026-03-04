@@ -1722,8 +1722,24 @@ type ExternalPlaceSignal = {
   categories?: string[];
 };
 
+type GooglePlaceReview = {
+  text: string;
+  rating: number;
+  time: number;
+};
+
+type GooglePlaceSnapshot = {
+  rating?: number;
+  reviewCount?: number;
+  priceLevel?: string;
+  openNow?: boolean;
+  types?: string[];
+  reviews?: GooglePlaceReview[];
+  hours?: string[];
+};
+
 const PLACE_SIGNAL_TTL_MS = 30 * 60 * 1000;
-const placeSignalCache = new Map<string, { ts: number; payload: ExternalPlaceSignal[] }>();
+const placeSignalCache = new Map<string, { ts: number; payload: { externalSignals: ExternalPlaceSignal[]; googleSnapshot: GooglePlaceSnapshot | null } }>();
 function parseCloudRuntimeConfig() {
   const raw = process.env.CLOUD_RUNTIME_CONFIG;
   if (!raw) return {};
@@ -1748,6 +1764,96 @@ function parsePriceLevel(value?: string) {
   if (!value) return undefined;
   const next = value.trim();
   return next ? next : undefined;
+}
+
+function normalizeGooglePriceLevel(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value <= 0) return undefined;
+    return '$'.repeat(Math.max(1, Math.min(4, Math.round(value))));
+  }
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  if (/^\$+$/.test(normalized)) return normalized.slice(0, 4);
+  const match = normalized.match(/PRICE_LEVEL_(FREE|INEXPENSIVE|MODERATE|EXPENSIVE|VERY_EXPENSIVE)/i);
+  if (!match) return undefined;
+  if (match[1] === 'FREE') return undefined;
+  if (match[1] === 'INEXPENSIVE') return '$';
+  if (match[1] === 'MODERATE') return '$$';
+  if (match[1] === 'EXPENSIVE') return '$$$';
+  if (match[1] === 'VERY_EXPENSIVE') return '$$$$';
+  return undefined;
+}
+
+function normalizeGoogleReviewText(value: any): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value?.text === 'string' && value.text.trim()) return value.text.trim();
+  if (typeof value?.text?.text === 'string' && value.text.text.trim()) return value.text.text.trim();
+  return null;
+}
+
+function normalizeGoogleReviewTime(value: any): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function normalizeGoogleReviews(value: unknown): GooglePlaceReview[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reviews = value
+    .map((review: any) => {
+      const text = normalizeGoogleReviewText(review?.text ?? review);
+      if (!text) return null;
+      return {
+        text,
+        rating: typeof review?.rating === 'number' ? review.rating : 0,
+        time: normalizeGoogleReviewTime(review?.publishTime ?? review?.time),
+      } satisfies GooglePlaceReview;
+    })
+    .filter(Boolean) as GooglePlaceReview[];
+  return reviews.length ? reviews : undefined;
+}
+
+function normalizeGoogleHours(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hours = value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+  return hours.length ? hours : undefined;
+}
+
+function normalizeGoogleSnapshot(value: any): GooglePlaceSnapshot | null {
+  if (!value || typeof value !== 'object') return null;
+  const snapshot: GooglePlaceSnapshot = {
+    rating: typeof value.rating === 'number' ? value.rating : undefined,
+    reviewCount:
+      typeof value.userRatingCount === 'number'
+        ? value.userRatingCount
+        : typeof value.user_ratings_total === 'number'
+          ? value.user_ratings_total
+          : undefined,
+    priceLevel: normalizeGooglePriceLevel(value.priceLevel ?? value.price_level),
+    openNow:
+      typeof value.currentOpeningHours?.openNow === 'boolean'
+        ? value.currentOpeningHours.openNow
+        : typeof value.opening_hours?.open_now === 'boolean'
+          ? value.opening_hours.open_now
+          : undefined,
+    types: Array.isArray(value.types) ? value.types.filter((item: any) => typeof item === 'string' && item.trim()) : undefined,
+    reviews: normalizeGoogleReviews(value.reviews),
+    hours: normalizeGoogleHours(value.currentOpeningHours?.weekdayDescriptions ?? value.opening_hours?.weekday_text),
+  };
+  const hasPayload =
+    typeof snapshot.rating === 'number' ||
+    typeof snapshot.reviewCount === 'number' ||
+    typeof snapshot.priceLevel === 'string' ||
+    typeof snapshot.openNow === 'boolean' ||
+    Boolean(snapshot.hours?.length) ||
+    Boolean(snapshot.reviews?.length);
+  return hasPayload ? snapshot : null;
 }
 
 function withCors(req: any, res: any) {
@@ -1806,6 +1912,44 @@ async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs = 
 function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
   if (!Array.isArray(payload)) return [];
   return payload.filter(Boolean);
+}
+
+async function fetchGooglePlaceSignalServer(placeId: string): Promise<GooglePlaceSnapshot | null> {
+  const normalizedPlaceId = asId(placeId);
+  if (!normalizedPlaceId) return null;
+
+  let key = readFirstNonEmpty(
+    process.env.GOOGLE_MAPS_API_KEY,
+    runtimeConfig?.places?.google_maps_api_key,
+    runtimeConfig?.google_maps_api_key,
+    runtimeConfig?.maps?.api_key,
+  );
+  if (!key) {
+    key = await getCachedSecret('GOOGLE_MAPS_API_KEY');
+  }
+  if (!key) return null;
+
+  try {
+    const res = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedPlaceId)}`, {
+      headers: {
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,types,rating,userRatingCount,priceLevel,reviews,currentOpeningHours',
+      },
+    });
+    if (res.ok) {
+      const payload = normalizeGoogleSnapshot(await res.json().catch(() => null));
+      if (payload) return payload;
+    }
+  } catch {}
+
+  try {
+    const fields = encodeURIComponent('name,formatted_address,geometry,types,opening_hours,rating,user_ratings_total,price_level,reviews');
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(normalizedPlaceId)}&fields=${fields}&key=${encodeURIComponent(key)}&language=en`;
+    const json = await fetchJsonWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json' } });
+    return normalizeGoogleSnapshot((json as any)?.result);
+  } catch {
+    return null;
+  }
 }
 
 async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
@@ -1890,7 +2034,7 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
 }
 
 export const placeSignalsProxy = functions
-  .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY'] })
+  .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY', 'GOOGLE_MAPS_API_KEY'] })
   .https.onRequest(async (req, res) => {
   withCors(req, res);
   if (req.method === 'OPTIONS') {
@@ -1969,6 +2113,7 @@ export const placeSignalsProxy = functions
     : req.body;
 
   const placeName = typeof body?.placeName === 'string' ? body.placeName.trim() : '';
+  const placeId = typeof body?.placeId === 'string' ? body.placeId.trim() : '';
   const lat = typeof body?.location?.lat === 'number' ? body.location.lat : null;
   const lng = typeof body?.location?.lng === 'number' ? body.location.lng : null;
 
@@ -1977,21 +2122,23 @@ export const placeSignalsProxy = functions
     return;
   }
 
-  const cacheKey = `${placeName.toLowerCase()}:${lat.toFixed(3)}:${lng.toFixed(3)}:fsq${enableFoursquare ? '1' : '0'}`;
+  const cacheKey = `${placeId}:${placeName.toLowerCase()}:${lat.toFixed(3)}:${lng.toFixed(3)}:fsq${enableFoursquare ? '1' : '0'}`;
   const cached = placeSignalCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < PLACE_SIGNAL_TTL_MS) {
-    res.status(200).json({ externalSignals: cached.payload, cacheHit: true });
+    res.status(200).json({ ...cached.payload, cacheHit: true });
     return;
   }
 
   try {
-    const [foursquare, yelp] = await Promise.all([
+    const [googleSnapshot, foursquare, yelp] = await Promise.all([
+      fetchGooglePlaceSignalServer(placeId),
       enableFoursquare ? fetchFoursquareSignalServer(placeName, lat, lng) : Promise.resolve(null),
       fetchYelpSignalServer(placeName, lat, lng),
     ]);
     const externalSignals = parseExternalSignals([foursquare, yelp]);
-    placeSignalCache.set(cacheKey, { ts: Date.now(), payload: externalSignals });
-    res.status(200).json({ externalSignals, cacheHit: false });
+    const payload = { externalSignals, googleSnapshot };
+    placeSignalCache.set(cacheKey, { ts: Date.now(), payload });
+    res.status(200).json({ ...payload, cacheHit: false });
     return;
   } catch (error) {
     console.error('placeSignalsProxy error', error);

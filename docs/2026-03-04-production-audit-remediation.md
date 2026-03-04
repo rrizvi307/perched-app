@@ -96,8 +96,15 @@ This document captures the pre-production audit findings, the release blockers, 
      - run `npm run migrate:social-graph:legacy -- --apply --service-account <path>` against production after reviewing the dry-run output
 
 7. Intelligence pipeline unification
-   - Status: Pending
+   - Status: In progress
    - Goal: serve hours, tags, and provider data from one backend-normalized source.
+   - Current patch:
+     - `placeSignalsProxy` now returns normalized Google place details alongside Yelp and Foursquare provider signals
+     - place intelligence now prefers the backend-provided Google snapshot for hours, ratings, reviews, and open status before falling back to direct client Google fetches
+     - this removes one major client/backend split in the explore intelligence path and reduces provider drift for `openNow`, hours, and rating aggregation
+   - Follow-up:
+     - move remaining direct Google Places reads on `spot` and search flows behind backend-owned endpoints
+     - initialize and enforce App Check once the mobile-side provider path is fully backend-backed
 
 8. App Store feed/report remediation
    - Status: In progress

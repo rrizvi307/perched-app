@@ -451,6 +451,52 @@ describe('buildPlaceIntelligence', () => {
     expect(result.hours?.[0]).toContain('Monday');
   });
 
+  it('uses proxy-provided Google snapshot before falling back to client Google fetches', async () => {
+    (global as any).fetch = jest.fn(async (url: string) => {
+      if (url === 'https://intel.test/proxy') {
+        return mkFetchResponse({
+          externalSignals: [{ source: 'yelp', rating: 4.2, reviewCount: 120 }],
+          googleSnapshot: {
+            rating: 4.7,
+            reviewCount: 321,
+            priceLevel: '$$',
+            openNow: true,
+            types: ['cafe', 'coffee_shop'],
+            hours: [
+              'Monday: 7:00 AM - 6:00 PM',
+              'Tuesday: 7:00 AM - 6:00 PM',
+            ],
+            reviews: [
+              {
+                text: 'Quiet tables and reliable wifi.',
+                rating: 5,
+                time: '2026-03-01T12:00:00Z',
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Proxy Google Spot',
+      placeId: 'proxy-google-1',
+      location: { lat: 29.76, lng: -95.37 },
+      checkins: [mkCheckin({ wifiSpeed: 4.2, busyness: 2.4, noiseLevel: 'quiet' })],
+    });
+
+    expect(result.externalSignals.map((signal) => signal.source)).toEqual(
+      expect.arrayContaining(['google', 'yelp'])
+    );
+    expect(result.aggregateReviewCount).toBe(441);
+    expect(result.priceLevel).toBe('$$');
+    expect(result.openNow).toBe(true);
+    expect(result.openNowSource).toBe('google');
+    expect(result.hours?.[0]).toContain('Monday');
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('uses distinct intelligence cache entries when open status changes for the same place', async () => {
     (global as any).fetch = jest.fn(async () => mkFetchResponse({ externalSignals: [] }));
 
