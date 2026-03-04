@@ -92,6 +92,7 @@ This document captures the pre-production audit findings, the release blockers, 
      - Firestore rules now reject new client writes to legacy `blockedUsers` docs and reject `blockedUsers` fields inside `safetySettings`
      - the legacy `/friends` collection rule has been removed and demo seeding now writes only `users.friends`
      - a dry-run-first admin migration script now exists to move legacy `/friends`, `blockedUsers`, and `safetySettings.blockedUsers` data onto the canonical social graph
+     - client friend/block/unblock flows no longer silently fall back to direct Firestore relationship writes when the callable backend is unavailable; they now fail loudly instead of reintroducing split-brain state
    - Follow-up:
      - run `npm run migrate:social-graph:legacy -- --apply --service-account <path>` against production after reviewing the dry-run output
 

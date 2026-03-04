@@ -21,7 +21,6 @@ import {
 } from './cacheInvalidation';
 import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
 import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
-import { isPermissionDeniedError } from './permissionErrors';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -1413,6 +1412,36 @@ function raiseSocialGraphPermissionError(action: string): never {
   );
 }
 
+function getSocialGraphCallableErrorCode(error: any): string {
+  return String(error?.code || error?.details || '').toLowerCase();
+}
+
+function raiseSocialGraphServiceUnavailableError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because the social graph service is unavailable. Deploy Cloud Functions and retry.`
+  );
+}
+
+function raiseSocialGraphAuthenticationError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because authentication expired. Sign in again and retry.`
+  );
+}
+
+function handleSocialGraphCallableError(action: string, error: any): never {
+  const code = getSocialGraphCallableErrorCode(error);
+  if (code.includes('permission-denied')) {
+    raiseSocialGraphPermissionError(action);
+  }
+  if (code.includes('unauthenticated')) {
+    raiseSocialGraphAuthenticationError(action);
+  }
+  if (code.includes('not-found') || code.includes('unimplemented') || code.includes('unavailable') || code.includes('internal')) {
+    raiseSocialGraphServiceUnavailableError(action);
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
@@ -1817,20 +1846,7 @@ export async function getCloseFriends(userId: string) {
 }
 
 export async function followUserRemote(currentUserId: string, targetUserId: string) {
-  const fb = ensureFirebase();
-  if (!fb) {
-    const map = readLocalFriends();
-    const current = new Set(map[currentUserId] || []);
-    current.add(targetUserId);
-    map[currentUserId] = Array.from(current);
-    writeLocalFriends(map);
-    invalidateUserFriendsCache([currentUserId, targetUserId]);
-    return;
-  }
-  const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  await ref.set({ friends: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  await sendFriendRequest(currentUserId, targetUserId);
 }
 
 export async function unfollowUserRemote(currentUserId: string, targetUserId: string) {
@@ -1845,41 +1861,16 @@ export async function unfollowUserRemote(currentUserId: string, targetUserId: st
     return;
   }
 
-  const callableResult = await callSocialGraphMutation('unfriend', { targetUserId });
-  if (callableResult?.ok) {
-    invalidateUserFriendsCache([currentUserId, targetUserId]);
-    return;
-  }
-
-  const db = fb.firestore();
-  const batch = db.batch();
-  batch.set(
-    db.collection('users').doc(currentUserId),
-    {
-      friends: fb.firestore.FieldValue.arrayRemove(targetUserId),
-      closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId),
-    },
-    { merge: true }
-  );
-  batch.set(
-    db.collection('users').doc(targetUserId),
-    {
-      friends: fb.firestore.FieldValue.arrayRemove(currentUserId),
-      closeFriends: fb.firestore.FieldValue.arrayRemove(currentUserId),
-    },
-    { merge: true }
-  );
-  batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
-  batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
   try {
-    await batch.commit();
-  } catch (error) {
-    if (isPermissionDeniedError(error)) {
-      raiseSocialGraphPermissionError('remove this friend');
+    const callableResult = await callSocialGraphMutation('unfriend', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
     }
-    throw error;
+  } catch (error) {
+    handleSocialGraphCallableError('remove this friend', error);
   }
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  raiseSocialGraphServiceUnavailableError('remove this friend');
 }
 
 export async function setCloseFriendRemote(currentUserId: string, targetUserId: string, makeClose: boolean) {
@@ -2155,68 +2146,10 @@ export async function sendFriendRequest(fromId: string, toId: string) {
         alreadyFriends: Boolean(callableResult.alreadyFriends),
       };
     }
-  } catch (cfError: any) {
-    // Only fall through to direct Firestore if functions are unavailable/not-found
-    const code = cfError?.code || cfError?.details || '';
-    const isFunctionsUnavailable =
-      typeof code === 'string' && /not.found|unavailable|internal|unimplemented/i.test(code);
-    if (!isFunctionsUnavailable) {
-      devLog('sendFriendRequest cloud function error', cfError);
-      throw cfError;
-    }
-    devLog('Cloud functions unavailable, falling back to direct Firestore', code);
+  } catch (error) {
+    handleSocialGraphCallableError('send this friend request', error);
   }
-
-  const db = fb.firestore();
-  const currentUserRef = db.collection('users').doc(fromId);
-  const targetUserRef = db.collection('users').doc(toId);
-  const reverseRequestId = `${toId}_${fromId}`;
-  const reverseRef = db.collection('friendRequests').doc(reverseRequestId);
-  const forwardRequestId = `${fromId}_${toId}`;
-  const [currentUserDoc, reverseDoc] = await Promise.all([currentUserRef.get(), reverseRef.get()]);
-
-  const currentFriends = normalizeStringArray(currentUserDoc.data()?.friends);
-  if (currentFriends.includes(toId)) {
-    invalidateUserFriendsCache([fromId, toId]);
-    return { id: forwardRequestId, fromId, toId, status: 'accepted', alreadyFriends: true };
-  }
-
-  if (reverseDoc.exists && (reverseDoc.data()?.status || 'pending') === 'pending') {
-    const batch = db.batch();
-    batch.set(currentUserRef, { friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
-    batch.set(targetUserRef, { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
-    batch.delete(reverseRef);
-    batch.delete(db.collection('friendRequests').doc(forwardRequestId));
-    try {
-      await batch.commit();
-    } catch (error) {
-      if (isPermissionDeniedError(error)) {
-        raiseSocialGraphPermissionError('accept this friend request');
-      }
-      throw error;
-    }
-    invalidateUserFriendsCache([fromId, toId]);
-    return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
-  }
-
-  // Check if a pending request already exists before writing
-  const forwardRef = db.collection('friendRequests').doc(forwardRequestId);
-  const existingDoc = await forwardRef.get();
-  if (existingDoc.exists && existingDoc.data()?.status === 'pending') {
-    return { id: forwardRequestId, fromId, toId, status: 'pending' };
-  }
-
-  // Delete stale doc first if it exists (e.g. old declined request), then create fresh
-  if (existingDoc.exists) {
-    await forwardRef.delete();
-  }
-  await forwardRef.set({
-    fromId,
-    toId,
-    status: 'pending',
-    createdAt: fb.firestore.FieldValue.serverTimestamp(),
-  });
-  return { id: forwardRequestId, fromId, toId, status: 'pending' };
+  raiseSocialGraphServiceUnavailableError('send this friend request');
 }
 
 export async function getIncomingFriendRequests(userId: string) {
@@ -2256,28 +2189,16 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
     return;
   }
 
-  const callableResult = await callSocialGraphMutation('accept_friend_request', { requestId });
-  if (callableResult?.ok) {
-    invalidateUserFriendsCache([fromId, toId]);
-    return;
-  }
-
-  const db = fb.firestore();
-  const batch = db.batch();
-  batch.set(db.collection('users').doc(toId), { friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
-  batch.set(db.collection('users').doc(fromId), { friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
-  batch.delete(db.collection('friendRequests').doc(requestId));
-  batch.delete(db.collection('friendRequests').doc(`${toId}_${fromId}`));
-  batch.delete(db.collection('friendRequests').doc(`${fromId}_${toId}`));
   try {
-    await batch.commit();
-  } catch (error) {
-    if (isPermissionDeniedError(error)) {
-      raiseSocialGraphPermissionError('accept this friend request');
+    const callableResult = await callSocialGraphMutation('accept_friend_request', { requestId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return;
     }
-    throw error;
+  } catch (error) {
+    handleSocialGraphCallableError('accept this friend request', error);
   }
-  invalidateUserFriendsCache([fromId, toId]);
+  raiseSocialGraphServiceUnavailableError('accept this friend request');
 }
 
 export async function declineFriendRequest(requestId: string) {
@@ -2288,13 +2209,15 @@ export async function declineFriendRequest(requestId: string) {
     return;
   }
 
-  const callableResult = await callSocialGraphMutation('decline_friend_request', { requestId });
-  if (callableResult?.ok) {
-    return;
+  try {
+    const callableResult = await callSocialGraphMutation('decline_friend_request', { requestId });
+    if (callableResult?.ok) {
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('decline this friend request', error);
   }
-
-  const db = fb.firestore();
-  await db.collection('friendRequests').doc(requestId).delete();
+  raiseSocialGraphServiceUnavailableError('decline this friend request');
 }
 
 export async function reportUserRemote(reporterId: string | undefined, targetUserId: string, reason?: string) {
@@ -2352,42 +2275,16 @@ export async function blockUserRemote(currentUserId: string, targetUserId: strin
     return;
   }
 
-  const callableResult = await callSocialGraphMutation('block_user', { targetUserId });
-  if (callableResult?.ok) {
-    invalidateUserFriendsCache([currentUserId, targetUserId]);
-    return;
-  }
-
-  const db = fb.firestore();
-  const batch = db.batch();
-  batch.set(
-    db.collection('users').doc(currentUserId),
-    {
-      blocked: fb.firestore.FieldValue.arrayUnion(targetUserId),
-      friends: fb.firestore.FieldValue.arrayRemove(targetUserId),
-      closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId),
-    },
-    { merge: true }
-  );
-  batch.set(
-    db.collection('users').doc(targetUserId),
-    {
-      friends: fb.firestore.FieldValue.arrayRemove(currentUserId),
-      closeFriends: fb.firestore.FieldValue.arrayRemove(currentUserId),
-    },
-    { merge: true }
-  );
-  batch.delete(db.collection('friendRequests').doc(`${currentUserId}_${targetUserId}`));
-  batch.delete(db.collection('friendRequests').doc(`${targetUserId}_${currentUserId}`));
   try {
-    await batch.commit();
-  } catch (error) {
-    if (isPermissionDeniedError(error)) {
-      raiseSocialGraphPermissionError('block this user');
+    const callableResult = await callSocialGraphMutation('block_user', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
     }
-    throw error;
+  } catch (error) {
+    handleSocialGraphCallableError('block this user', error);
   }
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  raiseSocialGraphServiceUnavailableError('block this user');
 }
 
 export async function unblockUserRemote(currentUserId: string, targetUserId: string) {
@@ -2399,11 +2296,13 @@ export async function unblockUserRemote(currentUserId: string, targetUserId: str
     return;
   }
 
-  const callableResult = await callSocialGraphMutation('unblock_user', { targetUserId });
-  if (callableResult?.ok) return;
-
-  const db = fb.firestore();
-  await db.collection('users').doc(currentUserId).set({ blocked: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+  try {
+    const callableResult = await callSocialGraphMutation('unblock_user', { targetUserId });
+    if (callableResult?.ok) return;
+  } catch (error) {
+    handleSocialGraphCallableError('unblock this user', error);
+  }
+  raiseSocialGraphServiceUnavailableError('unblock this user');
 }
 
 export async function getBlockedUsers(currentUserId: string) {
