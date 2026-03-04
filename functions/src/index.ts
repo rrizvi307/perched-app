@@ -70,6 +70,9 @@ const db = admin.firestore();
 const API_KEY_HASH_COLLECTION = 'apiKeyHashes';
 const API_KEY_CACHE_TTL_MS = 60 * 1000;
 const apiKeyCache = new Map<string, { ts: number; docId: string; data: any }>();
+const LOGIN_NOTIFICATION_COLLECTION = 'login_notifications';
+const LOGIN_NOTIFICATION_STATE_COLLECTION = 'login_notification_state';
+const SIGNIN_ALERT_THROTTLE_MS = 2 * 60 * 1000;
 
 const B2B_SPOT_CHECKIN_LIMIT = 60;
 const B2B_NEARBY_SPOT_SCAN_LIMIT = 100;
@@ -675,6 +678,113 @@ async function resolveApiKeyRecord(apiKey: string): Promise<ApiKeyLookup | null>
 
 function asId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeSigninNotificationMeta(value: unknown): Record<string, string | number | boolean | null> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const entries = Object.entries(value as Record<string, unknown>).slice(0, 12);
+  const next: Record<string, string | number | boolean | null> = {};
+  entries.forEach(([key, raw]) => {
+    const safeKey = asId(key).slice(0, 40);
+    if (!safeKey) return;
+    if (typeof raw === 'string') {
+      next[safeKey] = raw.slice(0, 200);
+      return;
+    }
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      next[safeKey] = raw;
+      return;
+    }
+    if (typeof raw === 'boolean') {
+      next[safeKey] = raw;
+      return;
+    }
+    if (raw === null) {
+      next[safeKey] = null;
+    }
+  });
+  return next;
+}
+
+async function resolveSigninAlertEmail(userId: string, fallbackEmail?: string): Promise<string> {
+  if (!userId) return '';
+  const [privateDoc, publicDoc] = await Promise.all([
+    db.collection('userPrivate').doc(userId).get(),
+    db.collection('users').doc(userId).get(),
+  ]);
+
+  const privateEmail = asId(privateDoc.data()?.email).toLowerCase();
+  if (privateEmail) return privateEmail;
+
+  const publicEmail = asId(publicDoc.data()?.email).toLowerCase();
+  if (publicEmail) return publicEmail;
+
+  return asId(fallbackEmail).toLowerCase();
+}
+
+async function sendSigninAlertEmail(email: string, ip?: string | null): Promise<{ sent: boolean; provider: 'sendgrid' | 'log_only'; error?: string | null }> {
+  const normalizedEmail = asId(email).toLowerCase();
+  if (!normalizedEmail) {
+    return { sent: false, provider: 'log_only', error: 'missing_email' };
+  }
+
+  let sendgridKey = readFirstNonEmpty(
+    process.env.SENDGRID_API_KEY,
+    runtimeConfig?.notifications?.sendgrid_api_key,
+    runtimeConfig?.sendgrid_api_key,
+  );
+  if (!sendgridKey) {
+    sendgridKey = await getCachedSecret('SENDGRID_API_KEY');
+  }
+  if (!sendgridKey) {
+    return { sent: false, provider: 'log_only', error: 'missing_sendgrid_key' };
+  }
+
+  const fromEmail = readFirstNonEmpty(
+    process.env.SENDGRID_FROM_EMAIL,
+    runtimeConfig?.notifications?.from_email,
+    runtimeConfig?.sendgrid_from_email,
+    'perchedappteam@gmail.com',
+  );
+  const fromName = readFirstNonEmpty(
+    process.env.SENDGRID_FROM_NAME,
+    runtimeConfig?.notifications?.from_name,
+    runtimeConfig?.sendgrid_from_name,
+    'Perched',
+  );
+  const subject = 'New sign-in to your Perched account';
+  const text = `We detected a sign-in to your account${ip ? ` from IP ${ip}.` : '.'}
+
+If this was you, no action is needed. If you did not sign in, please reset your password.`;
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), 3500);
+  try {
+    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sendgridKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: normalizedEmail }], subject }],
+        from: { email: fromEmail, name: fromName },
+        content: [{ type: 'text/plain', value: text }],
+      }),
+      signal: controller?.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      return { sent: false, provider: 'sendgrid', error: errorText || `sendgrid_${response.status}` };
+    }
+
+    return { sent: true, provider: 'sendgrid', error: null };
+  } catch (error: any) {
+    return { sent: false, provider: 'sendgrid', error: error?.message || String(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function normalizeIdList(value: unknown): string[] {
@@ -1289,6 +1399,66 @@ export const syncMyGamification = functions.https.onCall(async (_data, context) 
   await syncGamificationForUser(userId);
   return { ok: true };
 });
+
+export const sendSigninAlert = functions
+  .runWith({ secrets: ['SENDGRID_API_KEY'] })
+  .https.onCall(async (data, context) => {
+    const userId = context.auth?.uid;
+    if (!userId) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    }
+
+    const fallbackEmail = readFirstNonEmpty(
+      typeof context.auth?.token?.email === 'string' ? context.auth.token.email : '',
+      typeof data?.email === 'string' ? data.email : '',
+    );
+    const ip = asId(data?.ip).slice(0, 64) || null;
+    const meta = sanitizeSigninNotificationMeta(data?.meta);
+    const email = await resolveSigninAlertEmail(userId, fallbackEmail);
+
+    if (!email) {
+      await db.collection(LOGIN_NOTIFICATION_COLLECTION).add({
+        userId,
+        email: null,
+        ip,
+        meta,
+        provider: 'log_only',
+        status: 'skipped_missing_email',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAtMs: Date.now(),
+      });
+      return { ok: true, sent: false, skipped: true, reason: 'missing_email' };
+    }
+
+    const stateRef = db.collection(LOGIN_NOTIFICATION_STATE_COLLECTION).doc(userId);
+    const stateDoc = await stateRef.get();
+    const lastSentAtMs = typeof stateDoc.data()?.lastSentAtMs === 'number' ? stateDoc.data()?.lastSentAtMs : 0;
+    const now = Date.now();
+    if (lastSentAtMs && now - lastSentAtMs < SIGNIN_ALERT_THROTTLE_MS) {
+      return { ok: true, sent: false, skipped: true, reason: 'throttled' };
+    }
+
+    const delivery = await sendSigninAlertEmail(email, ip);
+    await db.collection(LOGIN_NOTIFICATION_COLLECTION).add({
+      userId,
+      email,
+      ip,
+      meta,
+      provider: delivery.provider,
+      status: delivery.sent ? 'sent' : 'logged',
+      error: delivery.error || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtMs: now,
+      sentAtMs: delivery.sent ? now : null,
+    });
+    await stateRef.set({
+      userId,
+      lastSentAtMs: now,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return { ok: true, sent: delivery.sent, skipped: false, provider: delivery.provider };
+  });
 
 /**
  * Send notification when a friend request is created

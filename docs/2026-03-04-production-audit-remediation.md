@@ -151,6 +151,17 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - move place-intelligence computation fully server-side for cacheable normalized payloads
 
+13. Sign-in alert delivery hardening
+   - Status: In progress
+   - Goal: remove client-side email sending and make sign-in alerts backend-owned and auditable.
+   - Current patch:
+     - sign-in alert delivery now goes through a callable Cloud Function instead of a client-side SendGrid request
+     - the backend resolves the recipient email from canonical private profile data and authenticated user context
+     - login alert sends are throttle-protected and recorded in `login_notifications` with delivery status
+     - the mobile client now uses a thin callable wrapper instead of storing or reading email-provider credentials
+   - Follow-up:
+     - add backend tests around throttle behavior and SendGrid failure handling
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
