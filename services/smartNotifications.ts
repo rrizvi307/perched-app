@@ -6,6 +6,8 @@ import { track } from './analytics';
 
 const NOTIF_PREFS_KEY = '@perched_notification_prefs';
 const LAST_NOTIF_KEY = '@perched_last_notification';
+const SCHEDULED_NOTIFICATION_IDS_KEY = '@perched_scheduled_notification_ids';
+let notificationHandlerConfigured = false;
 
 export interface NotificationPreferences {
   enabled: boolean;
@@ -16,22 +18,75 @@ export interface NotificationPreferences {
   weeklyRecap: boolean;
 }
 
-// Configure notification behavior
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+type ManagedNotificationType = 'streak_reminder' | 'weekly_recap';
+
+export function ensureNotificationHandlerConfigured(): void {
+  if (notificationHandlerConfigured) return;
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+  notificationHandlerConfigured = true;
+}
 
 function buildDateTrigger(date: Date): Notifications.NotificationTriggerInput {
   return {
     type: Notifications.SchedulableTriggerInputTypes.DATE,
     date,
   };
+}
+
+async function getManagedNotificationIds(): Promise<Partial<Record<ManagedNotificationType, string>>> {
+  try {
+    const raw = await AsyncStorage.getItem(SCHEDULED_NOTIFICATION_IDS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<Record<ManagedNotificationType, string>>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function setManagedNotificationId(type: ManagedNotificationType, identifier: string | null): Promise<void> {
+  const ids = await getManagedNotificationIds();
+  if (identifier) {
+    ids[type] = identifier;
+  } else {
+    delete ids[type];
+  }
+  await AsyncStorage.setItem(SCHEDULED_NOTIFICATION_IDS_KEY, JSON.stringify(ids));
+}
+
+async function cancelManagedNotification(type: ManagedNotificationType): Promise<void> {
+  const ids = await getManagedNotificationIds();
+  const identifier = ids[type];
+  if (identifier) {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(identifier);
+    } catch {}
+  }
+  await setManagedNotificationId(type, null);
+}
+
+async function scheduleManagedNotification(
+  type: ManagedNotificationType,
+  request: Notifications.NotificationRequestInput
+): Promise<string> {
+  await cancelManagedNotification(type);
+  const identifier = await Notifications.scheduleNotificationAsync(request);
+  await setManagedNotificationId(type, identifier);
+  return identifier;
+}
+
+export async function clearManagedNotifications(
+  types: ManagedNotificationType[] = ['streak_reminder', 'weekly_recap']
+): Promise<void> {
+  await Promise.all(types.map((type) => cancelManagedNotification(type)));
 }
 
 /**
@@ -41,6 +96,7 @@ export async function initPushNotifications(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
 
   try {
+    ensureNotificationHandlerConfigured();
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
@@ -112,13 +168,16 @@ export async function updateNotificationPreferences(
  */
 export async function scheduleStreakReminder(): Promise<void> {
   const prefs = await getNotificationPreferences();
-  if (!prefs.enabled || !prefs.streakReminders) return;
+  if (!prefs.enabled || !prefs.streakReminders) {
+    await cancelManagedNotification('streak_reminder');
+    return;
+  }
 
   const stats = await getUserStats();
-  if (stats.streakDays === 0) return; // No streak to save
-
-  // Cancel existing reminders
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  if (stats.streakDays === 0) {
+    await cancelManagedNotification('streak_reminder');
+    return;
+  }
 
   // Schedule for 8pm today if user hasn't checked in
   const now = new Date();
@@ -130,7 +189,7 @@ export async function scheduleStreakReminder(): Promise<void> {
     reminderTime.setDate(reminderTime.getDate() + 1);
   }
 
-  await Notifications.scheduleNotificationAsync({
+  await scheduleManagedNotification('streak_reminder', {
     content: {
       title: `🔥 ${stats.streakDays} day streak!`,
       body: "Don't break your streak! Check in before midnight.",
@@ -217,14 +276,20 @@ export async function notifyFriendActivity(
  */
 export async function scheduleWeeklyRecap(): Promise<void> {
   const prefs = await getNotificationPreferences();
-  if (!prefs.enabled || !prefs.weeklyRecap) return;
+  if (!prefs.enabled || !prefs.weeklyRecap) {
+    await cancelManagedNotification('weekly_recap');
+    return;
+  }
 
   // Schedule for Sunday at 6pm
   const sunday = new Date();
   sunday.setDate(sunday.getDate() + ((7 - sunday.getDay()) % 7));
   sunday.setHours(18, 0, 0, 0);
+  if (sunday <= new Date()) {
+    sunday.setDate(sunday.getDate() + 7);
+  }
 
-  await Notifications.scheduleNotificationAsync({
+  await scheduleManagedNotification('weekly_recap', {
     content: {
       title: '📊 Your Week on Perched',
       body: 'Check out your weekly recap and see where your friends have been!',
@@ -267,12 +332,14 @@ export async function sendSmartCheckInSuggestion(spotName: string, reason: strin
 export function addNotificationReceivedListener(
   handler: (notification: Notifications.Notification) => void
 ) {
+  ensureNotificationHandlerConfigured();
   return Notifications.addNotificationReceivedListener(handler);
 }
 
 export function addNotificationResponseListener(
   handler: (response: Notifications.NotificationResponse) => void
 ) {
+  ensureNotificationHandlerConfigured();
   return Notifications.addNotificationResponseReceivedListener((response) => {
     const data = response.notification.request.content.data as Record<string, unknown> | null | undefined;
     const rawType = data?.type;

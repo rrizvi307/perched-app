@@ -131,6 +131,16 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add emulator coverage for the verified-email / phone-auth check-in rule path
 
+11. Notification scheduling reliability
+   - Status: In progress
+   - Goal: stop local scheduling code from canceling unrelated notifications or duplicating weekly recap reminders.
+   - Current patch:
+     - local streak reminders and weekly recap notifications now use managed per-type schedule IDs instead of `cancelAllScheduledNotificationsAsync()`
+     - weekly recap scheduling now de-duplicates existing jobs and rolls forward if the current week's send time has already passed
+     - notification permission/handler setup is now routed through one shared implementation instead of two separate service paths
+   - Follow-up:
+     - add unit coverage around managed notification scheduling and preference disable flows
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.

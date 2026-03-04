@@ -83,6 +83,7 @@ export default function SettingsScreen() {
       }
     } else {
       try {
+        await clearNotificationHandlers();
         await clearPushToken(user.id);
       } catch {}
     }
