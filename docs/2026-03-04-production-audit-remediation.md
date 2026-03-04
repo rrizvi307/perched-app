@@ -105,8 +105,10 @@ This document captures the pre-production audit findings, the release blockers, 
      - `placeSignalsProxy` now returns normalized Google place details alongside Yelp and Foursquare provider signals
      - place intelligence now prefers the backend-provided Google snapshot for hours, ratings, reviews, and open status before falling back to direct client Google fetches
      - this removes one major client/backend split in the explore intelligence path and reduces provider drift for `openNow`, hours, and rating aggregation
+     - added `googlePlacesProxy` in Cloud Functions for normalized Google `details`, `nearby`, `search_text`, `search_locations`, and `reverse_geocode` lookups
+     - `services/googleMaps.ts` now prefers the authenticated backend proxy for spot, check-in, and signed-in search flows, while keeping a direct Google fallback for unauthenticated onboarding/search recovery paths
    - Follow-up:
-     - move remaining direct Google Places reads on `spot` and search flows behind backend-owned endpoints
+     - eliminate the remaining unauthenticated direct Google fallback once App Check or a public-safe bootstrap path is in place
      - initialize and enforce App Check once the mobile-side provider path is fully backend-backed
 
 8. App Store feed/report remediation
@@ -181,6 +183,24 @@ This document captures the pre-production audit findings, the release blockers, 
      - removed the repo-wide `ajv` override that was breaking `firebase-tools` by forcing an incompatible major
    - Environment blocker:
      - Firestore emulator execution currently requires Java on PATH; the test harness is committed, but this machine cannot run `npm run test:rules` until Java is installed
+
+15. Mobile memory-pressure hardening
+   - Status: In progress
+   - Goal: stop long-lived in-memory place caches from growing without bound during heavy browsing sessions.
+   - Current patch:
+     - `services/googleMaps.ts` cache hits now refresh recency and all geocode/search/details caches are size-bounded
+     - `services/placeIntelligence.ts` intelligence, provider-signal, weather, review-NLP, and telemetry-throttle maps are now bounded and prune oldest entries
+   - Follow-up:
+     - add lightweight metrics or debug counters so we can tune cache caps with real production usage
+
+16. Analytics privacy and event hygiene
+   - Status: In progress
+   - Goal: stop leaking raw identifiers into analytics and make wrapper event names semantically correct.
+   - Current patch:
+     - password-reset telemetry now records only `email_present` and `email_domain`, not the full email address
+     - generic analytics helpers no longer alias screen, timing, revenue, engagement, and premium conversion events to `app_opened`
+   - Follow-up:
+     - add focused tests around analytics event payload sanitization and naming
 
 ## Audit Notes
 

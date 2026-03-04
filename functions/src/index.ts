@@ -1804,8 +1804,24 @@ type GooglePlaceSnapshot = {
   hours?: string[];
 };
 
+type GooglePlaceResult = {
+  placeId: string;
+  name: string;
+  address?: string;
+  location?: { lat: number; lng: number };
+  rating?: number;
+  ratingCount?: number;
+  priceLevel?: string;
+  openNow?: boolean;
+  types?: string[];
+  reviews?: GooglePlaceReview[];
+  hours?: string[];
+};
+
 const PLACE_SIGNAL_TTL_MS = 30 * 60 * 1000;
 const placeSignalCache = new Map<string, { ts: number; payload: { externalSignals: ExternalPlaceSignal[]; googleSnapshot: GooglePlaceSnapshot | null } }>();
+const GOOGLE_PLACES_PROXY_TTL_MS = 5 * 60 * 1000;
+const googlePlacesProxyCache = new Map<string, { ts: number; payload: any }>();
 function parseCloudRuntimeConfig() {
   const raw = process.env.CLOUD_RUNTIME_CONFIG;
   if (!raw) return {};
@@ -1922,6 +1938,70 @@ function normalizeGoogleSnapshot(value: any): GooglePlaceSnapshot | null {
   return hasPayload ? snapshot : null;
 }
 
+function normalizeGooglePlaceLocation(value: any): { lat: number; lng: number } | undefined {
+  const lat = toFiniteNumber(value?.latitude ?? value?.lat);
+  const lng = toFiniteNumber(value?.longitude ?? value?.lng);
+  if (lat === null || lng === null) return undefined;
+  return { lat, lng };
+}
+
+function normalizeGooglePlaceResult(value: any, fallbackPlaceId = ''): GooglePlaceResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const placeId = asId(value.id ?? value.placeId ?? value.place_id ?? fallbackPlaceId);
+  const name = readFirstNonEmpty(value.displayName?.text, value.name);
+  if (!placeId || !name) return null;
+
+  const location = normalizeGooglePlaceLocation(value.location ?? value.geometry?.location);
+  const address = readFirstNonEmpty(value.formattedAddress, value.formatted_address, value.vicinity, value.address) || undefined;
+  const rating = toFiniteNumber(value.rating) ?? undefined;
+  const reviewCount = toFiniteNumber(value.userRatingCount ?? value.user_ratings_total) ?? undefined;
+  const priceLevel = normalizeGooglePriceLevel(value.priceLevel ?? value.price_level);
+  const openNow =
+    typeof value.currentOpeningHours?.openNow === 'boolean'
+      ? value.currentOpeningHours.openNow
+      : typeof value.opening_hours?.open_now === 'boolean'
+        ? value.opening_hours.open_now
+        : typeof value.openNow === 'boolean'
+          ? value.openNow
+          : undefined;
+  const types = Array.isArray(value.types)
+    ? value.types.filter((item: any) => typeof item === 'string' && item.trim())
+    : undefined;
+  const reviews = normalizeGoogleReviews(value.reviews);
+  const hours = normalizeGoogleHours(
+    value.currentOpeningHours?.weekdayDescriptions ??
+      value.opening_hours?.weekday_text ??
+      value.hours,
+  );
+
+  return {
+    placeId,
+    name,
+    address,
+    location,
+    rating,
+    ratingCount: reviewCount,
+    priceLevel,
+    openNow,
+    types,
+    reviews,
+    hours,
+  };
+}
+
+async function getGoogleMapsKeyServer(): Promise<string> {
+  let key = readFirstNonEmpty(
+    process.env.GOOGLE_MAPS_API_KEY,
+    runtimeConfig?.places?.google_maps_api_key,
+    runtimeConfig?.google_maps_api_key,
+    runtimeConfig?.maps?.api_key,
+  );
+  if (!key) {
+    key = await getCachedSecret('GOOGLE_MAPS_API_KEY');
+  }
+  return key;
+}
+
 function withCors(req: any, res: any) {
   const origin = req.headers.origin || '';
   if (ALLOWED_ORIGINS.includes(origin)) {
@@ -1975,6 +2055,24 @@ async function fetchJsonWithTimeout(url: string, init: RequestInit, timeoutMs = 
   }
 }
 
+async function fetchJsonResponseWithTimeout(url: string, init: RequestInit, timeoutMs = 2800) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller?.signal });
+    const json = await res.json().catch(() => null);
+    return {
+      ok: res.ok,
+      status: res.status,
+      json,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
   if (!Array.isArray(payload)) return [];
   return payload.filter(Boolean);
@@ -1984,15 +2082,7 @@ async function fetchGooglePlaceSignalServer(placeId: string): Promise<GooglePlac
   const normalizedPlaceId = asId(placeId);
   if (!normalizedPlaceId) return null;
 
-  let key = readFirstNonEmpty(
-    process.env.GOOGLE_MAPS_API_KEY,
-    runtimeConfig?.places?.google_maps_api_key,
-    runtimeConfig?.google_maps_api_key,
-    runtimeConfig?.maps?.api_key,
-  );
-  if (!key) {
-    key = await getCachedSecret('GOOGLE_MAPS_API_KEY');
-  }
+  const key = await getGoogleMapsKeyServer();
   if (!key) return null;
 
   try {
@@ -2016,6 +2106,242 @@ async function fetchGooglePlaceSignalServer(placeId: string): Promise<GooglePlac
   } catch {
     return null;
   }
+}
+
+function pickCityFromGeocode(result: any): string | null {
+  if (!result?.address_components) return null;
+  const components = result.address_components as Array<{ long_name: string; types: string[] }>;
+  const byType = (type: string) => components.find((item) => item.types.includes(type))?.long_name || null;
+  return (
+    byType('locality') ||
+    byType('postal_town') ||
+    byType('administrative_area_level_2') ||
+    byType('administrative_area_level_1') ||
+    null
+  );
+}
+
+function clampGooglePlacesLimit(value: unknown, fallback: number, max = 20) {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) return fallback;
+  return Math.max(1, Math.min(max, Math.round(numeric)));
+}
+
+function normalizeGooglePlacesResponse(value: unknown, limit?: number): GooglePlaceResult[] {
+  if (!Array.isArray(value)) return [];
+  const results = value
+    .map((item: any) => normalizeGooglePlaceResult(item))
+    .filter(Boolean) as GooglePlaceResult[];
+  return typeof limit === 'number' ? results.slice(0, limit) : results;
+}
+
+async function searchGoogleTextServer(
+  query: string,
+  limit = 6,
+  bias?: { lat: number; lng: number; radiusMeters?: number },
+): Promise<GooglePlaceResult[]> {
+  const normalizedQuery = asId(query);
+  if (!normalizedQuery) return [];
+  const key = await getGoogleMapsKeyServer();
+  if (!key) return [];
+
+  const effectiveLimit = clampGooglePlacesLimit(limit, 6);
+  const radiusMeters = Math.max(100, Math.min(50000, Math.round(toFiniteNumber(bias?.radiusMeters) ?? 8000)));
+
+  try {
+    const response = await fetchJsonResponseWithTimeout(
+      'https://places.googleapis.com/v1/places:searchText',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': key,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.types',
+        },
+        body: JSON.stringify({
+          textQuery: normalizedQuery,
+          languageCode: 'en',
+          ...(bias
+            ? {
+              locationBias: {
+                circle: {
+                  center: {
+                    latitude: bias.lat,
+                    longitude: bias.lng,
+                  },
+                  radius: radiusMeters,
+                },
+              },
+            }
+            : {}),
+        }),
+      },
+      3200,
+    );
+    const proxied = normalizeGooglePlacesResponse(response?.json?.places, effectiveLimit);
+    if (response?.ok && proxied.length) return proxied;
+  } catch {}
+
+  const params = new URLSearchParams({
+    query: normalizedQuery,
+    key,
+    language: 'en',
+  });
+  if (bias) {
+    params.set('location', `${bias.lat},${bias.lng}`);
+    params.set('radius', String(radiusMeters));
+  }
+  const legacy = await fetchJsonWithTimeout(
+    `https://maps.googleapis.com/maps/api/place/textsearch/json?${params.toString()}`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    3200,
+  );
+  return normalizeGooglePlacesResponse((legacy as any)?.results, effectiveLimit);
+}
+
+async function fetchGooglePlaceDetailsServer(placeId: string): Promise<GooglePlaceResult | null> {
+  const normalizedPlaceId = asId(placeId);
+  if (!normalizedPlaceId) return null;
+  const key = await getGoogleMapsKeyServer();
+  if (!key) return null;
+
+  try {
+    const response = await fetchJsonResponseWithTimeout(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedPlaceId)}`,
+      {
+        method: 'GET',
+        headers: {
+          'X-Goog-Api-Key': key,
+          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,types,rating,userRatingCount,priceLevel,reviews,currentOpeningHours',
+        },
+      },
+      3200,
+    );
+    const payload = normalizeGooglePlaceResult(response?.json, normalizedPlaceId);
+    if (response?.ok && payload) return payload;
+  } catch {}
+
+  const fields = encodeURIComponent('name,formatted_address,geometry,types,opening_hours,rating,user_ratings_total,price_level,reviews');
+  const legacy = await fetchJsonWithTimeout(
+    `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(normalizedPlaceId)}&fields=${fields}&key=${encodeURIComponent(key)}&language=en`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    3200,
+  );
+  return normalizeGooglePlaceResult((legacy as any)?.result, normalizedPlaceId);
+}
+
+async function searchGoogleNearbyServer(
+  lat: number,
+  lng: number,
+  radius = 1500,
+  intent: 'study' | 'general' = 'study',
+): Promise<GooglePlaceResult[]> {
+  const key = await getGoogleMapsKeyServer();
+  if (!key) return [];
+  const normalizedRadius = Math.max(100, Math.min(50000, Math.round(toFiniteNumber(radius) ?? 1500)));
+
+  try {
+    const includedTypes = intent === 'study'
+      ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
+      : undefined;
+    const response = await fetchJsonResponseWithTimeout(
+      'https://places.googleapis.com/v1/places:searchNearby',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': key,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.currentOpeningHours,places.types',
+        },
+        body: JSON.stringify({
+          locationRestriction: {
+            circle: {
+              center: { latitude: lat, longitude: lng },
+              radius: normalizedRadius,
+            },
+          },
+          includedTypes,
+          rankPreference: 'POPULARITY',
+          maxResultCount: 20,
+          languageCode: 'en',
+        }),
+      },
+      3200,
+    );
+    const payload = normalizeGooglePlacesResponse(response?.json?.places, 20);
+    if (response?.ok && payload.length) return payload;
+  } catch {}
+
+  const keyword = intent === 'study' ? '&keyword=study%20cafe%20coffee%20library%20coworking' : '';
+  const legacy = await fetchJsonWithTimeout(
+    `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${normalizedRadius}${keyword}&key=${key}&language=en`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    3200,
+  );
+  return normalizeGooglePlacesResponse((legacy as any)?.results, 20);
+}
+
+async function reverseGeocodeCityServer(lat: number, lng: number): Promise<string | null> {
+  const key = await getGoogleMapsKeyServer();
+  if (!key) return null;
+  const params = new URLSearchParams({
+    latlng: `${lat},${lng}`,
+    result_type: 'locality|postal_town|administrative_area_level_2',
+    key,
+    language: 'en',
+  });
+  const json = await fetchJsonWithTimeout(
+    `https://maps.googleapis.com/maps/api/geocode/json?${params.toString()}`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    3200,
+  );
+  const results = Array.isArray((json as any)?.results) ? (json as any).results : [];
+  for (const result of results) {
+    const city = pickCityFromGeocode(result);
+    if (city) return city;
+  }
+  return null;
+}
+
+async function searchGoogleLocationsServer(
+  query: string,
+  kind: 'campus' | 'city',
+  limit = 8,
+  bias?: { lat: number; lng: number },
+): Promise<GooglePlaceResult[]> {
+  const key = await getGoogleMapsKeyServer();
+  const normalizedQuery = asId(query);
+  if (!key || !normalizedQuery) return [];
+
+  const baseQuery = kind === 'campus' ? `${normalizedQuery} university college` : normalizedQuery;
+  const type = kind === 'campus' ? 'university' : 'locality';
+  const params = new URLSearchParams({
+    query: baseQuery,
+    type,
+    key,
+    language: 'en',
+  });
+  if (bias) {
+    params.set('location', `${bias.lat},${bias.lng}`);
+    params.set('radius', '80000');
+  }
+
+  const effectiveLimit = clampGooglePlacesLimit(limit, 8);
+  const json = await fetchJsonWithTimeout(
+    `https://maps.googleapis.com/maps/api/place/textsearch/json?${params.toString()}`,
+    { method: 'GET', headers: { Accept: 'application/json' } },
+    3200,
+  );
+  const payload = normalizeGooglePlacesResponse((json as any)?.results, effectiveLimit * 2);
+  const seen = new Set<string>();
+  return payload
+    .filter((result) => {
+      const dedupeKey = result.name.trim().toLowerCase();
+      if (!dedupeKey || seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
+      return true;
+    })
+    .slice(0, effectiveLimit);
 }
 
 async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
@@ -2098,6 +2424,175 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
     categories,
   };
 }
+
+export const googlePlacesProxy = functions
+  .runWith({ secrets: ['GOOGLE_MAPS_API_KEY'] })
+  .https.onRequest(async (req, res) => {
+  withCors(req, res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  const requiredSecret = readFirstNonEmpty(
+    process.env.GOOGLE_PLACES_PROXY_SECRET,
+    process.env.PLACE_INTEL_PROXY_SECRET,
+    runtimeConfig?.places?.google_proxy_secret,
+    runtimeConfig?.places?.proxy_secret,
+    runtimeConfig?.google_places_proxy_secret,
+    runtimeConfig?.place_intel_proxy_secret,
+    runtimeConfig?.proxy_secret,
+  );
+  const providedSecret = req.get('X-Place-Intel-Secret') || '';
+  const hasSecretBypass = Boolean(requiredSecret && providedSecret === requiredSecret);
+
+  const requireAuthRaw = readFirstNonEmpty(
+    process.env.GOOGLE_PLACES_REQUIRE_AUTH,
+    process.env.PLACE_INTEL_REQUIRE_AUTH,
+    runtimeConfig?.places?.google_require_auth,
+    runtimeConfig?.places?.require_auth,
+  );
+  const requireAuth =
+    !requireAuthRaw || !['0', 'false', 'no', 'off'].includes(requireAuthRaw.toLowerCase());
+
+  const requireAppCheckRaw = readFirstNonEmpty(
+    process.env.GOOGLE_PLACES_REQUIRE_APP_CHECK,
+    process.env.PLACE_INTEL_REQUIRE_APP_CHECK,
+    runtimeConfig?.places?.google_require_app_check,
+    runtimeConfig?.places?.require_app_check,
+  );
+  const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
+
+  if (!hasSecretBypass) {
+    const uid = await verifyFirebaseUserFromRequest(req);
+    if (requireAuth && !uid) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
+    if (requireAppCheck || providedAppCheck) {
+      const appCheckOk = await verifyAppCheckFromRequest(req);
+      if (!appCheckOk) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+    }
+  }
+
+  const body = typeof req.body === 'string'
+    ? (() => {
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        return null;
+      }
+    })()
+    : req.body;
+
+  const action = typeof body?.action === 'string' ? body.action.trim().toLowerCase() : '';
+  const placeId = typeof body?.placeId === 'string' ? body.placeId.trim() : '';
+  const query = typeof body?.query === 'string' ? body.query.trim() : '';
+  const kind = body?.kind === 'campus' ? 'campus' : 'city';
+  const lat = toFiniteNumber(body?.lat ?? body?.location?.lat);
+  const lng = toFiniteNumber(body?.lng ?? body?.location?.lng);
+  const radius = clampGooglePlacesLimit(body?.radius, 1500, 50000);
+  const limit = clampGooglePlacesLimit(body?.limit, 8, 20);
+  const intent = body?.intent === 'general' ? 'general' : 'study';
+  const bias = lat !== null && lng !== null ? { lat, lng } : undefined;
+
+  if (!action) {
+    res.status(400).json({ error: 'Missing action' });
+    return;
+  }
+
+  const cacheKey = (() => {
+    if (action === 'details') return `details:${placeId}`;
+    if (action === 'reverse_geocode') return `reverse:${lat?.toFixed(3) || 'na'}:${lng?.toFixed(3) || 'na'}`;
+    if (action === 'nearby') return `nearby:${lat?.toFixed(3) || 'na'}:${lng?.toFixed(3) || 'na'}:${radius}:${intent}`;
+    if (action === 'search_locations') return `locations:${kind}:${query.toLowerCase()}:${limit}:${lat?.toFixed(3) || 'na'}:${lng?.toFixed(3) || 'na'}`;
+    return `text:${query.toLowerCase()}:${limit}:${lat?.toFixed(3) || 'na'}:${lng?.toFixed(3) || 'na'}:${radius}`;
+  })();
+  const cached = googlePlacesProxyCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < GOOGLE_PLACES_PROXY_TTL_MS) {
+    res.status(200).json({ ...cached.payload, cacheHit: true });
+    return;
+  }
+
+  try {
+    let payload: any = null;
+
+    switch (action) {
+      case 'details': {
+        if (!placeId) {
+          res.status(400).json({ error: 'Missing placeId' });
+          return;
+        }
+        payload = { place: await fetchGooglePlaceDetailsServer(placeId) };
+        break;
+      }
+      case 'search_text': {
+        if (!query) {
+          res.status(400).json({ error: 'Missing query' });
+          return;
+        }
+        payload = {
+          places: await searchGoogleTextServer(
+            query,
+            limit,
+            bias ? { ...bias, radiusMeters: radius } : undefined,
+          ),
+        };
+        break;
+      }
+      case 'nearby': {
+        if (lat === null || lng === null) {
+          res.status(400).json({ error: 'Missing location' });
+          return;
+        }
+        payload = {
+          places: await searchGoogleNearbyServer(lat, lng, radius, intent),
+        };
+        break;
+      }
+      case 'reverse_geocode': {
+        if (lat === null || lng === null) {
+          res.status(400).json({ error: 'Missing location' });
+          return;
+        }
+        payload = {
+          city: await reverseGeocodeCityServer(lat, lng),
+        };
+        break;
+      }
+      case 'search_locations': {
+        if (!query) {
+          res.status(400).json({ error: 'Missing query' });
+          return;
+        }
+        payload = {
+          places: await searchGoogleLocationsServer(query, kind, limit, bias),
+        };
+        break;
+      }
+      default:
+        res.status(400).json({ error: 'Unsupported action' });
+        return;
+    }
+
+    googlePlacesProxyCache.set(cacheKey, { ts: Date.now(), payload });
+    res.status(200).json({ ...payload, cacheHit: false });
+    return;
+  } catch (error) {
+    console.error('googlePlacesProxy error', { action, error });
+    res.status(500).json({ error: 'google places proxy failed' });
+    return;
+  }
+});
 
 export const placeSignalsProxy = functions
   .runWith({ secrets: ['YELP_API_KEY', 'FOURSQUARE_API_KEY', 'GOOGLE_MAPS_API_KEY'] })

@@ -36,16 +36,74 @@ export type PlaceSearchResult = {
   hours?: string[];
 };
 
+function getExpoExtra() {
+  return ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
+}
+
+function getFunctionsProjectId() {
+  const extra = getExpoExtra();
+  return (
+    (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string) ||
+    (process.env.FIREBASE_PROJECT_ID as string) ||
+    (extra?.FIREBASE_CONFIG?.projectId as string) ||
+    ((global as any)?.FIREBASE_CONFIG?.projectId as string) ||
+    ''
+  );
+}
+
+function getFunctionsRegion() {
+  const extra = getExpoExtra();
+  return (
+    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+    (process.env.FIREBASE_FUNCTIONS_REGION as string) ||
+    (extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    'us-central1'
+  );
+}
+
+function getGooglePlacesProxyEndpoint() {
+  const extra = getExpoExtra();
+  const explicit =
+    (process.env.EXPO_PUBLIC_GOOGLE_PLACES_ENDPOINT as string) ||
+    (process.env.GOOGLE_PLACES_ENDPOINT as string) ||
+    (extra?.GOOGLE_PLACES_ENDPOINT as string) ||
+    ((global as any)?.GOOGLE_PLACES_ENDPOINT as string) ||
+    '';
+  if (explicit) return explicit;
+  const projectId = getFunctionsProjectId();
+  if (!projectId) return '';
+  return `https://${getFunctionsRegion()}-${projectId}.cloudfunctions.net/googlePlacesProxy`;
+}
+
 const searchCache = new Map<string, { ts: number; payload: PlaceSearchResult[] }>();
 const detailsCache = new Map<string, { ts: number; payload: PlaceSearchResult | null }>();
 const geocodeCache = new Map<string, { ts: number; payload: string | null }>();
 const searchInflight = new Map<string, Promise<PlaceSearchResult[]>>();
 const detailsInflight = new Map<string, Promise<PlaceSearchResult | null>>();
 const geocodeInflight = new Map<string, Promise<string | null>>();
+const SEARCH_CACHE_MAX = 120;
+const DETAILS_CACHE_MAX = 80;
+const GEOCODE_CACHE_MAX = 64;
+
+function touchCacheEntry<T>(cache: Map<string, { ts: number; payload: T }>, key: string, entry: { ts: number; payload: T }) {
+  cache.delete(key);
+  cache.set(key, entry);
+}
+
+function pruneCache<T>(cache: Map<string, { ts: number; payload: T }>, maxEntries: number) {
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) break;
+    cache.delete(oldestKey);
+  }
+}
 
 function cacheGet<T>(cache: Map<string, { ts: number; payload: T }>, key: string, ttlMs: number) {
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.ts < ttlMs) return cached.payload;
+  if (cached && Date.now() - cached.ts < ttlMs) {
+    touchCacheEntry(cache, key, cached);
+    return cached.payload;
+  }
   return null;
 }
 
@@ -56,11 +114,14 @@ function cacheGetEntry<T>(cache: Map<string, { ts: number; payload: T }>, key: s
     cache.delete(key);
     return null;
   }
+  touchCacheEntry(cache, key, cached);
   return cached;
 }
 
-function cacheSet<T>(cache: Map<string, { ts: number; payload: T }>, key: string, payload: T) {
+function cacheSet<T>(cache: Map<string, { ts: number; payload: T }>, key: string, payload: T, maxEntries: number) {
+  cache.delete(key);
   cache.set(key, { ts: Date.now(), payload });
+  pruneCache(cache, maxEntries);
 }
 
 function withInflight<T>(map: Map<string, Promise<T>>, key: string, fn: () => Promise<T>) {
@@ -81,6 +142,66 @@ async function fetchJson(url: string) {
     throw new Error(message);
   }
   return json;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 3200) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller?.signal });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) return null;
+    return json;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getProxyAuthHeaders() {
+  const headers: Record<string, string> = {};
+  try {
+    const { ensureFirebase } = await import('./firebaseClient');
+    const fb = ensureFirebase();
+    const user = fb?.auth?.()?.currentUser;
+    if (user && typeof user.getIdToken === 'function') {
+      const idToken = await user.getIdToken();
+      if (idToken) headers.Authorization = `Bearer ${idToken}`;
+    }
+  } catch {}
+
+  const appCheckToken = (global as any)?.FIREBASE_APP_CHECK_TOKEN;
+  if (typeof appCheckToken === 'string' && appCheckToken.trim()) {
+    headers['X-Firebase-AppCheck'] = appCheckToken.trim();
+  }
+
+  return headers;
+}
+
+async function fetchGooglePlacesProxy(action: string, payload: Record<string, any>, timeoutMs = 3200) {
+  const endpoint = getGooglePlacesProxyEndpoint();
+  if (!endpoint) return null;
+  const authHeaders = await getProxyAuthHeaders();
+  if (typeof authHeaders.Authorization !== 'string' || !authHeaders.Authorization.trim()) {
+    return null;
+  }
+  return fetchWithTimeout(
+    endpoint,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        action,
+        ...payload,
+      }),
+    },
+    timeoutMs,
+  );
 }
 
 function normalizeGooglePriceLevel(value: unknown): string | undefined {
@@ -121,7 +242,7 @@ function normalizeGoogleReviews(value: unknown): GooglePlaceReview[] | undefined
   if (!Array.isArray(value)) return undefined;
   const reviews = value
     .map((review: any) => {
-      const text = normalizeGoogleReviewText(review?.text);
+      const text = normalizeGoogleReviewText(review?.text ?? review);
       if (!text) return null;
       return {
         text,
@@ -131,6 +252,85 @@ function normalizeGoogleReviews(value: unknown): GooglePlaceReview[] | undefined
     })
     .filter(Boolean) as GooglePlaceReview[];
   return reviews.length ? reviews : undefined;
+}
+
+function normalizePlaceLocation(value: any): { lat: number; lng: number } | undefined {
+  const lat = typeof value?.latitude === 'number'
+    ? value.latitude
+    : typeof value?.lat === 'number'
+      ? value.lat
+      : null;
+  const lng = typeof value?.longitude === 'number'
+    ? value.longitude
+    : typeof value?.lng === 'number'
+      ? value.lng
+      : null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+  return { lat, lng };
+}
+
+function normalizePlaceResult(value: any, fallbackPlaceId = ''): PlaceSearchResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const placeId = typeof value.placeId === 'string' && value.placeId.trim()
+    ? value.placeId.trim()
+    : typeof value.id === 'string' && value.id.trim()
+      ? value.id.trim()
+      : typeof value.place_id === 'string' && value.place_id.trim()
+        ? value.place_id.trim()
+        : fallbackPlaceId.trim();
+  const name = typeof value.displayName?.text === 'string' && value.displayName.text.trim()
+    ? value.displayName.text.trim()
+    : typeof value.name === 'string' && value.name.trim()
+      ? value.name.trim()
+      : '';
+  if (!placeId || !name) return null;
+
+  return {
+    placeId,
+    name,
+    address:
+      (typeof value.formattedAddress === 'string' && value.formattedAddress.trim()) ||
+      (typeof value.formatted_address === 'string' && value.formatted_address.trim()) ||
+      (typeof value.vicinity === 'string' && value.vicinity.trim()) ||
+      (typeof value.address === 'string' && value.address.trim()) ||
+      undefined,
+    location: normalizePlaceLocation(value.location ?? value.geometry?.location),
+    rating: typeof value.rating === 'number' ? value.rating : undefined,
+    ratingCount:
+      typeof value.userRatingCount === 'number'
+        ? value.userRatingCount
+        : typeof value.user_ratings_total === 'number'
+          ? value.user_ratings_total
+          : typeof value.ratingCount === 'number'
+            ? value.ratingCount
+            : undefined,
+    priceLevel: normalizeGooglePriceLevel(value.priceLevel ?? value.price_level),
+    openNow:
+      typeof value.currentOpeningHours?.openNow === 'boolean'
+        ? value.currentOpeningHours.openNow
+        : typeof value.opening_hours?.open_now === 'boolean'
+          ? value.opening_hours.open_now
+          : typeof value.openNow === 'boolean'
+            ? value.openNow
+            : undefined,
+    types: Array.isArray(value.types) ? value.types.filter((item: any) => typeof item === 'string' && item.trim()) : undefined,
+    reviews: normalizeGoogleReviews(value.reviews),
+    hours: Array.isArray(value.currentOpeningHours?.weekdayDescriptions)
+      ? value.currentOpeningHours.weekdayDescriptions.filter((item: any) => typeof item === 'string' && item.trim())
+      : Array.isArray(value.opening_hours?.weekday_text)
+        ? value.opening_hours.weekday_text.filter((item: any) => typeof item === 'string' && item.trim())
+        : Array.isArray(value.hours)
+          ? value.hours.filter((item: any) => typeof item === 'string' && item.trim())
+          : undefined,
+  };
+}
+
+function normalizePlaceResults(value: unknown, limit?: number) {
+  if (!Array.isArray(value)) return [];
+  const results = value
+    .map((item: any) => normalizePlaceResult(item))
+    .filter(Boolean) as PlaceSearchResult[];
+  return typeof limit === 'number' ? results.slice(0, limit) : results;
 }
 
 function pickCityFromGeocode(result: any): string | null {
@@ -147,27 +347,33 @@ function pickCityFromGeocode(result: any): string | null {
 }
 
 export async function reverseGeocodeCity(lat: number, lng: number): Promise<string | null> {
-  const key = getMapsKey();
-  if (!key) return null;
   const cacheKey = `geocode:${lat.toFixed(3)}:${lng.toFixed(3)}`;
   const cachedEntry = cacheGetEntry(geocodeCache, cacheKey, 10 * 60 * 1000);
   if (cachedEntry) return cachedEntry.payload;
   return withInflight(geocodeInflight, cacheKey, async () => {
     try {
+      const proxied = await fetchGooglePlacesProxy('reverse_geocode', { lat, lng }, 2400);
+      if (proxied && (typeof proxied.city === 'string' || proxied.city === null)) {
+        cacheSet(geocodeCache, cacheKey, proxied.city ?? null, GEOCODE_CACHE_MAX);
+        return proxied.city ?? null;
+      }
+
+      const key = getMapsKey();
+      if (!key) return null;
       const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&result_type=locality|postal_town|administrative_area_level_2&key=${key}&language=en`;
       const json = await fetchJson(url);
       if (!json || json.status !== 'OK' || !Array.isArray(json.results)) {
-        cacheSet(geocodeCache, cacheKey, null);
+        cacheSet(geocodeCache, cacheKey, null, GEOCODE_CACHE_MAX);
         return null;
       }
       for (const result of json.results) {
         const city = pickCityFromGeocode(result);
         if (city) {
-          cacheSet(geocodeCache, cacheKey, city);
+          cacheSet(geocodeCache, cacheKey, city, GEOCODE_CACHE_MAX);
           return city;
         }
       }
-      cacheSet(geocodeCache, cacheKey, null);
+      cacheSet(geocodeCache, cacheKey, null, GEOCODE_CACHE_MAX);
       return null;
     } catch (e) {
       console.warn('reverseGeocodeCity error', e);
@@ -177,13 +383,20 @@ export async function reverseGeocodeCity(lat: number, lng: number): Promise<stri
 }
 
 export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearchResult[]> {
-  const key = getMapsKey();
-  if (!key) return [];
   const cacheKey = `places:${query}:${limit}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
   if (cached) return cached;
   return withInflight(searchInflight, cacheKey, async () => {
     try {
+      const proxied = await fetchGooglePlacesProxy('search_text', { query, limit }, 2600);
+      const proxiedPlaces = normalizePlaceResults(proxied?.places, limit);
+      if (proxiedPlaces.length) {
+        cacheSet(searchCache, cacheKey, proxiedPlaces, SEARCH_CACHE_MAX);
+        return proxiedPlaces;
+      }
+
+      const key = getMapsKey();
+      if (!key) return [];
       // Prefer Places API v1 (CORS-friendly for web)
       try {
         const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
@@ -201,18 +414,8 @@ export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearc
           throw new Error(message);
         }
         const places = Array.isArray(json?.places) ? json.places : [];
-        const payload = places.slice(0, limit).map((p: any) => ({
-          placeId: p.id,
-          name: p.displayName?.text || 'Unknown',
-          address: p.formattedAddress,
-          location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
-          rating: typeof p.rating === 'number' ? p.rating : undefined,
-          ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
-          priceLevel: normalizeGooglePriceLevel(p.priceLevel),
-          openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
-          types: Array.isArray(p.types) ? p.types : undefined,
-        }));
-        cacheSet(searchCache, cacheKey, payload);
+        const payload = normalizePlaceResults(places, limit);
+        cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
         return payload;
       } catch {}
 
@@ -220,18 +423,8 @@ export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearc
       const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${q}&key=${key}&language=en`;
       const json = await fetchJson(url);
       if (!json || !Array.isArray(json.results)) return [];
-      const payload = json.results.slice(0, limit).map((r: any) => ({
-        placeId: r.place_id,
-        name: r.name,
-        address: r.formatted_address || r.vicinity,
-        location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
-        rating: typeof r.rating === 'number' ? r.rating : undefined,
-        ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
-        priceLevel: normalizeGooglePriceLevel(r.price_level),
-        openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
-        types: Array.isArray(r.types) ? r.types : undefined,
-      }));
-      cacheSet(searchCache, cacheKey, payload);
+      const payload = normalizePlaceResults(json.results, limit);
+      cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
       return payload;
     } catch (e) {
       console.warn('searchPlaces error', e);
@@ -247,13 +440,24 @@ export async function searchPlacesWithBias(
   radiusMeters = 8000,
   limit = 8,
 ): Promise<PlaceSearchResult[]> {
-  const key = getMapsKey();
-  if (!key) return [];
   const cacheKey = `textbias:${query}:${lat.toFixed(3)}:${lng.toFixed(3)}:${radiusMeters}:${limit}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
   if (cached) return cached;
   return withInflight(searchInflight, cacheKey, async () => {
     try {
+    const proxied = await fetchGooglePlacesProxy(
+      'search_text',
+      { query, limit, lat, lng, radius: radiusMeters },
+      2600,
+    );
+    const proxiedPlaces = normalizePlaceResults(proxied?.places, limit);
+    if (proxiedPlaces.length) {
+      cacheSet(searchCache, cacheKey, proxiedPlaces, SEARCH_CACHE_MAX);
+      return proxiedPlaces;
+    }
+
+    const key = getMapsKey();
+    if (!key) return [];
     try {
       const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
@@ -279,18 +483,8 @@ export async function searchPlacesWithBias(
         throw new Error(message);
       }
       const places = Array.isArray(json?.places) ? json.places : [];
-      const payload = places.slice(0, limit).map((p: any) => ({
-        placeId: p.id,
-        name: p.displayName?.text || 'Unknown',
-        address: p.formattedAddress,
-        location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
-        rating: typeof p.rating === 'number' ? p.rating : undefined,
-        ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
-        priceLevel: normalizeGooglePriceLevel(p.priceLevel),
-        openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
-        types: Array.isArray(p.types) ? p.types : undefined,
-      }));
-      cacheSet(searchCache, cacheKey, payload);
+      const payload = normalizePlaceResults(places, limit);
+      cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
       return payload;
     } catch {}
 
@@ -298,18 +492,8 @@ export async function searchPlacesWithBias(
     const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${q}&location=${lat},${lng}&radius=${radiusMeters}&key=${key}&language=en`;
     const json = await fetchJson(url);
     if (!json || !Array.isArray(json.results)) return [];
-    const payload = json.results.slice(0, limit).map((r: any) => ({
-      placeId: r.place_id,
-      name: r.name,
-      address: r.formatted_address || r.vicinity,
-      location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
-      rating: typeof r.rating === 'number' ? r.rating : undefined,
-      ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
-      priceLevel: normalizeGooglePriceLevel(r.price_level),
-      openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
-      types: Array.isArray(r.types) ? r.types : undefined,
-    }));
-      cacheSet(searchCache, cacheKey, payload);
+    const payload = normalizePlaceResults(json.results, limit);
+      cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
       return payload;
     } catch (e) {
       console.warn('searchPlacesWithBias error', e);
@@ -319,13 +503,20 @@ export async function searchPlacesWithBias(
 }
 
 export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResult | null> {
-  const key = getMapsKey();
-  if (!key) return null;
   const cacheKey = `details:${placeId}`;
   const cachedEntry = cacheGetEntry(detailsCache, cacheKey, 600000);
   if (cachedEntry) return cachedEntry.payload;
   return withInflight(detailsInflight, cacheKey, async () => {
     try {
+    const proxied = await fetchGooglePlacesProxy('details', { placeId }, 2600);
+    const proxiedPlace = normalizePlaceResult(proxied?.place, placeId);
+    if (proxiedPlace) {
+      cacheSet(detailsCache, cacheKey, proxiedPlace, DETAILS_CACHE_MAX);
+      return proxiedPlace;
+    }
+
+    const key = getMapsKey();
+    if (!key) return null;
     // Try Places API v1
     try {
       const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
@@ -336,23 +527,11 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
       });
       if (res.ok) {
         const r = await res.json();
-        const payload = {
-          placeId: r.id || placeId,
-          name: r.displayName?.text || 'Unknown',
-          address: r.formattedAddress,
-          location: r.location ? { lat: r.location.latitude, lng: r.location.longitude } : undefined,
-          rating: typeof r.rating === 'number' ? r.rating : undefined,
-          ratingCount: typeof r.userRatingCount === 'number' ? r.userRatingCount : undefined,
-          priceLevel: normalizeGooglePriceLevel(r.priceLevel),
-          types: Array.isArray(r.types) ? r.types : undefined,
-          openNow: typeof r.currentOpeningHours?.openNow === 'boolean' ? r.currentOpeningHours.openNow : undefined,
-          reviews: normalizeGoogleReviews(r.reviews),
-          hours: Array.isArray(r.currentOpeningHours?.weekdayDescriptions)
-            ? r.currentOpeningHours.weekdayDescriptions.filter((item: any) => typeof item === 'string' && item.trim())
-            : undefined,
-        };
-        cacheSet(detailsCache, cacheKey, payload);
-        return payload;
+        const payload = normalizePlaceResult(r, placeId);
+        if (payload) {
+          cacheSet(detailsCache, cacheKey, payload, DETAILS_CACHE_MAX);
+          return payload;
+        }
       }
     } catch {}
 
@@ -361,23 +540,9 @@ export async function getPlaceDetails(placeId: string): Promise<PlaceSearchResul
     const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${id}&fields=${fields}&key=${key}&language=en`;
     const json = await fetchJson(url);
     if (!json || !json.result) return null;
-    const r = json.result;
-    const payload = {
-      placeId: placeId,
-      name: r.name,
-      address: r.formatted_address,
-      location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
-      rating: typeof r.rating === 'number' ? r.rating : undefined,
-      ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
-      priceLevel: normalizeGooglePriceLevel(r.price_level),
-      types: Array.isArray(r.types) ? r.types : undefined,
-      openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
-      reviews: normalizeGoogleReviews(r.reviews),
-      hours: Array.isArray(r.opening_hours?.weekday_text)
-        ? r.opening_hours.weekday_text.filter((item: any) => typeof item === 'string' && item.trim())
-        : undefined,
-    };
-      cacheSet(detailsCache, cacheKey, payload);
+    const payload = normalizePlaceResult(json.result, placeId);
+    if (!payload) return null;
+      cacheSet(detailsCache, cacheKey, payload, DETAILS_CACHE_MAX);
       return payload;
     } catch (e) {
       console.warn('getPlaceDetails error', e);
@@ -392,13 +557,24 @@ export async function searchPlacesNearby(
   radius = 1500,
   intent: 'study' | 'general' = 'study',
 ): Promise<PlaceSearchResult[]> {
-  const key = getMapsKey();
-  if (!key) return [];
   const cacheKey = `nearby:${lat.toFixed(3)}:${lng.toFixed(3)}:${radius}:${intent}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
   if (cached) return cached;
   return withInflight(searchInflight, cacheKey, async () => {
     try {
+    const proxied = await fetchGooglePlacesProxy(
+      'nearby',
+      { lat, lng, radius, intent },
+      2600,
+    );
+    const proxiedPlaces = normalizePlaceResults(proxied?.places, 20);
+    if (proxiedPlaces.length) {
+      cacheSet(searchCache, cacheKey, proxiedPlaces, SEARCH_CACHE_MAX);
+      return proxiedPlaces;
+    }
+
+    const key = getMapsKey();
+    if (!key) return [];
     try {
       const includedTypes = intent === 'study'
         ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
@@ -429,18 +605,8 @@ export async function searchPlacesNearby(
         throw new Error(message);
       }
       const places = Array.isArray(json?.places) ? json.places : [];
-      const payload = places.map((p: any) => ({
-        placeId: p.id,
-        name: p.displayName?.text || 'Unknown',
-        address: p.formattedAddress,
-        location: p.location ? { lat: p.location.latitude, lng: p.location.longitude } : undefined,
-        rating: typeof p.rating === 'number' ? p.rating : undefined,
-        ratingCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : undefined,
-        priceLevel: normalizeGooglePriceLevel(p.priceLevel),
-        openNow: typeof p.currentOpeningHours?.openNow === 'boolean' ? p.currentOpeningHours.openNow : undefined,
-        types: Array.isArray(p.types) ? p.types : undefined,
-      }));
-      cacheSet(searchCache, cacheKey, payload);
+      const payload = normalizePlaceResults(places, 20);
+      cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
       return payload;
     } catch {}
 
@@ -448,18 +614,8 @@ export async function searchPlacesNearby(
     const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radius}${keyword}&key=${key}&language=en`;
     const json = await fetchJson(url);
     if (!json || !Array.isArray(json.results)) return [];
-    const payload = json.results.slice(0, 20).map((r: any) => ({
-      placeId: r.place_id,
-      name: r.name,
-      address: r.vicinity || r.formatted_address,
-      location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
-      rating: typeof r.rating === 'number' ? r.rating : undefined,
-      ratingCount: typeof r.user_ratings_total === 'number' ? r.user_ratings_total : undefined,
-      priceLevel: normalizeGooglePriceLevel(r.price_level),
-      openNow: typeof r.opening_hours?.open_now === 'boolean' ? r.opening_hours.open_now : undefined,
-      types: Array.isArray(r.types) ? r.types : undefined,
-    }));
-      cacheSet(searchCache, cacheKey, payload);
+    const payload = normalizePlaceResults(json.results, 20);
+      cacheSet(searchCache, cacheKey, payload, SEARCH_CACHE_MAX);
       return payload;
     } catch (e) {
       console.warn('searchPlacesNearby error', e);
@@ -469,14 +625,31 @@ export async function searchPlacesNearby(
 }
 
 export async function searchLocations(query: string, kind: 'campus' | 'city', limit = 8, bias?: { lat: number; lng: number }): Promise<PlaceSearchResult[]> {
-  const key = getMapsKey();
-  if (!key || !query.trim()) return [];
+  if (!query.trim()) return [];
   const biasKey = bias ? `${bias.lat.toFixed(3)}:${bias.lng.toFixed(3)}` : 'none';
   const cacheKey = `locations:${kind}:${query}:${limit}:${biasKey}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
   if (cached) return cached;
   return withInflight(searchInflight, cacheKey, async () => {
     try {
+    const proxied = await fetchGooglePlacesProxy(
+      'search_locations',
+      {
+        query,
+        kind,
+        limit,
+        ...(bias ? { lat: bias.lat, lng: bias.lng } : {}),
+      },
+      2600,
+    );
+    const proxiedPlaces = normalizePlaceResults(proxied?.places, limit);
+    if (proxiedPlaces.length) {
+      cacheSet(searchCache, cacheKey, proxiedPlaces, SEARCH_CACHE_MAX);
+      return proxiedPlaces;
+    }
+
+    const key = getMapsKey();
+    if (!key) return [];
     const baseQuery = kind === 'campus' ? `${query} university college` : query;
     const q = encodeURIComponent(baseQuery);
     const type = kind === 'campus' ? 'university' : 'locality';
@@ -484,20 +657,15 @@ export async function searchLocations(query: string, kind: 'campus' | 'city', li
     const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${q}&type=${type}${locationBias}&key=${key}&language=en`;
     const json = await fetchJson(url);
     if (!json || !Array.isArray(json.results)) return [];
-    const payload = json.results.slice(0, limit * 2).map((r: any) => ({
-      placeId: r.place_id,
-      name: r.name,
-      address: r.formatted_address || r.vicinity,
-      location: r.geometry?.location ? { lat: r.geometry.location.lat, lng: r.geometry.location.lng } : undefined,
-    }));
+    const payload = normalizePlaceResults(json.results, limit * 2);
     const seen = new Set<string>();
-    const deduped = payload.filter((r: any) => {
-      const key = (r?.name || '').trim().toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
+    const deduped = payload.filter((result: PlaceSearchResult) => {
+      const dedupeKey = result.name.trim().toLowerCase();
+      if (!dedupeKey || seen.has(dedupeKey)) return false;
+      seen.add(dedupeKey);
       return true;
     }).slice(0, limit);
-      cacheSet(searchCache, cacheKey, deduped);
+      cacheSet(searchCache, cacheKey, deduped, SEARCH_CACHE_MAX);
       return deduped;
     } catch (e) {
       console.warn('searchLocations error', e);

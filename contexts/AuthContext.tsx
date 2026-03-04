@@ -80,6 +80,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const campus = data?.campus || (data?.campusType === 'campus' ? data?.campusOrCity : undefined);
     return { city, campus, campusOrCity: data?.campusOrCity, campusType: data?.campusType };
   };
+  const buildPasswordResetTelemetry = (email: string) => {
+    const normalized = String(email || '').trim().toLowerCase();
+    const domain = normalized.includes('@') ? normalized.split('@')[1] || '' : '';
+    return {
+      email_present: Boolean(normalized),
+      email_domain: domain || undefined,
+    };
+  };
 
   // initialize firebase auth listener when possible
   React.useEffect(() => {
@@ -553,12 +561,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function resetPassword(email: string) {
     if (!email) throw new Error('Email required');
+    const telemetry = buildPasswordResetTelemetry(email);
     if (!isFirebaseConfigured()) {
-      await logEvent('password_reset_requested_local', undefined, { email });
+      await logEvent('password_reset_requested_local', undefined, telemetry);
       return;
     }
     await fbSendPasswordResetEmail(email);
-    await logEvent('password_reset_requested', undefined, { email });
+    await logEvent('password_reset_requested', undefined, telemetry);
   }
 
   async function refreshUser() {

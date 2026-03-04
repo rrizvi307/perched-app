@@ -63,6 +63,11 @@ export type AnalyticsEvent =
   | 'feed_viewed'
   | 'feed_refreshed'
   | 'feed_scrolled'
+  | 'screen_viewed'
+  | 'timing_recorded'
+  | 'revenue_tracked'
+  | 'engagement_tracked'
+  | 'premium_converted'
 
   // Engagement
   | 'app_opened'
@@ -276,8 +281,8 @@ export function resetAnalytics() {
  * Track screen view
  */
 export function trackScreen(screenName: string, properties?: AnalyticsProperties) {
-  track('app_opened' as AnalyticsEvent, {
-    screen: screenName,
+  track('screen_viewed', {
+    screen_name: screenName,
     ...properties,
   });
 }
@@ -291,7 +296,7 @@ export function trackTiming(
   timeMs: number,
   label?: string
 ) {
-  track('app_opened' as AnalyticsEvent, {
+  track('timing_recorded', {
     timing_category: category,
     timing_variable: variable,
     timing_ms: timeMs,
@@ -373,11 +378,10 @@ export function trackRevenue(
   currency: string = 'USD',
   properties?: AnalyticsProperties
 ) {
-  track('app_opened' as AnalyticsEvent, {
+  track('revenue_tracked', {
     ...properties,
     revenue,
     currency,
-    event_type: 'revenue',
   });
 }
 
@@ -395,7 +399,7 @@ export function trackOnboardingStep(
 
 // Helper: Track engagement metrics
 export function trackEngagement(type: 'daily' | 'weekly' | 'monthly') {
-  track('app_opened', {
+  track('engagement_tracked', {
     engagement_type: type,
     session_duration: getSessionDuration(),
   });
@@ -415,7 +419,7 @@ export async function trackSpotViewed(spotId: string) {
 
 export async function trackPremiumConversion(tier: string) {
   const payload = { tier };
-  track('app_opened', { ...payload, event_type: 'premium_conversion' });
+  track('premium_converted', payload);
   await logNativeFirebaseEvent('premium_conversion', payload);
 }
 

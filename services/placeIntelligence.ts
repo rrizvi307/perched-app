@@ -143,6 +143,11 @@ const INTEL_TELEMETRY_THROTTLE_MS = 20 * 60 * 1000;
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 const REVIEW_NLP_TTL_MS = 24 * 60 * 60 * 1000;
 const EXTERNAL_PROVIDER_COUNT = 3;
+const INTELLIGENCE_CACHE_MAX = 160;
+const PROXY_SIGNAL_CACHE_MAX = 160;
+const WEATHER_SIGNAL_CACHE_MAX = 64;
+const REVIEW_NLP_CACHE_MAX = 96;
+const TELEMETRY_THROTTLE_MAX = 400;
 const intelligenceCache = new Map<string, { ts: number; payload: PlaceIntelligence }>();
 type ProxyPlacePayload = {
   externalSignals: ExternalPlaceSignal[];
@@ -156,6 +161,36 @@ const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
 const reviewNlpCache = new Map<string, { ts: number; payload: ReviewNLPResult | null }>();
 const reviewNlpInflight = new Map<string, Promise<ReviewNLPResult | null>>();
 const telemetryThrottle = new Map<string, number>();
+
+function touchMapEntry<T>(map: Map<string, T>, key: string, value: T) {
+  map.delete(key);
+  map.set(key, value);
+}
+
+function pruneMap<T>(map: Map<string, T>, maxEntries: number) {
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value;
+    if (!oldestKey) break;
+    map.delete(oldestKey);
+  }
+}
+
+function getFreshCacheEntry<T extends { ts: number }>(map: Map<string, T>, key: string, ttlMs: number) {
+  const cached = map.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.ts >= ttlMs) {
+    map.delete(key);
+    return null;
+  }
+  touchMapEntry(map, key, cached);
+  return cached;
+}
+
+function setBoundedMapEntry<T>(map: Map<string, T>, key: string, value: T, maxEntries: number) {
+  map.delete(key);
+  map.set(key, value);
+  pruneMap(map, maxEntries);
+}
 
 const POSITIVE_WORK_TAG_TOKENS = [
   'wifi',
@@ -959,8 +994,8 @@ async function getReviewNlpSignals(
       .join('|')
   );
   const cacheKey = `${input.placeId}:${reviewKey}`;
-  const cached = reviewNlpCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < REVIEW_NLP_TTL_MS) {
+  const cached = getFreshCacheEntry(reviewNlpCache, cacheKey, REVIEW_NLP_TTL_MS);
+  if (cached) {
     return cached.payload;
   }
 
@@ -989,7 +1024,7 @@ async function getReviewNlpSignals(
       }
     }
 
-    reviewNlpCache.set(cacheKey, { ts: Date.now(), payload });
+    setBoundedMapEntry(reviewNlpCache, cacheKey, { ts: Date.now(), payload }, REVIEW_NLP_CACHE_MAX);
     return payload;
   });
 }
@@ -1088,8 +1123,8 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlac
   const endpoint = getPlaceSignalEndpoint();
   if (!endpoint) return { externalSignals: [], googleSnapshot: null };
   const cacheKey = `${input.placeId || ''}:${input.placeName}:${input.location.lat.toFixed(3)}:${input.location.lng.toFixed(3)}`;
-  const cached = proxySignalCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < INTELLIGENCE_TTL_MS) {
+  const cached = getFreshCacheEntry(proxySignalCache, cacheKey, INTELLIGENCE_TTL_MS);
+  if (cached) {
     return cached.payload;
   }
   return withInflight(proxyInflight, cacheKey, async () => {
@@ -1115,7 +1150,7 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlac
       externalSignals: normalizeExternalSignals(payload?.externalSignals),
       googleSnapshot: normalizeGoogleProxySnapshot(payload?.googleSnapshot),
     };
-    proxySignalCache.set(cacheKey, { ts: Date.now(), payload: next });
+    setBoundedMapEntry(proxySignalCache, cacheKey, { ts: Date.now(), payload: next }, PROXY_SIGNAL_CACHE_MAX);
     return next;
   });
 }
@@ -1128,8 +1163,8 @@ async function getWeatherSignals(input: BuildIntelligenceInput): Promise<Context
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
 
   const cacheKey = `weather:${lat.toFixed(2)}:${lng.toFixed(2)}`;
-  const cached = weatherSignalCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+  const cached = getFreshCacheEntry(weatherSignalCache, cacheKey, WEATHER_TTL_MS);
+  if (cached) {
     return cached.payload;
   }
 
@@ -1150,7 +1185,7 @@ async function getWeatherSignals(input: BuildIntelligenceInput): Promise<Context
     const condition = classifyWeatherCondition(code, precipitation);
     const impact = toWeatherImpact(condition);
     if (condition === 'unknown') {
-      weatherSignalCache.set(cacheKey, { ts: Date.now(), payload: [] });
+      setBoundedMapEntry(weatherSignalCache, cacheKey, { ts: Date.now(), payload: [] }, WEATHER_SIGNAL_CACHE_MAX);
       return [];
     }
 
@@ -1162,7 +1197,7 @@ async function getWeatherSignals(input: BuildIntelligenceInput): Promise<Context
       temperatureC: temperature,
       precipitationMm: precipitation,
     }];
-    weatherSignalCache.set(cacheKey, { ts: Date.now(), payload: next });
+    setBoundedMapEntry(weatherSignalCache, cacheKey, { ts: Date.now(), payload: next }, WEATHER_SIGNAL_CACHE_MAX);
     return next;
   });
 }
@@ -1452,7 +1487,7 @@ async function emitIntelligenceTelemetry(
   const lastWrite = telemetryThrottle.get(placeKey) || 0;
   if (Date.now() - lastWrite < INTEL_TELEMETRY_THROTTLE_MS) return;
 
-  telemetryThrottle.set(placeKey, Date.now());
+  setBoundedMapEntry(telemetryThrottle, placeKey, Date.now(), TELEMETRY_THROTTLE_MAX);
 
   try {
     const { ensureFirebase } = await import('./firebaseClient');
@@ -1535,8 +1570,8 @@ function deriveUseCases(input: {
 
 async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promise<PlaceIntelligence> {
   const cacheKey = buildInputCacheKey(input);
-  const cached = intelligenceCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < INTELLIGENCE_TTL_MS) return cached.payload;
+  const cached = getFreshCacheEntry(intelligenceCache, cacheKey, INTELLIGENCE_TTL_MS);
+  if (cached) return cached.payload;
 
   const checkins = Array.isArray(input.checkins) ? input.checkins : [];
   // Combine explicit aggregate votes with inferred votes from check-ins to avoid
@@ -1964,7 +1999,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     generatedAt: Date.now(),
   };
 
-  intelligenceCache.set(cacheKey, { ts: Date.now(), payload });
+  setBoundedMapEntry(intelligenceCache, cacheKey, { ts: Date.now(), payload }, INTELLIGENCE_CACHE_MAX);
   void emitIntelligenceTelemetry(cacheKey, input, payload, checkins);
   return payload;
 }
