@@ -289,15 +289,16 @@ async function resolveUsers(db: admin.firestore.Firestore): Promise<ResolvedUser
   const users: ResolvedUser[] = [];
 
   for (const candidate of TARGET_USERS) {
-    const snap = await db.collection('users').where('email', '==', candidate.email).limit(1).get();
+    const snap = await db.collection('userPrivate').where('email', '==', candidate.email).limit(1).get();
     if (!snap.empty) {
       const doc = snap.docs[0];
-      const data = doc.data() || {};
+      const publicDoc = await db.collection('publicProfiles').doc(doc.id).get();
+      const data = publicDoc.exists ? (publicDoc.data() || {}) : {};
       users.push({
         id: doc.id,
-        name: String(data.displayName || data.name || candidate.fallbackName),
-        handle: String(data.username || data.userHandle || candidate.fallbackHandle),
-        photoUrl: String(data.photoURL || data.userPhotoUrl || candidate.fallbackPhotoUrl),
+        name: String(data.name || candidate.fallbackName),
+        handle: String(data.handle || candidate.fallbackHandle),
+        photoUrl: String(data.photoUrl || data.avatarUrl || candidate.fallbackPhotoUrl),
       });
       continue;
     }

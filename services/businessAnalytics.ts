@@ -219,14 +219,12 @@ export async function getBusinessAnalytics(
 
     // Demographics
     const campusCounts = new Map<string, number>();
-    let totalAge = 0;
-    let ageCount = 0;
 
     // Get user data for demographics
     const userIds = Array.from(new Set(checkins.map(c => c.userId)));
     const userDataPromises = userIds.slice(0, 100).map(async uid => {
       try {
-        const userDoc = await db.collection('users').doc(uid).get();
+        const userDoc = await db.collection('publicProfiles').doc(uid).get();
         return userDoc.data();
       } catch {
         return null;
@@ -239,10 +237,6 @@ export async function getBusinessAnalytics(
       if (user?.campus) {
         campusCounts.set(user.campus, (campusCounts.get(user.campus) || 0) + 1);
       }
-      if (user?.age) {
-        totalAge += user.age;
-        ageCount++;
-      }
     });
 
     const topCampuses = Array.from(campusCounts.entries())
@@ -251,7 +245,7 @@ export async function getBusinessAnalytics(
       .slice(0, 5);
 
     const demographics = {
-      avgAge: ageCount > 0 ? totalAge / ageCount : undefined,
+      avgAge: undefined,
       topCampuses,
       newVsReturning: {
         new: uniqueVisitors - repeatVisitors,

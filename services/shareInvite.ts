@@ -256,8 +256,8 @@ export async function trackReferralSignup(
   try {
     const db = fb.firestore();
 
-    // Store referral info on the new user's profile
-    await db.collection('users').doc(newUserId).set({
+    // Store referral info on the new user's private account doc
+    await db.collection('userPrivate').doc(newUserId).set({
       referredBy: normalizedReferralCode,
       referredAt: fb.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -303,23 +303,18 @@ export async function getInviteStats(userId: string): Promise<InviteStats> {
 
   try {
     const db = fb.firestore();
-    const referralCode = generateReferralCode(userId);
+    const [processedReferralsSnap, rewardsSnap] = await Promise.all([
+      db.collection('referrals').where('referrerId', '==', userId).get().catch(() => null),
+      db.collection('referralRewards')
+        .where('referrerId', '==', userId)
+        .where('type', '==', 'referrer_reward')
+        .where('status', '==', 'claimed')
+        .get()
+        .catch(() => null),
+    ]);
 
-    // Query users who signed up with this referral code
-    const referralsSnap = await db.collection('users')
-      .where('referredBy', '==', referralCode)
-      .get();
-
-    const totalInvites = referralsSnap.size;
-    let acceptedInvites = 0;
-
-    // Count accepted invites (users who completed onboarding)
-    referralsSnap.forEach((doc: any) => {
-      const data = doc.data();
-      if (data.onboardingComplete) {
-        acceptedInvites++;
-      }
-    });
+    const totalInvites = processedReferralsSnap?.size || 0;
+    const acceptedInvites = rewardsSnap?.size || 0;
 
     // Each accepted invite = 1 week of premium
     const premiumWeeksEarned = acceptedInvites;

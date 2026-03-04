@@ -391,11 +391,11 @@ export async function resolveReport(
         deletedReason: 'reported',
       });
     } else if (action === 'ban_user' && report.reportedUserId) {
-      await db.collection('users').doc(report.reportedUserId).update({
+      await db.collection('userPrivate').doc(report.reportedUserId).set({
         banned: true,
         bannedAt: Date.now(),
         bannedReason: report.reason,
-      });
+      }, { merge: true });
     } else if (action === 'warn_user' && report.reportedUserId) {
       await db.collection('userWarnings').add({
         userId: report.reportedUserId,

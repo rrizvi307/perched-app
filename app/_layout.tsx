@@ -18,6 +18,7 @@ import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
+import { initFirebaseAppCheck, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
 import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken } from '@/services/firebaseClient';
@@ -37,6 +38,7 @@ export default function RootLayout() {
     try {
       initErrorReporting();
       initAnalytics();
+      void initFirebaseAppCheck();
     } finally {
       void endPerfMark(initMarkId, true);
     }
@@ -64,7 +66,6 @@ export default function RootLayout() {
 function InnerApp() {
   const { user } = useAuth();
   const colorScheme = useColorScheme();
-  const mapsKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY;
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
   const notificationsInitializedForUser = useRef<string | null>(null);
@@ -95,12 +96,14 @@ function InnerApp() {
     },
   };
 
-  if (mapsKey && !(global as any).GOOGLE_MAPS_API_KEY) {
-    (global as any).GOOGLE_MAPS_API_KEY = mapsKey;
-  }
   if (firebaseConfig && !(global as any).FIREBASE_CONFIG) {
     (global as any).FIREBASE_CONFIG = firebaseConfig;
   }
+
+  useEffect(() => {
+    if (!user?.id || isDemoMode()) return;
+    void refreshFirebaseAppCheckToken(true);
+  }, [user?.id]);
 
   useEffect(() => {
     let canceled = false;
@@ -264,6 +267,7 @@ function InnerApp() {
       const sub = AppState.addEventListener('change', async (next) => {
         if (appState.current.match(/inactive|background/) && next === 'active') {
           try {
+            await refreshFirebaseAppCheckToken();
             const res = await syncPendingCheckins(5);
             if (res.synced > 0) {
               showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');

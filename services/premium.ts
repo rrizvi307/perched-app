@@ -78,6 +78,15 @@ type RevenueCatModule = {
 let revenueCat: RevenueCatModule | null | undefined;
 let purchasesInitialized = false;
 
+async function loadPrivateAccountData(db: any, userId: string) {
+  const privateDoc = await db.collection('userPrivate').doc(userId).get();
+  const legacyDoc = privateDoc.exists ? null : await db.collection('users').doc(userId).get();
+  return {
+    ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
+    ...(privateDoc.exists ? privateDoc.data() || {} : {}),
+  };
+}
+
 function getRevenueCatModule(): RevenueCatModule | null {
   if (revenueCat !== undefined) return revenueCat;
   if (!isPremiumPurchasesEnabled()) {
@@ -140,8 +149,7 @@ export async function getPremiumStatus(userId: string): Promise<PremiumStatus> {
     const fb = ensureFirebase();
     if (fb) {
       const db = fb.firestore();
-      const doc = await db.collection('users').doc(userId).get();
-      const data = doc.data();
+      const data = await loadPrivateAccountData(db, userId);
 
       if (data?.premiumStatus) {
         const status: PremiumStatus = {
@@ -328,7 +336,7 @@ export async function grantReferralPremium(userId: string, weeks: number): Promi
     const fb = ensureFirebase();
     if (fb) {
       const db = fb.firestore();
-      await db.collection('users').doc(userId).set({
+      await db.collection('userPrivate').doc(userId).set({
         premiumStatus: {
           ...newStatus,
           updatedAt: fb.firestore.FieldValue.serverTimestamp(),
@@ -379,7 +387,7 @@ export async function grantPurchasedPremium(
     const fb = ensureFirebase();
     if (fb) {
       const db = fb.firestore();
-      await db.collection('users').doc(userId).set({
+      await db.collection('userPrivate').doc(userId).set({
         premiumStatus: {
           ...newStatus,
           updatedAt: fb.firestore.FieldValue.serverTimestamp(),
@@ -415,7 +423,7 @@ export async function cancelPremiumSubscription(userId: string): Promise<void> {
     const fb = ensureFirebase();
     if (fb) {
       const db = fb.firestore();
-      await db.collection('users').doc(userId).set({
+      await db.collection('userPrivate').doc(userId).set({
         premiumStatus: {
           ...updatedStatus,
           updatedAt: fb.firestore.FieldValue.serverTimestamp(),

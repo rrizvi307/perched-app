@@ -103,8 +103,35 @@ const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
 const CHECKINS_CACHE_MAX = 120;
 const USERS_BY_ID_CACHE_MAX = 160;
 const USER_FRIENDS_CACHE_MAX = 300;
+const USERS_COLLECTION = 'users';
+const PUBLIC_PROFILES_COLLECTION = 'publicProfiles';
+const SOCIAL_GRAPH_COLLECTION = 'socialGraph';
 const USER_PRIVATE_COLLECTION = 'userPrivate';
+const PUSH_TOKENS_COLLECTION = 'pushTokens';
+const PUBLIC_PROFILE_FIELDS = [
+  'name',
+  'nameLower',
+  'city',
+  'campus',
+  'campusOrCity',
+  'campusType',
+  'handle',
+  'coffeeIntents',
+  'ambiancePreference',
+  'photoUrl',
+  'avatarUrl',
+  'referralCode',
+] as const;
+const SOCIAL_GRAPH_FIELDS = ['friends', 'closeFriends', 'blocked'] as const;
 const PRIVATE_USER_PROFILE_FIELDS = ['email', 'phone', 'phoneNormalized', 'pushToken'];
+const LEGACY_PUBLIC_USERS_FIELDS = [...PUBLIC_PROFILE_FIELDS, ...SOCIAL_GRAPH_FIELDS, ...PRIVATE_USER_PROFILE_FIELDS];
+
+type SplitUserFields = {
+  publicProfileFields: Record<string, any>;
+  privateFields: Record<string, any>;
+  socialGraphFields: Record<string, any>;
+  accountFields: Record<string, any>;
+};
 
 function removeUndefinedFields(input: Record<string, any>) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
@@ -120,17 +147,27 @@ function stripPrivateUserFields<T extends Record<string, any> | null | undefined
   return next;
 }
 
-function splitPublicAndPrivateUserFields(fields: Record<string, any> | null | undefined) {
-  const publicFields: Record<string, any> = {};
+function splitUserDocumentFields(fields: Record<string, any> | null | undefined): SplitUserFields {
+  const publicProfileFields: Record<string, any> = {};
   const privateFields: Record<string, any> = {};
+  const socialGraphFields: Record<string, any> = {};
+  const accountFields: Record<string, any> = {};
   Object.entries(fields || {}).forEach(([key, value]) => {
     if (PRIVATE_USER_PROFILE_FIELDS.includes(key)) {
       privateFields[key] = value;
       return;
     }
-    publicFields[key] = value;
+    if ((SOCIAL_GRAPH_FIELDS as readonly string[]).includes(key)) {
+      socialGraphFields[key] = value;
+      return;
+    }
+    if ((PUBLIC_PROFILE_FIELDS as readonly string[]).includes(key)) {
+      publicProfileFields[key] = value;
+      return;
+    }
+    accountFields[key] = value;
   });
-  return { publicFields, privateFields };
+  return { publicProfileFields, privateFields, socialGraphFields, accountFields };
 }
 
 async function writeUserPrivateProfile(
@@ -150,10 +187,90 @@ async function writeUserPrivateProfile(
   await db.collection(USER_PRIVATE_COLLECTION).doc(userId).set(payload, { merge: true });
 }
 
+async function writePublicProfile(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function writeSocialGraph(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...(Object.prototype.hasOwnProperty.call(fields, 'friends') ? { friends: normalizeStringArray(fields.friends) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(fields, 'closeFriends') ? { closeFriends: normalizeStringArray(fields.closeFriends) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(fields, 'blocked') ? { blocked: normalizeStringArray(fields.blocked) } : {}),
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function writeUserAccountDoc(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    migrationVersion: 2,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => !['createdAt', 'updatedAt', 'migrationVersion'].includes(key));
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(USERS_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+function buildLegacyUsersCleanupPayload(fb: any) {
+  return LEGACY_PUBLIC_USERS_FIELDS.reduce((acc, field) => {
+    acc[field] = fb.firestore.FieldValue.delete();
+    return acc;
+  }, {} as Record<string, any>);
+}
+
 async function getSanitizedUserById(db: any, userId: string) {
-  const doc = await db.collection('users').doc(userId).get();
+  const doc = await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
   if (!doc.exists) return null;
   return stripPrivateUserFields(doc.data() || {}, doc.id);
+}
+
+async function getSocialGraphDoc(db: any, userId: string) {
+  const doc = await db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).get();
+  const data = doc.exists ? (doc.data() || {}) : {};
+  return {
+    friends: normalizeStringArray(data.friends),
+    closeFriends: normalizeStringArray(data.closeFriends),
+    blocked: normalizeStringArray(data.blocked),
+  };
+}
+
+async function getUserPrivateDoc(db: any, userId: string) {
+  const privateDoc = await db.collection(USER_PRIVATE_COLLECTION).doc(userId).get();
+  const legacyDoc = privateDoc.exists ? null : await db.collection(USERS_COLLECTION).doc(userId).get();
+  return {
+    ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
+    ...(privateDoc.exists ? privateDoc.data() || {} : {}),
+  };
 }
 
 function getCachedValue<T>(
@@ -871,7 +988,6 @@ export async function createCheckinRemote({
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
 
-  const db = fb.firestore();
   const now = Date.now();
   const createdAt = fb.firestore.Timestamp.fromMillis(now);
   const doc = {
@@ -903,6 +1019,56 @@ export async function createCheckinRemote({
     moderation: { status: 'approved' },
   };
 
+  if (typeof (fb as any).functions === 'function') {
+    try {
+      const callable = getRegionCallable(fb, 'createCheckinSecure');
+      const response = await callable({
+        clientId: doc.clientId,
+        userName: doc.userName,
+        userHandle: doc.userHandle,
+        userPhotoUrl: doc.userPhotoUrl,
+        visibility: doc.visibility,
+        spotName: doc.spotName,
+        spotPlaceId: doc.spotPlaceId,
+        spotLatLng: doc.spotLatLng,
+        caption: doc.caption,
+        tags: doc.tags,
+        visitIntent: doc.visitIntent,
+        photoTags: doc.photoTags,
+        ambiance: doc.ambiance,
+        photoUrl: doc.photoUrl,
+        photoPath: doc.photoPath,
+        photoPending: doc.photoPending,
+        campusOrCity: doc.campusOrCity,
+        city: doc.city,
+        campus: doc.campus,
+      });
+      const created = response?.data?.checkin;
+      if (!created?.id) {
+        throw new Error('Remote check-in creation failed.');
+      }
+      invalidateCheckinsCache();
+      void invalidateCacheOnCheckinCreate(created.id, resolveSpotId(created), userId || '');
+      void linkCheckinOutcomeTelemetry(created.id, created);
+      return {
+        ...doc,
+        ...created,
+      };
+    } catch (error: any) {
+      const code = String(error?.code || '').toLowerCase();
+      if (code.includes('resource-exhausted')) {
+        throw new Error('Posting too quickly. Wait a moment and retry.');
+      }
+      if (code.includes('permission-denied')) {
+        throw new Error('Account is not allowed to post check-ins yet.');
+      }
+      if (!__DEV__) {
+        throw new Error('Check-in service unavailable. Deploy Cloud Functions and retry.');
+      }
+    }
+  }
+
+  const db = fb.firestore();
   const ref = await db.collection('checkins').add(doc);
   invalidateCheckinsCache();
   void invalidateCacheOnCheckinCreate(ref.id, resolveSpotId(doc), userId || '');
@@ -1241,14 +1407,12 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
       allowedVisibility = ['public'];
       if (currentUserId) {
         try {
-          const targetUserDoc = await db.collection('users').doc(userId).get();
-          const targetUserData = targetUserDoc.data() || {};
-          const targetFriends = normalizeStringArray(targetUserData.friends);
-          const targetCloseFriends = normalizeStringArray(targetUserData.closeFriends);
-          if (targetFriends.includes(currentUserId)) {
+          const viewerGraph = await getSocialGraphDoc(db, currentUserId);
+          if (viewerGraph.friends.includes(userId)) {
             allowedVisibility.push('friends');
           }
-          if (targetCloseFriends.includes(currentUserId)) {
+          const access = await getProfileAccessSnapshot(userId);
+          if (access?.canSeeClose) {
             if (!allowedVisibility.includes('friends')) allowedVisibility.push('friends');
             allowedVisibility.push('close');
           }
@@ -1377,6 +1541,19 @@ async function callSocialGraphMutation(action: string, payload: Record<string, a
   const callable = getRegionCallable(fb, 'socialGraphMutation');
   const response = await callable({ action, ...payload });
   return response?.data || null;
+}
+
+async function getProfileAccessSnapshot(targetUserId: string) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function' || !targetUserId) return null;
+  try {
+    const callable = getRegionCallable(fb, 'getProfileAccessSnapshot');
+    const response = await callable({ targetUserId });
+    return response?.data || null;
+  } catch (error) {
+    devLog('getProfileAccessSnapshot failed', { targetUserId, error });
+    return null;
+  }
 }
 
 function getFunctionsRegion() {
@@ -1822,10 +1999,8 @@ export async function getUserFriends(userId: string) {
   }
   const db = fb.firestore();
   try {
-    const doc = await db.collection('users').doc(userId).get();
-    if (!doc.exists) return [];
-    const data = doc.data() || {};
-    return normalizeStringArray(data.friends);
+    const graph = await getSocialGraphDoc(db, userId);
+    return graph.friends;
   } catch (e) {
     return [];
   }
@@ -1836,10 +2011,8 @@ export async function getCloseFriends(userId: string) {
   if (!fb) return [];
   const db = fb.firestore();
   try {
-    const doc = await db.collection('users').doc(userId).get();
-    if (!doc.exists) return [];
-    const data = doc.data() || {};
-    return normalizeStringArray(data.closeFriends);
+    const graph = await getSocialGraphDoc(db, userId);
+    return graph.closeFriends;
   } catch (e) {
     return [];
   }
@@ -1874,16 +2047,17 @@ export async function unfollowUserRemote(currentUserId: string, targetUserId: st
 }
 
 export async function setCloseFriendRemote(currentUserId: string, targetUserId: string, makeClose: boolean) {
-  const fb = ensureFirebase();
-  if (!fb) return;
-  const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  if (makeClose) {
-    await ref.set({ closeFriends: fb.firestore.FieldValue.arrayUnion(targetUserId), friends: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
-  } else {
-    await ref.set({ closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
+  try {
+    const callableResult = await callSocialGraphMutation(makeClose ? 'set_close_friend' : 'remove_close_friend', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError(makeClose ? 'set this close friend' : 'remove this close friend', error);
   }
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  raiseSocialGraphServiceUnavailableError(makeClose ? 'set this close friend' : 'remove this close friend');
 }
 
 export async function createUserRemote({
@@ -1905,7 +2079,7 @@ export async function createUserRemote({
 
   const db = fb.firestore();
   const normalizedPhone = normalizePhone(phone || '');
-  const payload = removeUndefinedFields({
+  const publicPayload = removeUndefinedFields({
     name,
     nameLower: typeof name === 'string' ? name.toLowerCase() : null,
     city: city || null,
@@ -1916,9 +2090,9 @@ export async function createUserRemote({
     coffeeIntents: Array.isArray(coffeeIntents) ? coffeeIntents.slice(0, 3) : [],
     ambiancePreference: typeof ambiancePreference === 'string' ? ambiancePreference : null,
     photoUrl: photoUrl || null,
-    createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
-  await db.collection('users').doc(userId).set(payload, { merge: true });
+  await writePublicProfile(fb, db, userId, publicPayload, { isCreate: true });
+  await writeSocialGraph(fb, db, userId, { friends: [], closeFriends: [], blocked: [] }, { isCreate: true });
   await writeUserPrivateProfile(
     fb,
     db,
@@ -1930,6 +2104,7 @@ export async function createUserRemote({
     },
     { isCreate: true }
   );
+  await writeUserAccountDoc(fb, db, userId, {}, { isCreate: true });
   usersByIdCache.clear();
 }
 
@@ -1937,26 +2112,27 @@ export async function updateUserRemote(userId: string, fields: any) {
   const fb = ensureFirebase();
   if (!fb) return;
   const db = fb.firestore();
-  const { publicFields, privateFields } = splitPublicAndPrivateUserFields(fields);
+  const { publicProfileFields, privateFields, socialGraphFields, accountFields } = splitUserDocumentFields(fields);
   const normalizedPhone =
     Object.prototype.hasOwnProperty.call(privateFields, 'phone')
       ? normalizePhone(privateFields.phone || '') || null
       : privateFields.phoneNormalized;
-  const nameLower = typeof publicFields?.name === 'string' ? publicFields.name.toLowerCase() : undefined;
-  const payload = removeUndefinedFields({
-    ...publicFields,
-    nameLower: nameLower ?? fields?.nameLower,
-    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
-    email: fb.firestore.FieldValue.delete(),
-    phone: fb.firestore.FieldValue.delete(),
-    phoneNormalized: fb.firestore.FieldValue.delete(),
-    pushToken: fb.firestore.FieldValue.delete(),
+  const nameLower = typeof publicProfileFields?.name === 'string' ? publicProfileFields.name.toLowerCase() : undefined;
+  await writePublicProfile(fb, db, userId, {
+    ...publicProfileFields,
+    ...(nameLower !== undefined ? { nameLower } : {}),
   });
-  await db.collection('users').doc(userId).set(payload, { merge: true });
+  await writeSocialGraph(fb, db, userId, socialGraphFields);
   await writeUserPrivateProfile(fb, db, userId, {
     ...privateFields,
+    ...accountFields,
     ...(Object.prototype.hasOwnProperty.call(privateFields, 'phone') ? { phoneNormalized: normalizedPhone } : {}),
   });
+  await db.collection(USERS_COLLECTION).doc(userId).set({
+    ...buildLegacyUsersCleanupPayload(fb),
+    migrationVersion: 2,
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
   usersByIdCache.clear();
 }
 
@@ -2005,7 +2181,7 @@ export async function findUserByHandle(handle: string) {
     return users.find((u: any) => (u.handle || '').toLowerCase() === normalized) || null;
   }
   const db = fb.firestore();
-  const q = await db.collection('users').where('handle', '==', normalized).limit(1).get();
+  const q = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
   if (q.empty) return null;
   const doc = q.docs[0];
   return stripPrivateUserFields(doc.data() || {}, doc.id);
@@ -2036,7 +2212,7 @@ export async function searchUsers(query: string, limit = 10): Promise<any[]> {
 
   // Search by handle prefix
   try {
-    const handleSnap = await db.collection('users')
+    const handleSnap = await db.collection(PUBLIC_PROFILES_COLLECTION)
       .where('handle', '>=', prefix)
       .where('handle', '<', prefixEnd)
       .limit(limit)
@@ -2048,7 +2224,7 @@ export async function searchUsers(query: string, limit = 10): Promise<any[]> {
 
   // Search by nameLower prefix (if the field exists)
   try {
-    const nameSnap = await db.collection('users')
+    const nameSnap = await db.collection(PUBLIC_PROFILES_COLLECTION)
       .where('nameLower', '>=', prefix)
       .where('nameLower', '<', prefixEnd)
       .limit(limit)
@@ -2075,7 +2251,7 @@ export async function getUsersByIds(userIds: string[]) {
   const items: any[] = [];
   for (let i = 0; i < userIds.length; i += 10) {
     const batch = userIds.slice(i, i + 10);
-    const snap = await db.collection('users').where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
+    const snap = await db.collection(PUBLIC_PROFILES_COLLECTION).where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
     snap.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   }
   return items;
@@ -2090,8 +2266,8 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
   }
   const db = fb.firestore();
   const [snapCampus, snapLegacy] = await Promise.all([
-    db.collection('users').where('campus', '==', campusOrCity).limit(limit).get(),
-    db.collection('users').where('campusOrCity', '==', campusOrCity).limit(limit).get(),
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campus', '==', campusOrCity).limit(limit).get(),
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campusOrCity', '==', campusOrCity).limit(limit).get(),
   ]);
   const items: any[] = [];
   snapCampus.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
@@ -2312,10 +2488,8 @@ export async function getBlockedUsers(currentUserId: string) {
     return normalizeStringArray(map[currentUserId]);
   }
   const db = fb.firestore();
-  const doc = await db.collection('users').doc(currentUserId).get();
-  if (!doc.exists) return [];
-  const data = doc.data() || {};
-  return normalizeStringArray(data.blocked);
+  const graph = await getSocialGraphDoc(db, currentUserId);
+  return graph.blocked;
 }
 
 export async function savePushToken(userId: string, token: string) {
@@ -2327,7 +2501,7 @@ export async function savePushToken(userId: string, token: string) {
     return;
   }
   const db = fb.firestore();
-  await db.collection('pushTokens').doc(userId).set(
+  await db.collection(PUSH_TOKENS_COLLECTION).doc(userId).set(
     {
       userId,
       token,
@@ -2335,9 +2509,9 @@ export async function savePushToken(userId: string, token: string) {
     },
     { merge: true }
   );
-  // Legacy compatibility cleanup: remove token from public user profile doc.
-  await db.collection('users').doc(userId).set(
-    { pushToken: fb.firestore.FieldValue.delete(), updatedAt: fb.firestore.FieldValue.serverTimestamp() },
+  await writeUserPrivateProfile(fb, db, userId, { pushToken: token });
+  await db.collection(USERS_COLLECTION).doc(userId).set(
+    { pushToken: fb.firestore.FieldValue.delete(), updatedAt: fb.firestore.FieldValue.serverTimestamp(), migrationVersion: 2 },
     { merge: true }
   );
 }
@@ -2351,9 +2525,9 @@ export async function clearPushToken(userId: string) {
     return;
   }
   const db = fb.firestore();
-  await db.collection('pushTokens').doc(userId).delete().catch(() => {});
-  // Legacy compatibility cleanup: remove token from public user profile doc.
-  await db.collection('users').doc(userId).set({ pushToken: fb.firestore.FieldValue.delete() }, { merge: true });
+  await db.collection(PUSH_TOKENS_COLLECTION).doc(userId).delete().catch(() => {});
+  await writeUserPrivateProfile(fb, db, userId, { pushToken: fb.firestore.FieldValue.delete() });
+  await db.collection(USERS_COLLECTION).doc(userId).set({ pushToken: fb.firestore.FieldValue.delete(), migrationVersion: 2 }, { merge: true });
 }
 
 // Auth helpers
@@ -2525,14 +2699,11 @@ export async function deleteAccountAndData({ password }: { password?: string } =
   try {
     // Remove this user from friends lists (best effort).
     try {
-      const userDoc = await db.collection('users').doc(userId).get();
-      const friends = normalizeStringArray(userDoc.data()?.friends);
+      const socialGraph = await getSocialGraphDoc(db, userId);
+      const friends = socialGraph.friends;
       for (const friendId of friends) {
         try {
-          await db
-            .collection('users')
-            .doc(friendId)
-            .set({ friends: fb.firestore.FieldValue.arrayRemove(userId) }, { merge: true });
+          await callSocialGraphMutation('unfriend', { targetUserId: friendId });
         } catch {}
       }
     } catch {}
@@ -2567,7 +2738,13 @@ export async function deleteAccountAndData({ password }: { password?: string } =
 
     // Delete the user profile document last.
     try {
-      await db.collection('users').doc(userId).delete();
+      await Promise.allSettled([
+        db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).delete(),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).delete(),
+        db.collection(USER_PRIVATE_COLLECTION).doc(userId).delete(),
+        db.collection(PUSH_TOKENS_COLLECTION).doc(userId).delete(),
+        db.collection(USERS_COLLECTION).doc(userId).delete(),
+      ]);
     } catch {}
   } catch (e) {
     // Continue to account deletion; server-side cleanup can be handled separately if needed.

@@ -12,6 +12,12 @@ function pickEnv(...keys) {
 
 module.exports = ({ config }) => {
   const googleMapsApiKey = pickEnv("EXPO_PUBLIC_GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_API_KEY");
+  const enableClientProviderCalls = ["1", "true", "yes", "on"].includes(
+    pickEnv("EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS", "ENABLE_CLIENT_PROVIDER_CALLS").toLowerCase()
+  );
+  const enableGrowthPrograms = ["1", "true", "yes", "on"].includes(
+    pickEnv("EXPO_PUBLIC_ENABLE_GROWTH_PROGRAMS", "ENABLE_GROWTH_PROGRAMS").toLowerCase()
+  );
   const sentryDsn = pickEnv("EXPO_PUBLIC_SENTRY_DSN", "SENTRY_DSN");
   const env = pickEnv("EXPO_PUBLIC_ENV", "ENV") || "development";
   const segmentWriteKey = pickEnv("EXPO_PUBLIC_SEGMENT_WRITE_KEY", "SEGMENT_WRITE_KEY");
@@ -55,11 +61,13 @@ module.exports = ({ config }) => {
     },
     extra: {
       ...extra,
-      GOOGLE_MAPS_API_KEY: googleMapsApiKey || extra.GOOGLE_MAPS_API_KEY,
+      GOOGLE_MAPS_API_KEY: enableClientProviderCalls ? (googleMapsApiKey || extra.GOOGLE_MAPS_API_KEY) : "",
       FIREBASE_CONFIG: {
         ...baseFirebase,
         ...firebaseFromEnv,
       },
+      ENABLE_CLIENT_PROVIDER_CALLS: enableClientProviderCalls,
+      ENABLE_GROWTH_PROGRAMS: enableGrowthPrograms,
       SENTRY_DSN: sentryDsn || extra.SENTRY_DSN,
       ENV: env || extra.ENV,
       SEGMENT_WRITE_KEY: segmentWriteKey || extra.SEGMENT_WRITE_KEY,

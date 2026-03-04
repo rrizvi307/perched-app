@@ -82,8 +82,8 @@ export async function checkAmbassadorEligibility(userId: string): Promise<{
     const db = fb.firestore();
 
     // Get user stats
-    const userDoc = await db.collection('users').doc(userId).get();
-    const userData = userDoc.data();
+    const userStatsDoc = await db.collection('userStats').doc(userId).get();
+    const userData = userStatsDoc.data();
 
     // Get referrals count
     const referralsSnapshot = await db
@@ -104,7 +104,7 @@ export async function checkAmbassadorEligibility(userId: string): Promise<{
     const currentCheckins = checkinsSnapshot.size;
 
     // Get streak (from user data)
-    const currentStreak = userData?.currentStreak || 0;
+    const currentStreak = userData?.streakDays || 0;
 
     // Define requirements
     const requirements = {
@@ -362,7 +362,7 @@ export async function getCampusAmbassadors(
 
     const result = await Promise.all(
       topAmbassadors.map(async (amb: any, index: number) => {
-        const userDoc = await db.collection('users').doc(amb.userId).get();
+        const userDoc = await db.collection('publicProfiles').doc(amb.userId).get();
         const userData = userDoc.data();
 
         return {

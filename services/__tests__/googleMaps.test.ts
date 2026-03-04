@@ -23,6 +23,7 @@ describe('googleMaps transport', () => {
     jest.clearAllMocks();
     (global as any).fetch = jest.fn();
     (global as any).GOOGLE_MAPS_API_KEY = undefined;
+    process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'true';
     (Constants as any).expoConfig.extra = {
       FIREBASE_CONFIG: { projectId: 'perched-test' },
       FIREBASE_FUNCTIONS_REGION: 'us-central1',
@@ -38,6 +39,7 @@ describe('googleMaps transport', () => {
     delete (global as any).GOOGLE_MAPS_API_KEY;
     delete (global as any).GOOGLE_PLACES_ENDPOINT;
     delete (global as any).FIREBASE_APP_CHECK_TOKEN;
+    delete process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS;
   });
 
   it('prefers the backend proxy for authenticated place details', async () => {

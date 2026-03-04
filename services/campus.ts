@@ -267,8 +267,8 @@ export async function getCampusStats(campusId: string): Promise<CampusStats | nu
     const userIds = new Set<string>();
     await Promise.all(
       campusAliases.flatMap((alias) => ([
-        db.collection('users').where('campus', '==', alias).get(),
-        db.collection('users').where('campusOrCity', '==', alias).get(),
+        db.collection('publicProfiles').where('campus', '==', alias).get(),
+        db.collection('publicProfiles').where('campusOrCity', '==', alias).get(),
       ])).map(async (promise: Promise<any>) => {
         try {
           const snapshot = await promise;

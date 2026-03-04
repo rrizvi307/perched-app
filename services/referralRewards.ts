@@ -317,7 +317,7 @@ export async function getReferralLeaderboard(limit: number = 50): Promise<Array<
     // Get user info for each
     const leaderboard = await Promise.all(
       sorted.map(async ([userId, count], index) => {
-        const userDoc = await db.collection('users').doc(userId).get();
+        const userDoc = await db.collection('publicProfiles').doc(userId).get();
         const userData = userDoc.data();
 
         return {

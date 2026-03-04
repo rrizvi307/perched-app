@@ -38,6 +38,7 @@ function mkFetchResponse(payload: any, ok = true) {
 describe('buildPlaceIntelligence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'true';
     (global as any).PLACE_INTEL_ENDPOINT = 'https://intel.test/proxy';
     (global as any).FIREBASE_APP_CHECK_TOKEN = undefined;
     (global as any).GOOGLE_MAPS_API_KEY = undefined;
@@ -49,6 +50,7 @@ describe('buildPlaceIntelligence', () => {
     delete (global as any).PLACE_INTEL_ENDPOINT;
     delete (global as any).FIREBASE_APP_CHECK_TOKEN;
     delete (global as any).GOOGLE_MAPS_API_KEY;
+    delete process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS;
   });
 
   it('returns stable baseline intelligence with minimal input', async () => {

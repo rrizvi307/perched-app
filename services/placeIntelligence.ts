@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { toMillis } from '@/services/checkinUtils';
+import { getCurrentFirebaseAppCheckToken, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
 import { withErrorBoundary } from './errorBoundary';
 import { getPlaceDetails, type GooglePlaceReview } from './googleMaps';
 import { analyzeReviews, type ReviewNLPResult } from './nlpReviews';
@@ -1065,7 +1066,7 @@ async function getProxyAuthHeaders() {
     }
   } catch {}
 
-  const appCheckToken = (global as any)?.FIREBASE_APP_CHECK_TOKEN;
+  const appCheckToken = getCurrentFirebaseAppCheckToken() || await refreshFirebaseAppCheckToken();
   if (typeof appCheckToken === 'string' && appCheckToken.trim().length > 0) {
     headers['X-Firebase-AppCheck'] = appCheckToken.trim();
   }

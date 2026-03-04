@@ -5,8 +5,13 @@
  */
 
 import Constants from 'expo-constants';
+import { getCurrentFirebaseAppCheckToken, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
+import { isClientProviderCallsEnabled } from '@/services/runtimeFlags';
 
 export function getMapsKey() {
+  if (!isClientProviderCallsEnabled()) {
+    return '';
+  }
   return (
     (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string) ||
     (process.env.GOOGLE_MAPS_API_KEY as string) ||
@@ -134,14 +139,20 @@ function withInflight<T>(map: Map<string, Promise<T>>, key: string, fn: () => Pr
   return next;
 }
 
-async function fetchJson(url: string) {
-  const res = await fetch(url);
-  const json = await res.json().catch(() => null);
-  if (!res.ok) {
-    const message = json?.error?.message || json?.error_message || `Google Maps error ${res.status}`;
-    throw new Error(message);
+async function fetchJson(url: string, timeoutMs = 3200) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller?.signal });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const message = json?.error?.message || json?.error_message || `Google Maps error ${res.status}`;
+      throw new Error(message);
+    }
+    return json;
+  } finally {
+    clearTimeout(timeout);
   }
-  return json;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 3200) {
@@ -171,7 +182,7 @@ async function getProxyAuthHeaders() {
     }
   } catch {}
 
-  const appCheckToken = (global as any)?.FIREBASE_APP_CHECK_TOKEN;
+  const appCheckToken = getCurrentFirebaseAppCheckToken() || await refreshFirebaseAppCheckToken();
   if (typeof appCheckToken === 'string' && appCheckToken.trim()) {
     headers['X-Firebase-AppCheck'] = appCheckToken.trim();
   }

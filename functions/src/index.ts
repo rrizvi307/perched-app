@@ -66,6 +66,11 @@ function logRequest(
 }
 
 const db = admin.firestore();
+const USERS_COLLECTION = 'users';
+const PUBLIC_PROFILES_COLLECTION = 'publicProfiles';
+const USER_PRIVATE_COLLECTION = 'userPrivate';
+const SOCIAL_GRAPH_COLLECTION = 'socialGraph';
+const PUSH_TOKENS_COLLECTION = 'pushTokens';
 
 const API_KEY_HASH_COLLECTION = 'apiKeyHashes';
 const API_KEY_CACHE_TTL_MS = 60 * 1000;
@@ -81,6 +86,7 @@ const B2B_NEARBY_BATCH_QUERY_LIMIT = 250;
 const B2B_NEARBY_IN_MAX = 10;
 const B2B_NEARBY_WINDOW_MS = 2 * 60 * 60 * 1000;
 const EARLY_ADOPTER_WEEKLY_TARGET = 3;
+const APP_CHECK_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 const BACKEND_PERF_COLLECTION = 'backendPerformanceMetrics';
 
@@ -590,12 +596,12 @@ async function syncAchievementUnlocksForUser(userId: string, stats: Gamification
 async function syncGamificationForUser(userId: string): Promise<void> {
   if (!userId) return;
 
-  const [userDoc, checkinsSnapshot] = await Promise.all([
-    db.collection('users').doc(userId).get(),
+  const [socialGraphDoc, checkinsSnapshot] = await Promise.all([
+    getSocialGraphDoc(userId),
     db.collection('checkins').where('userId', '==', userId).get(),
   ]);
 
-  const userData = userDoc.exists ? (userDoc.data() || {}) : {};
+  const userData = socialGraphDoc.exists ? (socialGraphDoc.data() || {}) : {};
   const friendsCount = normalizeIdList(userData.friends).length;
   const checkins = checkinsSnapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() || {}) }));
   const discoverySpotIds = Array.from(new Set(
@@ -614,10 +620,10 @@ async function syncGamificationForUser(userId: string): Promise<void> {
     computedAtMs: Date.now(),
   }, { merge: true });
 
-  await db.collection('users').doc(userId).set({
+  await writeUserPrivateAccount(userId, {
     streakDays: stats.streakDays,
     longestStreak: stats.longestStreak,
-  }, { merge: true });
+  });
 
   await syncAchievementUnlocksForUser(userId, stats);
 }
@@ -708,16 +714,9 @@ function sanitizeSigninNotificationMeta(value: unknown): Record<string, string |
 
 async function resolveSigninAlertEmail(userId: string, fallbackEmail?: string): Promise<string> {
   if (!userId) return '';
-  const [privateDoc, publicDoc] = await Promise.all([
-    db.collection('userPrivate').doc(userId).get(),
-    db.collection('users').doc(userId).get(),
-  ]);
-
-  const privateEmail = asId(privateDoc.data()?.email).toLowerCase();
+  const privateData = await getPrivateAccountData(userId);
+  const privateEmail = asId(privateData?.email).toLowerCase();
   if (privateEmail) return privateEmail;
-
-  const publicEmail = asId(publicDoc.data()?.email).toLowerCase();
-  if (publicEmail) return publicEmail;
 
   return asId(fallbackEmail).toLowerCase();
 }
@@ -820,10 +819,151 @@ function sanitizePublicUserProfile(userId: string, data: Record<string, any> | n
   };
 }
 
+function normalizeSocialGraph(data: Record<string, any> | null | undefined) {
+  return {
+    friends: normalizeIdList(data?.friends),
+    closeFriends: normalizeIdList(data?.closeFriends),
+    blocked: normalizeIdList(data?.blocked),
+  };
+}
+
+async function getPublicProfileDoc(userId: string) {
+  return db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
+}
+
+async function getSocialGraphDoc(userId: string) {
+  return db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).get();
+}
+
+async function getPrivateAccountData(userId: string) {
+  const privateDoc = await db.collection(USER_PRIVATE_COLLECTION).doc(userId).get();
+  const legacyDoc = privateDoc.exists ? null : await db.collection(USERS_COLLECTION).doc(userId).get();
+  return {
+    ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
+    ...(privateDoc.exists ? privateDoc.data() || {} : {}),
+  };
+}
+
+async function writeUserPrivateAccount(
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {},
+) {
+  const payload = {
+    ...fields,
+    ...(options.isCreate ? { createdAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  await db.collection(USER_PRIVATE_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
 function sanitizeRecommendationLimit(value: unknown, fallback = 5, max = 10): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(1, Math.min(max, Math.floor(numeric)));
+}
+
+const CHECKIN_MIN_INTERVAL_MS = 30 * 1000;
+const CHECKIN_MAX_PER_HOUR = 24;
+const CHECKIN_WINDOW_MS = 60 * 60 * 1000;
+
+function sanitizeOptionalText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : null;
+}
+
+function sanitizeCheckinVisibility(value: unknown): 'public' | 'friends' | 'close' {
+  return value === 'friends' || value === 'close' ? value : 'public';
+}
+
+function sanitizeCheckinStringArray(value: unknown, maxItems: number, maxItemLength = 40): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const next = raw.trim().slice(0, maxItemLength);
+    if (!next || seen.has(next)) continue;
+    seen.add(next);
+    result.push(next);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function sanitizeSpotLatLng(value: unknown): { lat: number; lng: number } | null {
+  if (!value || typeof value !== 'object') return null;
+  const lat = typeof (value as any).lat === 'number' ? (value as any).lat : null;
+  const lng = typeof (value as any).lng === 'number' ? (value as any).lng : null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+async function hasPostingAccessForActor(actorId: string, authToken: Record<string, any> | undefined) {
+  if (authToken?.email_verified === true) return true;
+  if (typeof authToken?.phone_number === 'string' && authToken.phone_number.trim()) return true;
+  const adminDoc = await db.collection('admins').doc(actorId).get();
+  return adminDoc.exists;
+}
+
+function buildCallableCheckinPayload(actorId: string, data: any, nowMs: number) {
+  const createdAt = admin.firestore.Timestamp.fromMillis(nowMs);
+  return {
+    clientId: sanitizeOptionalText(data?.clientId, 120),
+    userId: actorId,
+    userName: sanitizeOptionalText(data?.userName, 120),
+    userHandle: sanitizeOptionalText(data?.userHandle, 64),
+    userPhotoUrl: sanitizeOptionalText(data?.userPhotoUrl, 2048),
+    visibility: sanitizeCheckinVisibility(data?.visibility),
+    spotName: sanitizeOptionalText(data?.spotName, 160) || '',
+    spotPlaceId: sanitizeOptionalText(data?.spotPlaceId, 160),
+    spotLatLng: sanitizeSpotLatLng(data?.spotLatLng),
+    caption: sanitizeOptionalText(data?.caption, 500) || '',
+    tags: sanitizeCheckinStringArray(data?.tags, 8),
+    visitIntent: sanitizeCheckinStringArray(data?.visitIntent, 2),
+    photoTags: sanitizeCheckinStringArray(data?.photoTags, 3),
+    ambiance: sanitizeOptionalText(data?.ambiance, 60),
+    photoUrl: sanitizeOptionalText(data?.photoUrl, 2048),
+    photoPath: sanitizeOptionalText(data?.photoPath, 2048),
+    photoPending: Boolean(data?.photoPending),
+    campusOrCity: sanitizeOptionalText(data?.campusOrCity ?? data?.city, 120),
+    city: sanitizeOptionalText(data?.city, 120),
+    campus: sanitizeOptionalText(data?.campus, 120),
+    createdAt,
+    createdAtServer: admin.firestore.FieldValue.serverTimestamp(),
+    createdAtMs: nowMs,
+    approved: true,
+    moderation: { status: 'approved' },
+  };
+}
+
+function serializeCreatedCheckin(checkinId: string, payload: Record<string, any>) {
+  return {
+    id: checkinId,
+    clientId: payload.clientId ?? null,
+    userId: payload.userId,
+    userName: payload.userName ?? null,
+    userHandle: payload.userHandle ?? null,
+    userPhotoUrl: payload.userPhotoUrl ?? null,
+    visibility: payload.visibility,
+    spotName: payload.spotName,
+    spotPlaceId: payload.spotPlaceId ?? null,
+    spotLatLng: payload.spotLatLng ?? null,
+    caption: payload.caption ?? '',
+    tags: payload.tags ?? [],
+    visitIntent: payload.visitIntent ?? [],
+    photoTags: payload.photoTags ?? [],
+    ambiance: payload.ambiance ?? null,
+    photoUrl: payload.photoUrl ?? null,
+    photoPath: payload.photoPath ?? null,
+    photoPending: Boolean(payload.photoPending),
+    campusOrCity: payload.campusOrCity ?? null,
+    city: payload.city ?? null,
+    campus: payload.campus ?? null,
+    createdAtMs: payload.createdAtMs,
+    approved: true,
+  };
 }
 
 function buildCollaborativeRecommendationReason(matchCount: number): string {
@@ -974,18 +1114,11 @@ function normalizePushToken(value: unknown): string | null {
 async function getPushTokenForUser(userId: string): Promise<string | null> {
   if (!userId) return null;
   try {
-    const pushTokenDoc = await db.collection('pushTokens').doc(userId).get();
+    const pushTokenDoc = await db.collection(PUSH_TOKENS_COLLECTION).doc(userId).get();
     const scopedToken = normalizePushToken(pushTokenDoc.data()?.token);
     if (scopedToken) return scopedToken;
   } catch {}
-
-  // Legacy fallback during migration period.
-  try {
-    const userDoc = await db.collection('users').doc(userId).get();
-    return normalizePushToken(userDoc.data()?.pushToken);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 async function getPushTokensForUsers(userIds: string[]): Promise<string[]> {
@@ -993,25 +1126,14 @@ async function getPushTokensForUsers(userIds: string[]): Promise<string[]> {
   if (!ids.length) return [];
   const tokens: string[] = [];
 
-  const scopedDocs = await Promise.all(ids.map((userId) => db.collection('pushTokens').doc(userId).get()));
-  const unresolved: string[] = [];
+  const scopedDocs = await Promise.all(ids.map((userId) => db.collection(PUSH_TOKENS_COLLECTION).doc(userId).get()));
 
   scopedDocs.forEach((doc, index) => {
     const token = normalizePushToken(doc.data()?.token);
     if (token) {
       tokens.push(token);
-      return;
     }
-    unresolved.push(ids[index]);
   });
-
-  if (unresolved.length) {
-    const legacyDocs = await Promise.all(unresolved.map((userId) => db.collection('users').doc(userId).get()));
-    legacyDocs.forEach((doc) => {
-      const token = normalizePushToken(doc.data()?.pushToken);
-      if (token) tokens.push(token);
-    });
-  }
 
   return Array.from(new Set(tokens));
 }
@@ -1135,7 +1257,7 @@ export const processReferral = functions.firestore
       const normalizedHandle = referralCode.toLowerCase();
 
       // Preferred match: precomputed canonical referralCode on user profile.
-      const byReferralCodeSnapshot = await db.collection('users')
+      const byReferralCodeSnapshot = await db.collection(PUBLIC_PROFILES_COLLECTION)
         .where('referralCode', '==', referralCode)
         .limit(1)
         .get();
@@ -1145,7 +1267,7 @@ export const processReferral = functions.firestore
 
       // Legacy match: exact handle.
       if (!referrerId) {
-        const usersSnapshot = await db.collection('users')
+        const usersSnapshot = await db.collection(PUBLIC_PROFILES_COLLECTION)
           .where('handle', '==', normalizedHandle)
           .limit(1)
           .get();
@@ -1158,7 +1280,7 @@ export const processReferral = functions.firestore
       if (!referrerId && normalizedHandle.length >= 3) {
         const prefix = normalizedHandle.slice(0, Math.min(4, normalizedHandle.length));
         const prefixEnd = `${prefix}\uf8ff`;
-        const handleCandidates = await db.collection('users')
+        const handleCandidates = await db.collection(PUBLIC_PROFILES_COLLECTION)
           .where('handle', '>=', prefix)
           .where('handle', '<=', prefixEnd)
           .limit(80)
@@ -1174,7 +1296,7 @@ export const processReferral = functions.firestore
 
       // Last fallback: partial user ID match for historical referral links.
       if (!referrerId) {
-        const usersByIdSnapshot = await db.collection('users')
+        const usersByIdSnapshot = await db.collection(PUBLIC_PROFILES_COLLECTION)
           .orderBy(admin.firestore.FieldPath.documentId())
           .startAt(referralCode)
           .endAt(referralCode + '\uf8ff')
@@ -1195,8 +1317,7 @@ export const processReferral = functions.firestore
       const PREMIUM_WEEKS_PER_REFERRAL = 1;
       const premiumDays = PREMIUM_WEEKS_PER_REFERRAL * 7;
 
-      const referrerDoc = await db.collection('users').doc(referrerId).get();
-      const referrerData = referrerDoc.data() || {};
+      const referrerData = await getPrivateAccountData(referrerId);
 
       // Calculate new premium expiration
       const currentPremiumUntil = referrerData.premiumUntil?.toDate() || new Date();
@@ -1205,11 +1326,10 @@ export const processReferral = functions.firestore
       const newPremiumUntil = new Date(baseDate.getTime() + premiumDays * 24 * 60 * 60 * 1000);
 
       // Update referrer's premium status
-      await db.collection('users').doc(referrerId).update({
+      await writeUserPrivateAccount(referrerId, {
         premiumUntil: admin.firestore.Timestamp.fromDate(newPremiumUntil),
         totalReferrals: admin.firestore.FieldValue.increment(1),
         premiumWeeksEarned: admin.firestore.FieldValue.increment(PREMIUM_WEEKS_PER_REFERRAL),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       // Update referral status
@@ -1244,10 +1364,89 @@ export const processReferral = functions.firestore
 // FRIEND REQUEST NOTIFICATIONS
 // =============================================================================
 
+/**
+ * Server-authoritative check-in creation with coarse abuse throttling.
+ * This replaces direct client writes so rate limiting and idempotency live on the backend.
+ */
+export const createCheckinSecure = functions.https.onCall(async (data, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const actorId = context.auth.uid;
+  const allowed = await hasPostingAccessForActor(actorId, context.auth.token as Record<string, any> | undefined);
+  if (!allowed) {
+    throw new functions.https.HttpsError('permission-denied', 'Account is not allowed to post check-ins');
+  }
+
+  const nowMs = Date.now();
+  const payload = buildCallableCheckinPayload(actorId, data, nowMs);
+  if (!payload.spotName) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing spotName');
+  }
+
+  if (payload.clientId) {
+    const existingSnapshot = await db
+      .collection('checkins')
+      .where('userId', '==', actorId)
+      .where('clientId', '==', payload.clientId)
+      .limit(1)
+      .get();
+
+    if (!existingSnapshot.empty) {
+      const existingDoc = existingSnapshot.docs[0];
+      return { checkin: serializeCreatedCheckin(existingDoc.id, existingDoc.data() || payload) };
+    }
+  }
+
+  const guardRef = db.collection('checkinWriteGuards').doc(actorId);
+  const checkinRef = db.collection('checkins').doc();
+
+  try {
+    await db.runTransaction(async (tx) => {
+      const guardDoc = await tx.get(guardRef);
+      const guardData = guardDoc.data() || {};
+      const lastCreatedAtMs = typeof guardData.lastCreatedAtMs === 'number' ? guardData.lastCreatedAtMs : 0;
+      const previousWindowStartMs = typeof guardData.windowStartMs === 'number' ? guardData.windowStartMs : 0;
+      const previousWindowCount = typeof guardData.windowCount === 'number' ? guardData.windowCount : 0;
+
+      if (lastCreatedAtMs > 0 && nowMs - lastCreatedAtMs < CHECKIN_MIN_INTERVAL_MS) {
+        throw new functions.https.HttpsError('resource-exhausted', 'Posting too quickly. Wait a moment and retry.');
+      }
+
+      const windowStillOpen = previousWindowStartMs > 0 && nowMs - previousWindowStartMs < CHECKIN_WINDOW_MS;
+      const nextWindowStartMs = windowStillOpen ? previousWindowStartMs : nowMs;
+      const nextWindowCount = windowStillOpen ? previousWindowCount + 1 : 1;
+
+      if (nextWindowCount > CHECKIN_MAX_PER_HOUR) {
+        throw new functions.https.HttpsError('resource-exhausted', 'Hourly check-in limit reached. Try again later.');
+      }
+
+      tx.set(checkinRef, payload);
+      tx.set(guardRef, {
+        userId: actorId,
+        lastCreatedAtMs: nowMs,
+        windowStartMs: nextWindowStartMs,
+        windowCount: nextWindowCount,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError('internal', 'Failed to create check-in');
+  }
+
+  return { checkin: serializeCreatedCheckin(checkinRef.id, payload) };
+});
+
 type SocialGraphAction =
   | 'send_friend_request'
   | 'accept_friend_request'
   | 'decline_friend_request'
+  | 'set_close_friend'
+  | 'remove_close_friend'
   | 'unfriend'
   | 'block_user'
   | 'unblock_user';
@@ -1276,8 +1475,8 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
 
     const forwardRequestId = `${actorId}_${targetUserId}`;
     const reverseRequestId = `${targetUserId}_${actorId}`;
-    const actorUserRef = db.collection('users').doc(actorId);
-    const targetUserRef = db.collection('users').doc(targetUserId);
+    const actorUserRef = db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId);
+    const targetUserRef = db.collection(SOCIAL_GRAPH_COLLECTION).doc(targetUserId);
     const forwardRequestRef = db.collection('friendRequests').doc(forwardRequestId);
     const reverseRequestRef = db.collection('friendRequests').doc(reverseRequestId);
 
@@ -1306,8 +1505,14 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
 
       const reverseStatus = asId(reverseRequestDoc.data()?.status || 'pending') || 'pending';
       if (reverseRequestDoc.exists && reverseStatus === 'pending') {
-        tx.set(actorUserRef, { friends: admin.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
-        tx.set(targetUserRef, { friends: admin.firestore.FieldValue.arrayUnion(actorId) }, { merge: true });
+        tx.set(actorUserRef, {
+          friends: admin.firestore.FieldValue.arrayUnion(targetUserId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        tx.set(targetUserRef, {
+          friends: admin.firestore.FieldValue.arrayUnion(actorId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
         tx.delete(reverseRequestRef);
         tx.delete(forwardRequestRef);
         result = {
@@ -1364,8 +1569,14 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
         throw new functions.https.HttpsError('permission-denied', 'Only recipient can accept this request');
       }
 
-      tx.set(db.collection('users').doc(toId), { friends: admin.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
-      tx.set(db.collection('users').doc(fromId), { friends: admin.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
+      tx.set(db.collection(SOCIAL_GRAPH_COLLECTION).doc(toId), {
+        friends: admin.firestore.FieldValue.arrayUnion(fromId),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      tx.set(db.collection(SOCIAL_GRAPH_COLLECTION).doc(fromId), {
+        friends: admin.firestore.FieldValue.arrayUnion(toId),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
       tx.delete(requestRef);
       tx.delete(db.collection('friendRequests').doc(`${toId}_${fromId}`));
 
@@ -1395,6 +1606,35 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
     return { ok: true, status: 'declined', requestId };
   }
 
+  if (action === 'set_close_friend' || action === 'remove_close_friend') {
+    const targetUserId = asId(data?.targetUserId);
+    if (!targetUserId || targetUserId === actorId) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
+    }
+
+    const actorGraphRef = db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId);
+    await db.runTransaction(async (tx) => {
+      if (action === 'set_close_friend') {
+        tx.set(actorGraphRef, {
+          friends: admin.firestore.FieldValue.arrayUnion(targetUserId),
+          closeFriends: admin.firestore.FieldValue.arrayUnion(targetUserId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return;
+      }
+      tx.set(actorGraphRef, {
+        closeFriends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
+
+    return {
+      ok: true,
+      status: action === 'set_close_friend' ? 'close_friend_set' : 'close_friend_removed',
+      targetUserId,
+    };
+  }
+
   if (action === 'unfriend') {
     const targetUserId = asId(data?.targetUserId);
     if (!targetUserId || targetUserId === actorId) {
@@ -1403,18 +1643,20 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
 
     await db.runTransaction(async (tx) => {
       tx.set(
-        db.collection('users').doc(actorId),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId),
         {
           friends: admin.firestore.FieldValue.arrayRemove(targetUserId),
           closeFriends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
       tx.set(
-        db.collection('users').doc(targetUserId),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(targetUserId),
         {
           friends: admin.firestore.FieldValue.arrayRemove(actorId),
           closeFriends: admin.firestore.FieldValue.arrayRemove(actorId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -1432,19 +1674,21 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
 
     await db.runTransaction(async (tx) => {
       tx.set(
-        db.collection('users').doc(actorId),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId),
         {
           blocked: admin.firestore.FieldValue.arrayUnion(targetUserId),
           friends: admin.firestore.FieldValue.arrayRemove(targetUserId),
           closeFriends: admin.firestore.FieldValue.arrayRemove(targetUserId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
       tx.set(
-        db.collection('users').doc(targetUserId),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(targetUserId),
         {
           friends: admin.firestore.FieldValue.arrayRemove(actorId),
           closeFriends: admin.firestore.FieldValue.arrayRemove(actorId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -1460,8 +1704,11 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
       throw new functions.https.HttpsError('invalid-argument', 'Invalid target user');
     }
 
-    await db.collection('users').doc(actorId).set(
-      { blocked: admin.firestore.FieldValue.arrayRemove(targetUserId) },
+    await db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId).set(
+      {
+        blocked: admin.firestore.FieldValue.arrayRemove(targetUserId),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
       { merge: true }
     );
     return { ok: true, status: 'unblocked', targetUserId };
@@ -1504,12 +1751,85 @@ export const secureUserLookup = functions.https.onCall(async (data, context) => 
 
   const privateDoc = snapshot.docs[0];
   const userId = privateDoc.id;
-  const publicDoc = await db.collection('users').doc(userId).get();
+  const publicDoc = await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
   if (!publicDoc.exists) {
     return { user: null };
   }
 
   return { user: sanitizePublicUserProfile(publicDoc.id, publicDoc.data() || {}) };
+});
+
+export const getProfileAccessSnapshot = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const targetUserId = asId(data?.targetUserId);
+  if (!targetUserId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing target user');
+  }
+
+  if (targetUserId === actorId) {
+    return {
+      isFriend: true,
+      canSeeFriends: true,
+      canSeeClose: true,
+      viewerBlocked: false,
+      blockedByTarget: false,
+    };
+  }
+
+  const [viewerGraphDoc, targetGraphDoc] = await Promise.all([
+    getSocialGraphDoc(actorId),
+    getSocialGraphDoc(targetUserId),
+  ]);
+
+  const viewerGraph = normalizeSocialGraph(viewerGraphDoc.data() || {});
+  const targetGraph = normalizeSocialGraph(targetGraphDoc.data() || {});
+  const viewerBlocked = viewerGraph.blocked.includes(targetUserId);
+  const blockedByTarget = targetGraph.blocked.includes(actorId);
+  const isFriend = viewerGraph.friends.includes(targetUserId);
+  const canSeeClose = targetGraph.closeFriends.includes(actorId);
+
+  return {
+    isFriend,
+    canSeeFriends: isFriend && !viewerBlocked && !blockedByTarget,
+    canSeeClose: isFriend && canSeeClose && !viewerBlocked && !blockedByTarget,
+    viewerBlocked,
+    blockedByTarget,
+  };
+});
+
+export const issueAppCheckToken = functions.https.onCall(async (data, context) => {
+  const allowedAppIds = getAllowedAppCheckAppIds();
+  if (!allowedAppIds.length) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'APP_CHECK_ALLOWED_APP_IDS must be configured before issuing App Check tokens',
+    );
+  }
+  const requestedAppId = asId(data?.appId || allowedAppIds[0]);
+  if (!requestedAppId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Missing appId');
+  }
+  if (allowedAppIds.length > 0 && !allowedAppIds.includes(requestedAppId)) {
+    throw new functions.https.HttpsError('permission-denied', 'App id is not allowed');
+  }
+
+  try {
+    const created = await admin.appCheck().createToken(requestedAppId, {
+      ttlMillis: APP_CHECK_TOKEN_TTL_MS,
+    });
+    return {
+      token: created.token,
+      expireTimeMillis: Date.now() + created.ttlMillis,
+      ttlMillis: created.ttlMillis,
+      appId: requestedAppId,
+    };
+  } catch (error: any) {
+    throw new functions.https.HttpsError('internal', error?.message || 'Failed to issue App Check token');
+  }
 });
 
 export const syncMyGamification = functions.https.onCall(async (_data, context) => {
@@ -1627,7 +1947,7 @@ export const onFriendRequestCreated = functions.firestore
 
     try {
       // Get the sender's info
-      const senderDoc = await db.collection('users').doc(fromId).get();
+      const senderDoc = await getPublicProfileDoc(fromId);
       const senderData = senderDoc.data() || {};
       const senderName = senderData.name || senderData.handle || 'Someone';
 
@@ -1672,17 +1992,17 @@ export const onFriendRequestAccepted = functions.firestore
 
     try {
       // Get both user docs to verify this delete represents an actual acceptance.
-      const [accepterDoc, senderDoc] = await Promise.all([
-        db.collection('users').doc(toId).get(),
-        db.collection('users').doc(fromId).get(),
+      const [accepterDoc, accepterGraphDoc, senderGraphDoc] = await Promise.all([
+        getPublicProfileDoc(toId),
+        getSocialGraphDoc(toId),
+        getSocialGraphDoc(fromId),
       ]);
       const accepterData = accepterDoc.data() || {};
-      const senderData = senderDoc.data() || {};
+      const accepterGraph = normalizeSocialGraph(accepterGraphDoc.data() || {});
+      const senderGraph = normalizeSocialGraph(senderGraphDoc.data() || {});
 
       // Guard: only notify if friendship is now mutual.
-      const accepterFriends = normalizeIdList(accepterData.friends);
-      const senderFriends = normalizeIdList(senderData.friends);
-      const isMutual = accepterFriends.includes(fromId) && senderFriends.includes(toId);
+      const isMutual = accepterGraph.friends.includes(fromId) && senderGraph.friends.includes(toId);
       if (!isMutual) {
         console.log(`Skipping friend accepted notification for ${fromId}<->${toId}; no mutual friendship found`);
         return null;
@@ -1732,10 +2052,14 @@ export const onCheckinCreated = functions.firestore
 
     try {
       // Get the poster's info
-      const posterDoc = await db.collection('users').doc(userId).get();
+      const [posterDoc, posterGraphDoc] = await Promise.all([
+        getPublicProfileDoc(userId),
+        getSocialGraphDoc(userId),
+      ]);
       const posterData = posterDoc.data() || {};
+      const posterGraph = normalizeSocialGraph(posterGraphDoc.data() || {});
       const posterName = posterData.name || posterData.handle || 'Someone';
-      const posterFriends = posterData.friends || [];
+      const posterFriends = posterGraph.friends || [];
 
       if (posterFriends.length === 0) {
         return null;
@@ -1744,7 +2068,7 @@ export const onCheckinCreated = functions.firestore
       // Get close friends if visibility is 'close'
       let targetFriends = posterFriends;
       if (visibility === 'close') {
-        targetFriends = posterData.closeFriends || [];
+        targetFriends = posterGraph.closeFriends || [];
       }
 
       const tokens = await getPushTokensForUsers(targetFriends.slice(0, 50));
@@ -1848,7 +2172,7 @@ export const syncGamificationOnCheckinWrite = functions.firestore
   });
 
 export const syncGamificationOnFriendsWrite = functions.firestore
-  .document('users/{userId}')
+  .document('socialGraph/{userId}')
   .onWrite(async (change, context) => {
     const beforeFriends = normalizeIdList(change.before.exists ? change.before.data()?.friends : []);
     const afterFriends = normalizeIdList(change.after.exists ? change.after.data()?.friends : []);
@@ -1992,6 +2316,27 @@ function readFirstNonEmpty(...values: Array<string | undefined>) {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim();
   }
   return '';
+}
+
+function parseCsvList(value: string | undefined): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getAllowedAppCheckAppIds(): string[] {
+  return Array.from(
+    new Set(
+      [
+        ...parseCsvList(process.env.APP_CHECK_ALLOWED_APP_IDS),
+        ...parseCsvList(runtimeConfig?.app_check?.allowed_app_ids),
+        ...parseCsvList(runtimeConfig?.appCheck?.allowed_app_ids),
+        ...parseCsvList(runtimeConfig?.app_check_allowed_app_ids),
+      ].filter(Boolean),
+    ),
+  );
 }
 
 function parsePriceLevel(value?: string) {
@@ -2617,22 +2962,23 @@ export const googlePlacesProxy = functions
     runtimeConfig?.places?.google_require_app_check,
     runtimeConfig?.places?.require_app_check,
   );
-  const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
+  const requireAppCheck =
+    !requireAppCheckRaw || !['0', 'false', 'no', 'off'].includes(requireAppCheckRaw.toLowerCase());
 
   if (!hasSecretBypass) {
     const uid = await verifyFirebaseUserFromRequest(req);
-    if (requireAuth && !uid) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
     const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
+    let appCheckOk = false;
     if (requireAppCheck || providedAppCheck) {
-      const appCheckOk = await verifyAppCheckFromRequest(req);
+      appCheckOk = await verifyAppCheckFromRequest(req);
       if (!appCheckOk) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
+    }
+    if (requireAuth && !uid && !appCheckOk) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
     }
   }
 
@@ -2780,7 +3126,8 @@ export const placeSignalsProxy = functions
     process.env.PLACE_INTEL_REQUIRE_APP_CHECK,
     runtimeConfig?.places?.require_app_check,
   );
-  const requireAppCheck = ['1', 'true', 'yes', 'on'].includes(requireAppCheckRaw.toLowerCase());
+  const requireAppCheck =
+    !requireAppCheckRaw || !['0', 'false', 'no', 'off'].includes(requireAppCheckRaw.toLowerCase());
 
   const enableFoursquareRaw = readFirstNonEmpty(
     process.env.PLACE_INTEL_ENABLE_FOURSQUARE,
@@ -2800,18 +3147,18 @@ export const placeSignalsProxy = functions
 
   if (!hasSecretBypass) {
     const uid = await verifyFirebaseUserFromRequest(req);
-    if (requireAuth && !uid) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
     const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
+    let appCheckOk = false;
     if (requireAppCheck || providedAppCheck) {
-      const appCheckOk = await verifyAppCheckFromRequest(req);
+      appCheckOk = await verifyAppCheckFromRequest(req);
       if (!appCheckOk) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
+    }
+    if (requireAuth && !uid && !appCheckOk) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
     }
   }
 
@@ -3764,26 +4111,14 @@ export const sendWeeklyRecap = functions.pubsub
   .timeZone('America/Chicago')
   .onRun(async (_context) => {
     try {
-      // Primary source: scoped push tokens collection.
-      const pushTokensSnapshot = await db.collection('pushTokens').get();
+      const pushTokensSnapshot = await db.collection(PUSH_TOKENS_COLLECTION).get();
       const tokenDocs: Array<{ ref: FirebaseFirestore.DocumentReference; token: string }> = [];
       pushTokensSnapshot.forEach((doc) => {
         const token = normalizePushToken(doc.data()?.token);
         if (token) tokenDocs.push({ ref: doc.ref, token });
       });
 
-      // Legacy fallback while migrating from users.pushToken.
-      const usersSnapshot = await db.collection('users').where('pushToken', '!=', null).get();
-      const legacyTokenDocs: Array<{ ref: FirebaseFirestore.DocumentReference; token: string }> = [];
-      usersSnapshot.forEach((doc) => {
-        const token = normalizePushToken(doc.data()?.pushToken);
-        if (token) legacyTokenDocs.push({ ref: doc.ref, token });
-      });
-
-      const tokens = [
-        ...tokenDocs.map((entry) => entry.token),
-        ...legacyTokenDocs.map((entry) => entry.token),
-      ];
+      const tokens = tokenDocs.map((entry) => entry.token);
 
       if (tokens.length === 0) {
         console.log('No users with push tokens');
@@ -3830,19 +4165,6 @@ export const sendWeeklyRecap = functions.pubsub
         for (const tokenDoc of tokenDocs) {
           if (!invalidTokens.has(tokenDoc.token)) continue;
           batch.delete(tokenDoc.ref);
-          pendingOps += 1;
-          if (pendingOps >= 400) {
-            await batch.commit();
-            batch = db.batch();
-            pendingOps = 0;
-          }
-        }
-        for (const userDoc of legacyTokenDocs) {
-          if (!invalidTokens.has(userDoc.token)) continue;
-          batch.update(userDoc.ref, {
-            pushToken: admin.firestore.FieldValue.delete(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
           pendingOps += 1;
           if (pendingOps >= 400) {
             await batch.commit();

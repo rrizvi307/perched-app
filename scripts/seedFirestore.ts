@@ -446,18 +446,41 @@ async function seedUsers() {
 
   for (const user of DEMO_USERS) {
     const userRef = db.collection('users').doc(user.id);
+    const publicProfileRef = db.collection('publicProfiles').doc(user.id);
+    const socialGraphRef = db.collection('socialGraph').doc(user.id);
     const userPrivateRef = db.collection('userPrivate').doc(user.id);
     const createdAt = Timestamp.fromDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
-    batch.set(userRef, {
-      ...Object.fromEntries(Object.entries(user).filter(([key]) => key !== 'email')),
+    batch.set(publicProfileRef, {
+      name: user.name,
+      nameLower: user.name.toLowerCase(),
+      handle: user.handle,
+      photoUrl: user.photoUrl,
+      campus: user.campus,
+      city: user.city,
+      campusOrCity: user.campus || user.city,
+      campusType: user.campus ? 'campus' : 'city',
       createdAt, // 30 days ago
       updatedAt: Timestamp.now(),
-      emailVerified: true,
+    });
+    batch.set(socialGraphRef, {
+      friends: user.friends,
+      closeFriends: [],
+      blocked: [],
+      createdAt,
+      updatedAt: Timestamp.now(),
     });
     batch.set(userPrivateRef, {
       email: user.email,
+      bio: user.bio,
+      totalCheckins: user.totalCheckins,
+      emailVerified: true,
       createdAt,
       updatedAt: Timestamp.now(),
+    }, { merge: true });
+    batch.set(userRef, {
+      createdAt,
+      updatedAt: Timestamp.now(),
+      migrationVersion: 2,
     }, { merge: true });
   }
 
@@ -570,6 +593,9 @@ async function clearDemoData() {
   // Clear demo users
   for (const user of DEMO_USERS) {
     batch.delete(db.collection('users').doc(user.id));
+    batch.delete(db.collection('publicProfiles').doc(user.id));
+    batch.delete(db.collection('socialGraph').doc(user.id));
+    batch.delete(db.collection('userPrivate').doc(user.id));
   }
 
   // Clear demo friend requests

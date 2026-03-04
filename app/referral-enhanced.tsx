@@ -17,6 +17,8 @@ import { withAlpha } from '@/utils/colors';
 import { generateReferralCode } from '@/services/shareInvite';
 import { getReferralStats, getReferralLeaderboard, type ReferralStats } from '@/services/referralRewards';
 import * as Haptics from 'expo-haptics';
+import { isGrowthProgramsEnabled } from '@/services/runtimeFlags';
+import { FeatureUnavailableScreen } from '@/components/ui/feature-unavailable-screen';
 
 export default function EnhancedReferralScreen() {
   const router = useRouter();
@@ -36,9 +38,10 @@ export default function EnhancedReferralScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showShareCard, setShowShareCard] = useState(false);
   const userHandle = (user as any)?.handle;
+  const growthProgramsEnabled = isGrowthProgramsEnabled();
 
   const loadData = useCallback(async () => {
-    if (!user?.id) return;
+    if (!growthProgramsEnabled || !user?.id) return;
 
     try {
       // Load referral code and stats
@@ -54,11 +57,21 @@ export default function EnhancedReferralScreen() {
     } catch (error) {
       console.error('Failed to load referral data:', error);
     }
-  }, [user?.id, userHandle]);
+  }, [growthProgramsEnabled, user?.id, userHandle]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  if (!growthProgramsEnabled) {
+    return (
+      <FeatureUnavailableScreen
+        title="Referral Rewards Unavailable"
+        description="Referral rewards are disabled in the launch build until leaderboard, reward crediting, and referral reads are fully backend-authoritative."
+        onCtaPress={() => router.back()}
+      />
+    );
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true);

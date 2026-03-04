@@ -80,6 +80,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const campus = data?.campus || (data?.campusType === 'campus' ? data?.campusOrCity : undefined);
     return { city, campus, campusOrCity: data?.campusOrCity, campusType: data?.campusType };
   };
+  const loadRemoteProfileState = async (db: any, userId: string) => {
+    const [publicDoc, privateDoc] = await Promise.all([
+      db.collection('publicProfiles').doc(userId).get(),
+      db.collection('userPrivate').doc(userId).get(),
+    ]);
+    const legacyDoc =
+      publicDoc.exists && privateDoc.exists
+        ? null
+        : await db.collection('users').doc(userId).get();
+    const publicData = publicDoc.exists ? publicDoc.data() || {} : {};
+    const privateData = {
+      ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
+      ...(privateDoc.exists ? privateDoc.data() || {} : {}),
+    };
+    return { publicData, privateData };
+  };
   const buildPasswordResetTelemetry = (email: string) => {
     const normalized = String(email || '').trim().toLowerCase();
     const domain = normalized.includes('@') ? normalized.split('@')[1] || '' : '';
@@ -106,28 +122,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         try {
           const db = fb.firestore();
-          const doc = await db.collection('users').doc(u.uid).get();
-          const data = doc.exists ? doc.data() : {};
+          const { publicData, privateData } = await loadRemoteProfileState(db, u.uid);
           const cached = await getUserProfile(u.uid);
-          const loc = normalizeLocationFields({ ...(cached || {}), ...(data || {}) });
+          const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
           const merged = {
             id: u.uid,
             email: u.email,
             emailVerified: !!u.emailVerified,
-            name: data?.name ?? cached?.name,
-            handle: data?.handle ?? cached?.handle,
+            name: publicData?.name ?? cached?.name,
+            handle: publicData?.handle ?? cached?.handle,
             city: loc.city ?? cached?.city,
             campus: loc.campus ?? cached?.campus,
             campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
             campusType: loc.campusType ?? cached?.campusType,
-            phone: data?.phone || u.phoneNumber || cached?.phone || null,
-            photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || null,
-            coffeeIntents: Array.isArray(data?.coffeeIntents)
-              ? data.coffeeIntents
+            phone: privateData?.phone || u.phoneNumber || cached?.phone || null,
+            photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || null,
+            coffeeIntents: Array.isArray(publicData?.coffeeIntents)
+              ? publicData.coffeeIntents
               : Array.isArray(cached?.coffeeIntents)
                 ? cached.coffeeIntents
                 : [],
-            ambiancePreference: data?.ambiancePreference ?? cached?.ambiancePreference ?? null,
+            ambiancePreference: publicData?.ambiancePreference ?? cached?.ambiancePreference ?? null,
           };
           // One-time cleanup: purge any demo data before rendering real user's feed
           if (!u.uid.startsWith('demo-')) {
@@ -141,17 +156,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           if (cached) {
             const backfill: Record<string, any> = {};
-            if (!data?.name && cached?.name) backfill.name = cached.name;
-            if (!data?.handle && cached?.handle) backfill.handle = cached.handle;
-            if (!data?.city && cached?.city) backfill.city = cached.city;
-            if (!data?.campus && cached?.campus) backfill.campus = cached.campus;
-            if (!data?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
-            if (!data?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
-            if (!data?.phone && cached?.phone) backfill.phone = cached.phone;
-            if (!data?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
-            if (!Array.isArray(data?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
-            if (data?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
-            if (!data?.email && u.email) backfill.email = u.email;
+            if (!publicData?.name && cached?.name) backfill.name = cached.name;
+            if (!publicData?.handle && cached?.handle) backfill.handle = cached.handle;
+            if (!publicData?.city && cached?.city) backfill.city = cached.city;
+            if (!publicData?.campus && cached?.campus) backfill.campus = cached.campus;
+            if (!publicData?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
+            if (!publicData?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
+            if (!privateData?.phone && cached?.phone) backfill.phone = cached.phone;
+            if (!publicData?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
+            if (!Array.isArray(publicData?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
+            if (publicData?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
+            if (!privateData?.email && u.email) backfill.email = u.email;
             if (Object.keys(backfill).length) {
               void (async () => {
                 try {
@@ -411,30 +426,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void (async () => {
         try {
           const db = fb.firestore();
-          const doc = await db.collection('users').doc(userObj.uid).get();
-          const data = doc.exists ? doc.data() : {};
+          const { publicData, privateData } = await loadRemoteProfileState(db, userObj.uid);
           const cached = await getUserProfile(userObj.uid);
-          const loc = normalizeLocationFields({ ...(cached || {}), ...(data || {}) });
+          const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
           setUser((prev: any) => {
             const merged = {
               ...prev,
-              name: data?.name ?? cached?.name,
-              handle: data?.handle ?? cached?.handle,
+              name: publicData?.name ?? cached?.name,
+              handle: publicData?.handle ?? cached?.handle,
               city: loc.city ?? cached?.city,
               campus: loc.campus ?? cached?.campus,
               campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
               campusType: loc.campusType ?? cached?.campusType,
-              phone: data?.phone || authUser.phoneNumber || cached?.phone || prev?.phone,
-              photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || prev?.photoUrl,
-              coffeeIntents: Array.isArray(data?.coffeeIntents)
-                ? data.coffeeIntents
+              phone: privateData?.phone || authUser.phoneNumber || cached?.phone || prev?.phone,
+              photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || prev?.photoUrl,
+              coffeeIntents: Array.isArray(publicData?.coffeeIntents)
+                ? publicData.coffeeIntents
                 : Array.isArray(cached?.coffeeIntents)
                   ? cached.coffeeIntents
                   : Array.isArray(prev?.coffeeIntents)
                     ? prev.coffeeIntents
                     : [],
               ambiancePreference:
-                data?.ambiancePreference ??
+                publicData?.ambiancePreference ??
                 cached?.ambiancePreference ??
                 prev?.ambiancePreference ??
                 null,
@@ -443,17 +457,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return merged;
           });
           const backfill: Record<string, any> = {};
-          if (!data?.name && cached?.name) backfill.name = cached.name;
-          if (!data?.handle && cached?.handle) backfill.handle = cached.handle;
-          if (!data?.city && cached?.city) backfill.city = cached.city;
-          if (!data?.campus && cached?.campus) backfill.campus = cached.campus;
-          if (!data?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
-          if (!data?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
-          if (!data?.phone && (cached?.phone || authUser?.phoneNumber)) backfill.phone = cached?.phone || authUser?.phoneNumber;
-          if (!data?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
-          if (!Array.isArray(data?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
-          if (data?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
-          if (!data?.email && userObj.email) backfill.email = userObj.email;
+          if (!publicData?.name && cached?.name) backfill.name = cached.name;
+          if (!publicData?.handle && cached?.handle) backfill.handle = cached.handle;
+          if (!publicData?.city && cached?.city) backfill.city = cached.city;
+          if (!publicData?.campus && cached?.campus) backfill.campus = cached.campus;
+          if (!publicData?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
+          if (!publicData?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
+          if (!privateData?.phone && (cached?.phone || authUser?.phoneNumber)) backfill.phone = cached?.phone || authUser?.phoneNumber;
+          if (!publicData?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
+          if (!Array.isArray(publicData?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
+          if (publicData?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
+          if (!privateData?.email && userObj.email) backfill.email = userObj.email;
           if (Object.keys(backfill).length) {
             try {
               await updateUserRemote(userObj.uid, backfill);
@@ -587,28 +601,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const emailVerified = !!authUser.emailVerified;
       try {
         const db = fb.firestore();
-        const doc = await db.collection('users').doc(authUser.uid).get();
-        const data = doc.exists ? doc.data() : {};
+        const { publicData, privateData } = await loadRemoteProfileState(db, authUser.uid);
         const cached = await getUserProfile(authUser.uid);
-        const loc = normalizeLocationFields({ ...(cached || {}), ...(data || {}) });
+        const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
         const merged = {
           id: authUser.uid,
           email: authUser.email,
           emailVerified,
-          name: data?.name ?? cached?.name,
-          handle: data?.handle ?? cached?.handle,
+          name: publicData?.name ?? cached?.name,
+          handle: publicData?.handle ?? cached?.handle,
           city: loc.city ?? cached?.city,
           campus: loc.campus ?? cached?.campus,
           campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
           campusType: loc.campusType ?? cached?.campusType,
-          phone: data?.phone || authUser.phoneNumber || cached?.phone || null,
-          photoUrl: data?.photoUrl || data?.avatarUrl || cached?.photoUrl || null,
-          coffeeIntents: Array.isArray(data?.coffeeIntents)
-            ? data.coffeeIntents
+          phone: privateData?.phone || authUser.phoneNumber || cached?.phone || null,
+          photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || null,
+          coffeeIntents: Array.isArray(publicData?.coffeeIntents)
+            ? publicData.coffeeIntents
             : Array.isArray(cached?.coffeeIntents)
               ? cached.coffeeIntents
               : [],
-          ambiancePreference: data?.ambiancePreference ?? cached?.ambiancePreference ?? null,
+          ambiancePreference: publicData?.ambiancePreference ?? cached?.ambiancePreference ?? null,
         };
         setUser(merged);
         void saveUserProfile(merged);

@@ -493,33 +493,34 @@ describe('subscribeApprovedCheckins', () => {
       mockDoc({ userId: 'user2', timestamp: 1705315000000 }),
     ]);
 
-    let callCount = 0;
+    let primaryCallback: ((snapshot: any) => void) | null = null;
+    let legacyCallback: ((snapshot: any) => void) | null = null;
     mockQuery.onSnapshot.mockImplementation((cb: (snapshot: any) => void) => {
-      if (callCount === 0) {
-        // First call (primary schema)
-        setTimeout(() => cb(emptySnapshot), 0);
-        callCount++;
-        return jest.fn();
-      } else {
-        // Second call (legacy schema)
-        setTimeout(() => cb(legacySnapshot), 0);
+      if (!primaryCallback) {
+        primaryCallback = cb;
         return jest.fn();
       }
+      legacyCallback = cb;
+      return jest.fn();
     });
 
     subscribeApprovedCheckins(mockDb, callback);
+    if (!primaryCallback) {
+      throw new Error('Primary callback was not registered');
+    }
+    const invokePrimary = primaryCallback as (snapshot: any) => void;
+    invokePrimary(emptySnapshot);
+    if (!legacyCallback) {
+      throw new Error('Legacy callback was not registered');
+    }
+    const invokeLegacy = legacyCallback as (snapshot: any) => void;
+    invokeLegacy(legacySnapshot);
 
-    // Allow async operations to complete
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        expect(mockQuery.orderBy).toHaveBeenCalledWith('timestamp', 'desc');
-        expect(callback).toHaveBeenCalledWith([
-          { id: 'mock-doc-id', userId: 'user1', timestamp: 1705314000000 },
-          { id: 'mock-doc-id', userId: 'user2', timestamp: 1705315000000 },
-        ]);
-        resolve(undefined);
-      }, 10);
-    });
+    expect(mockQuery.orderBy).toHaveBeenCalledWith('timestamp', 'desc');
+    expect(callback).toHaveBeenCalledWith([
+      { id: 'mock-doc-id', userId: 'user1', timestamp: 1705314000000 },
+      { id: 'mock-doc-id', userId: 'user2', timestamp: 1705315000000 },
+    ]);
   });
 
   it('should return unsubscribe function', () => {
@@ -586,38 +587,32 @@ describe('subscribeApprovedCheckins', () => {
       mockDoc({ userId: 'user1', createdAt: 1705314000000 }),
     ]);
 
-    let callCount = 0;
-    let primaryCallback: any = null;
-
+    let primaryCallback: ((snapshot: any) => void) | null = null;
+    let legacyCallback: ((snapshot: any) => void) | null = null;
     mockQuery.onSnapshot.mockImplementation((cb: (snapshot: any) => void) => {
-      if (callCount === 0) {
-        // Primary subscription - store callback and initially return empty
+      if (!primaryCallback) {
         primaryCallback = cb;
-        setTimeout(() => cb(emptySnapshot), 0);
-        callCount++;
         return mockUnsubscribePrimary;
-      } else {
-        // Legacy subscription established
-        setTimeout(() => cb(emptySnapshot), 0);
-        // After legacy subscribes, trigger primary with data
-        setTimeout(() => {
-          if (primaryCallback) {
-            primaryCallback(dataSnapshot);
-          }
-        }, 5);
-        return mockUnsubscribeLegacy;
       }
+
+      legacyCallback = cb;
+      return mockUnsubscribeLegacy;
     });
 
     subscribeApprovedCheckins(mockDb, callback);
+    if (!primaryCallback) {
+      throw new Error('Primary callback was not registered');
+    }
+    const invokePrimary = primaryCallback as (snapshot: any) => void;
+    invokePrimary(emptySnapshot);
+    if (!legacyCallback) {
+      throw new Error('Legacy callback was not registered');
+    }
+    const invokeLegacy = legacyCallback as (snapshot: any) => void;
+    invokeLegacy(emptySnapshot);
+    invokePrimary(dataSnapshot);
 
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        // Legacy unsubscribe should have been called when primary got data
-        expect(mockUnsubscribeLegacy).toHaveBeenCalled();
-        resolve(undefined);
-      }, 20);
-    });
+    expect(mockUnsubscribeLegacy).toHaveBeenCalled();
   });
 
   it('should handle documents with null data in primary subscription', () => {
@@ -648,29 +643,28 @@ describe('subscribeApprovedCheckins', () => {
       mockDocWithNullData(),
     ]);
 
-    let callCount = 0;
+    let primaryCallback: ((snapshot: any) => void) | null = null;
     mockQuery.onSnapshot.mockImplementation((cb: (snapshot: any) => void) => {
-      if (callCount === 0) {
-        setTimeout(() => cb(emptySnapshot), 0);
-        callCount++;
-        return jest.fn();
-      } else {
-        setTimeout(() => cb(legacySnapshot), 0);
+      if (!primaryCallback) {
+        primaryCallback = cb;
         return jest.fn();
       }
+
+      cb(legacySnapshot);
+      return jest.fn();
     });
 
     subscribeApprovedCheckins(mockDb, callback);
+    if (!primaryCallback) {
+      throw new Error('Primary callback was not registered');
+    }
+    const invokePrimary = primaryCallback as (snapshot: any) => void;
+    invokePrimary(emptySnapshot);
 
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        expect(callback).toHaveBeenCalledWith([
-          { id: 'mock-doc-id', userId: 'user1', timestamp: 1705314000000 },
-          { id: 'mock-doc-null' }, // null data becomes empty object
-        ]);
-        resolve(undefined);
-      }, 10);
-    });
+    expect(callback).toHaveBeenCalledWith([
+      { id: 'mock-doc-id', userId: 'user1', timestamp: 1705314000000 },
+      { id: 'mock-doc-null' }, // null data becomes empty object
+    ]);
   });
 
   it('should handle subscription errors', () => {

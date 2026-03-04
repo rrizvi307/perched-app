@@ -33,13 +33,13 @@ service firebase.storage {
     }
 
     function hasFriendAccess(userId) {
-      return firestore.exists(/databases/(default)/documents/users/$(userId)) &&
-        firestore.get(/databases/(default)/documents/users/$(userId)).data.friends.hasAny([request.auth.uid]);
+      return firestore.exists(/databases/(default)/documents/socialGraph/$(userId)) &&
+        firestore.get(/databases/(default)/documents/socialGraph/$(userId)).data.friends.hasAny([request.auth.uid]);
     }
 
     function hasCloseFriendAccess(userId) {
-      return firestore.exists(/databases/(default)/documents/users/$(userId)) &&
-        firestore.get(/databases/(default)/documents/users/$(userId)).data.closeFriends.hasAny([request.auth.uid]);
+      return firestore.exists(/databases/(default)/documents/socialGraph/$(userId)) &&
+        firestore.get(/databases/(default)/documents/socialGraph/$(userId)).data.closeFriends.hasAny([request.auth.uid]);
     }
 
     function hasValidCheckinMetadata(userId) {

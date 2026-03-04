@@ -14,6 +14,10 @@ const firestoreRules = fs.readFileSync(path.resolve(process.cwd(), 'firestore.ru
 const storageRules = fs.readFileSync(path.resolve(process.cwd(), 'storage.rules'), 'utf8');
 
 let testEnv: RulesTestEnvironment;
+const hasRulesEmulator =
+  Boolean(process.env.FIRESTORE_EMULATOR_HOST) ||
+  Boolean(process.env.FIREBASE_EMULATOR_HUB);
+const describeRulesSuite = hasRulesEmulator ? describe : describe.skip;
 
 async function seedFirestore(
   collection: string,
@@ -45,7 +49,7 @@ async function seedCheckinMedia(
   });
 }
 
-describe('security rules', () => {
+describeRulesSuite('security rules', () => {
   beforeAll(async () => {
     testEnv = await initializeTestEnvironment({
       projectId: PROJECT_ID,
@@ -80,18 +84,40 @@ describe('security rules', () => {
       await assertFails(bobDb.collection('userPrivate').doc('alice').get());
     });
 
-    it('blocks public users doc writes that include private contact fields', async () => {
+    it('allows publicProfiles reads but keeps users and socialGraph owner-only', async () => {
       const aliceDb = testEnv.authenticatedContext('alice').firestore();
+      const bobDb = testEnv.authenticatedContext('bob').firestore();
 
       await assertSucceeds(
-        aliceDb.collection('users').doc('alice').set({
+        aliceDb.collection('publicProfiles').doc('alice').set({
           createdAt: 1,
           name: 'Alice',
         }),
       );
 
+      await seedFirestore('users', 'alice', {
+        createdAt: 1,
+        migrationVersion: 2,
+      });
+      await seedFirestore('socialGraph', 'alice', {
+        createdAt: 1,
+        friends: ['bob'],
+        closeFriends: [],
+        blocked: [],
+      });
+
+      await assertSucceeds(bobDb.collection('publicProfiles').doc('alice').get());
+      await assertSucceeds(aliceDb.collection('users').doc('alice').get());
+      await assertFails(bobDb.collection('users').doc('alice').get());
+      await assertSucceeds(aliceDb.collection('socialGraph').doc('alice').get());
+      await assertFails(bobDb.collection('socialGraph').doc('alice').get());
+    });
+
+    it('blocks account and contact fields from publicProfiles and raw users writes', async () => {
+      const aliceDb = testEnv.authenticatedContext('alice').firestore();
+
       await assertFails(
-        aliceDb.collection('users').doc('alice-contact').set({
+        aliceDb.collection('publicProfiles').doc('alice-contact').set({
           createdAt: 1,
           name: 'Alice Contact',
           email: 'alice@example.com',
@@ -99,15 +125,21 @@ describe('security rules', () => {
       );
 
       await assertFails(
+        aliceDb.collection('users').doc('alice-public').set({
+          createdAt: 1,
+          name: 'Should not live in users',
+        }),
+      );
+
+      await assertFails(
         aliceDb.collection('users').doc('alice-push').set({
           createdAt: 1,
-          name: 'Alice Push',
           pushToken: 'ExponentPushToken[abc]',
         }),
       );
     });
 
-    it('requires verified email or phone auth for check-in creation', async () => {
+    it('blocks direct client check-in creation', async () => {
       const unverifiedDb = testEnv
         .authenticatedContext('unverified', { email: 'unverified@example.com', email_verified: false })
         .firestore();
@@ -127,7 +159,7 @@ describe('security rules', () => {
         }),
       );
 
-      await assertSucceeds(
+      await assertFails(
         verifiedDb.collection('checkins').doc('checkin-verified').set({
           userId: 'verified',
           createdAt: 1,
@@ -136,7 +168,7 @@ describe('security rules', () => {
         }),
       );
 
-      await assertSucceeds(
+      await assertFails(
         phoneDb.collection('checkins').doc('checkin-phone').set({
           userId: 'phone-user',
           createdAt: 1,
@@ -205,6 +237,78 @@ describe('security rules', () => {
         }, { merge: true }),
       );
     });
+
+    it('enforces parent check-in visibility for reactions', async () => {
+      await seedFirestore('socialGraph', 'owner', {
+        createdAt: 1,
+        friends: ['friend-user'],
+        closeFriends: [],
+        blocked: [],
+      });
+      await seedFirestore('checkins', 'friends-checkin', {
+        userId: 'owner',
+        createdAt: 1,
+        spotName: 'Cafe',
+        visibility: 'friends',
+      });
+
+      await seedFirestore('reactions', 'owner-reaction', {
+        checkinId: 'friends-checkin',
+        type: 'like',
+        userId: 'owner',
+        createdAt: 1,
+      });
+
+      const friendDb = testEnv.authenticatedContext('friend-user').firestore();
+      const strangerDb = testEnv.authenticatedContext('stranger-user').firestore();
+
+      await assertSucceeds(friendDb.collection('reactions').doc('owner-reaction').get());
+      await assertFails(strangerDb.collection('reactions').doc('owner-reaction').get());
+      await assertFails(
+        strangerDb.collection('reactions').doc('stranger-reaction').set({
+          checkinId: 'friends-checkin',
+          type: 'like',
+          userId: 'stranger-user',
+          createdAt: 1,
+        }),
+      );
+    });
+
+    it('enforces parent check-in visibility for comments', async () => {
+      await seedFirestore('socialGraph', 'owner', {
+        createdAt: 1,
+        friends: ['friend-user'],
+        closeFriends: [],
+        blocked: [],
+      });
+      await seedFirestore('checkins', 'friends-checkin', {
+        userId: 'owner',
+        createdAt: 1,
+        spotName: 'Cafe',
+        visibility: 'friends',
+      });
+
+      await seedFirestore('comments', 'owner-comment', {
+        checkinId: 'friends-checkin',
+        text: 'Hidden from strangers',
+        userId: 'owner',
+        createdAt: 1,
+      });
+
+      const friendDb = testEnv.authenticatedContext('friend-user').firestore();
+      const strangerDb = testEnv.authenticatedContext('stranger-user').firestore();
+
+      await assertSucceeds(friendDb.collection('comments').doc('owner-comment').get());
+      await assertFails(strangerDb.collection('comments').doc('owner-comment').get());
+      await assertFails(
+        strangerDb.collection('comments').doc('stranger-comment').set({
+          checkinId: 'friends-checkin',
+          text: 'Should not be allowed',
+          userId: 'stranger-user',
+          createdAt: 1,
+        }),
+      );
+    });
   });
 
   describe('storage.rules', () => {
@@ -235,10 +339,11 @@ describe('security rules', () => {
     });
 
     it('allows only authorized friends to read friends-only check-in media', async () => {
-      await seedFirestore('users', 'owner', {
+      await seedFirestore('socialGraph', 'owner', {
         createdAt: 1,
         friends: ['friend-user'],
         closeFriends: [],
+        blocked: [],
       });
       await seedCheckinMedia('owner', 'friend-only.jpg', 'friends');
 
@@ -252,10 +357,11 @@ describe('security rules', () => {
     });
 
     it('allows only close friends to read close-friends check-in media', async () => {
-      await seedFirestore('users', 'owner', {
+      await seedFirestore('socialGraph', 'owner', {
         createdAt: 1,
         friends: ['friend-user', 'close-user'],
         closeFriends: ['close-user'],
+        blocked: [],
       });
       await seedCheckinMedia('owner', 'close-only.jpg', 'close');
 

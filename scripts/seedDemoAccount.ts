@@ -256,13 +256,27 @@ async function ensureUser(
     console.log(`  • using existing auth user ${user.email}`);
   }
 
-  await db.collection('users').doc(uid).set(
+  await db.collection('publicProfiles').doc(uid).set(
     {
-      id: uid,
-      displayName: user.displayName,
-      username: user.username,
-      userHandle: user.username,
-      photoURL: user.photoURL,
+      name: user.displayName,
+      nameLower: user.displayName.toLowerCase(),
+      handle: user.username,
+      photoUrl: user.photoURL,
+      city: 'Houston',
+      campus: null,
+      campusOrCity: 'Houston',
+      campusType: 'city',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('socialGraph').doc(uid).set(
+    {
+      friends: [],
+      closeFriends: [],
+      blocked: [],
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },
@@ -272,6 +286,15 @@ async function ensureUser(
   await db.collection('userPrivate').doc(uid).set(
     {
       email: user.email,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('users').doc(uid).set(
+    {
+      migrationVersion: 2,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },
@@ -409,12 +432,12 @@ async function ensureFriendship(
   userA: string,
   userB: string
 ) {
-  await db.collection('users').doc(userA).set(
+  await db.collection('socialGraph').doc(userA).set(
     { friends: admin.firestore.FieldValue.arrayUnion(userB) },
     { merge: true }
   );
 
-  await db.collection('users').doc(userB).set(
+  await db.collection('socialGraph').doc(userB).set(
     { friends: admin.firestore.FieldValue.arrayUnion(userA) },
     { merge: true }
   );
@@ -461,12 +484,15 @@ async function main() {
     console.log(`  ✓ ${plan.docId}`);
   }
 
-  await db.collection('users').doc(demoUid).set(
+  await db.collection('userStats').doc(demoUid).set(
     {
-      checkInCount: DEMO_CHECKINS.length,
+      userId: demoUid,
+      totalCheckins: DEMO_CHECKINS.length,
+      totalSpots: DEMO_SPOTS.length,
+      friendCount: friendUids.length,
       streakDays: 7,
-      badgesUnlocked: ['explorer', 'early_adopter', 'social_butterfly'],
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );

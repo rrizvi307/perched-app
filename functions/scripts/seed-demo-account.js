@@ -96,22 +96,38 @@ function buildCheckin(user, spot, index) {
 }
 
 async function ensureUserDoc(user, profile = {}) {
-  await db.collection('users').doc(user.uid).set(
+  await db.collection('publicProfiles').doc(user.uid).set(
     {
-      id: user.uid,
       name: profile.name || user.displayName || null,
+      nameLower: String(profile.name || user.displayName || '').toLowerCase() || null,
       handle: profile.handle || null,
       photoUrl: null,
       campus: profile.campus || null,
       city: profile.city || 'Houston',
-      friends: profile.friends || [],
-      premiumStatus: profile.premiumStatus || {
-        tier: 'free',
-        isActive: false,
-        expiresAt: null,
-        source: 'free',
-      },
+      campusOrCity: profile.campus || profile.city || 'Houston',
+      campusType: profile.campus ? 'campus' : 'city',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('socialGraph').doc(user.uid).set(
+    {
+      friends: profile.friends || [],
+      closeFriends: [],
+      blocked: [],
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.collection('users').doc(user.uid).set(
+    {
+      migrationVersion: 2,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
@@ -119,6 +135,12 @@ async function ensureUserDoc(user, profile = {}) {
   await db.collection('userPrivate').doc(user.uid).set(
     {
       email: user.email,
+      premiumStatus: profile.premiumStatus || {
+        tier: 'free',
+        isActive: false,
+        expiresAt: null,
+        source: 'free',
+      },
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     },

@@ -379,7 +379,7 @@ async function deleteContent(contentType: ContentType, contentId: string): Promi
     const collectionMap: Record<ContentType, string> = {
       caption: 'checkins',
       comment: 'comments',
-      profile: 'users',
+      profile: 'publicProfiles',
       spot_name: 'spots',
       image: 'images',
     };
@@ -412,7 +412,7 @@ async function warnUser(userId: string, violations: ViolationType[]): Promise<vo
     });
 
     // Increment warning count
-    const userRef = db.collection('users').doc(userId);
+    const userRef = db.collection('userPrivate').doc(userId);
     const userDoc = await userRef.get();
 
     if (userDoc.exists) {
@@ -446,7 +446,7 @@ async function checkAndBanUser(userId: string): Promise<void> {
 
     // Ban if 3+ warnings
     if (warningCount >= 3) {
-      await db.collection('users').doc(userId).update({
+      await db.collection('userPrivate').doc(userId).update({
         banned: true,
         bannedAt: Date.now(),
         bannedReason: 'Multiple violations',

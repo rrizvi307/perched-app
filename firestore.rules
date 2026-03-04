@@ -10,59 +10,6 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function friendList(doc) {
-      return doc.friends is list ? doc.friends : [];
-    }
-
-    function closeFriendList(doc) {
-      return doc.closeFriends is list ? doc.closeFriends : [];
-    }
-
-    function hasPendingIncomingFriendRequest(ownerId, actorId) {
-      return exists(/databases/$(database)/documents/friendRequests/$(ownerId + "_" + actorId)) &&
-        get(/databases/$(database)/documents/friendRequests/$(ownerId + "_" + actorId)).data.status == 'pending';
-    }
-
-    function canAddSelfToFriendList(ownerId) {
-      return !friendList(resource.data).hasAny([request.auth.uid]) &&
-        friendList(request.resource.data).hasAny([request.auth.uid]) &&
-        friendList(request.resource.data).hasAll(friendList(resource.data)) &&
-        friendList(request.resource.data).size() <= friendList(resource.data).size() + 1 &&
-        closeFriendList(request.resource.data).hasAll(closeFriendList(resource.data)) &&
-        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
-        hasPendingIncomingFriendRequest(ownerId, request.auth.uid);
-    }
-
-    function canRemoveSelfFromFriendList() {
-      return friendList(resource.data).hasAny([request.auth.uid]) &&
-        !friendList(request.resource.data).hasAny([request.auth.uid]) &&
-        friendList(resource.data).hasAll(friendList(request.resource.data)) &&
-        friendList(resource.data).size() <= friendList(request.resource.data).size() + 1 &&
-        !closeFriendList(request.resource.data).hasAny([request.auth.uid]) &&
-        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
-        closeFriendList(resource.data).size() <= closeFriendList(request.resource.data).size() + 1;
-    }
-
-    function canRemoveSelfFromCloseFriendList() {
-      return closeFriendList(resource.data).hasAny([request.auth.uid]) &&
-        !closeFriendList(request.resource.data).hasAny([request.auth.uid]) &&
-        closeFriendList(resource.data).hasAll(closeFriendList(request.resource.data)) &&
-        closeFriendList(resource.data).size() <= closeFriendList(request.resource.data).size() + 1 &&
-        friendList(request.resource.data).hasAll(friendList(resource.data)) &&
-        friendList(resource.data).hasAll(friendList(request.resource.data));
-    }
-
-    function canMutateFriendEdge(ownerId) {
-      return isAuthenticated() &&
-        request.auth.uid != ownerId &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends', 'closeFriends']) &&
-        (
-          canAddSelfToFriendList(ownerId) ||
-          canRemoveSelfFromFriendList() ||
-          canRemoveSelfFromCloseFriendList()
-        );
-    }
-
     function isAdmin() {
       return isAuthenticated() &&
         exists(/databases/$(database)/documents/admins/$(request.auth.uid));
@@ -78,31 +25,118 @@ service cloud.firestore {
         (isAuthenticated() && request.auth.token.phone_number != null);
     }
 
-    // Rate limiting helper - approximate check
-    function withinRateLimit() {
-      // TODO(beta->GA): Replace this no-op with server-side rate limiting
-      // (Cloud Function/App Check backed) before public launch.
-      return true;
+    function isStringList(value) {
+      return !(value is list) || value.size() == 0 || value[0] is string;
     }
 
-    // Users collection
-    match /users/{userId} {
-      // Anyone can read public profile fields
+    function socialGraphExists(userId) {
+      return exists(/databases/$(database)/documents/socialGraph/$(userId));
+    }
+
+    function socialGraphData(userId) {
+      return get(/databases/$(database)/documents/socialGraph/$(userId)).data;
+    }
+
+    function hasFriendAccess(userId) {
+      return socialGraphExists(userId) &&
+        socialGraphData(userId).friends is list &&
+        socialGraphData(userId).friends.hasAny([request.auth.uid]);
+    }
+
+    function hasCloseFriendAccess(userId) {
+      return socialGraphExists(userId) &&
+        socialGraphData(userId).closeFriends is list &&
+        socialGraphData(userId).closeFriends.hasAny([request.auth.uid]);
+    }
+
+    function canReadCheckinData(checkinData) {
+      return isAuthenticated() && (
+        checkinData.userId == request.auth.uid ||
+        checkinData.visibility == 'public' ||
+        (
+          checkinData.visibility == 'friends' && hasFriendAccess(checkinData.userId)
+        ) ||
+        (
+          checkinData.visibility == 'close' && hasCloseFriendAccess(checkinData.userId)
+        )
+      );
+    }
+
+    function canReadCheckinById(checkinId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/checkins/$(checkinId)) &&
+        canReadCheckinData(get(/databases/$(database)/documents/checkins/$(checkinId)).data);
+    }
+
+    match /publicProfiles/{userId} {
       allow read: if isAuthenticated();
 
-      // Users can only create/update their own profile
-      allow create: if isAuthenticated() &&
-                      request.auth.uid == userId &&
-                      request.resource.data.keys().hasAll(['createdAt']) &&
-                      !request.resource.data.keys().hasAny(['email', 'phone', 'phoneNormalized', 'pushToken']);
+      allow create: if isOwner(userId) &&
+                      request.resource.data.keys().hasOnly([
+                        'name',
+                        'nameLower',
+                        'city',
+                        'campus',
+                        'campusOrCity',
+                        'campusType',
+                        'handle',
+                        'photoUrl',
+                        'avatarUrl',
+                        'coffeeIntents',
+                        'ambiancePreference',
+                        'referralCode',
+                        'createdAt',
+                        'updatedAt'
+                      ]);
 
-      allow update: if (
-        isOwner(userId) &&
-          // Prevent changing critical fields
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'createdAt', 'email', 'phone', 'phoneNormalized', 'pushToken'])
-      ) || canMutateFriendEdge(userId);
+      allow update: if isOwner(userId) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                        'name',
+                        'nameLower',
+                        'city',
+                        'campus',
+                        'campusOrCity',
+                        'campusType',
+                        'handle',
+                        'photoUrl',
+                        'avatarUrl',
+                        'coffeeIntents',
+                        'ambiancePreference',
+                        'referralCode',
+                        'updatedAt'
+                      ]);
 
-      // Only user or admin can delete
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /socialGraph/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if isOwner(userId) &&
+                      request.resource.data.keys().hasOnly([
+                        'friends',
+                        'closeFriends',
+                        'blocked',
+                        'createdAt',
+                        'updatedAt'
+                      ]) &&
+                      isStringList(request.resource.data.friends) &&
+                      isStringList(request.resource.data.closeFriends) &&
+                      isStringList(request.resource.data.blocked);
+
+      allow update: if false;
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Raw owner/admin account doc
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId) &&
+                              request.resource.data.keys().hasOnly([
+                                'createdAt',
+                                'updatedAt',
+                                'migrationVersion'
+                              ]);
       allow delete: if isOwner(userId) || isAdmin();
     }
 
@@ -110,33 +144,33 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow create, update: if isAuthenticated() &&
                               request.auth.uid == userId &&
-                              request.resource.data.keys().hasOnly(['email', 'phone', 'phoneNormalized', 'createdAt', 'updatedAt']);
+                              !request.resource.data.keys().hasAny([
+                                'friends',
+                                'closeFriends',
+                                'blocked',
+                                'name',
+                                'nameLower',
+                                'handle',
+                                'city',
+                                'campus',
+                                'campusOrCity',
+                                'campusType',
+                                'photoUrl',
+                                'avatarUrl',
+                                'coffeeIntents',
+                                'ambiancePreference'
+                              ]);
       allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Check-ins collection
     match /checkins/{checkinId} {
       // Read access based on visibility
-      allow read: if isAuthenticated() && (
-        // Public check-ins
-        resource.data.visibility == 'public' ||
-        // Friends-only: check if requester is in user's friends list
-        (resource.data.visibility == 'friends' &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.friends.hasAny([request.auth.uid])) ||
-        // Close friends
-        (resource.data.visibility == 'close' &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.closeFriends.hasAny([request.auth.uid])) ||
-        // Own check-ins
-        resource.data.userId == request.auth.uid
-      );
+      allow read: if canReadCheckinData(resource.data);
 
-      allow create: if isAuthenticated() &&
-                      request.auth.uid == request.resource.data.userId &&
-                      request.resource.data.keys().hasAll(['userId', 'createdAt', 'spotName']) &&
-                      hasPostingAccess() &&
-                      withinRateLimit();
+      // Check-ins are created via Cloud Functions so posting eligibility and rate limits
+      // are enforced server-side instead of trusting client writes.
+      allow create: if false;
 
       // Only owner can update their check-ins
       allow update: if isOwner(resource.data.userId) &&
@@ -220,6 +254,10 @@ service cloud.firestore {
 
       // No updates or deletes
       allow update, delete: if false;
+    }
+
+    match /checkinWriteGuards/{userId} {
+      allow read, write: if false;
     }
 
     // Spot aggregates used by explore, spot detail, and recommendations.
@@ -312,22 +350,20 @@ service cloud.firestore {
 
     // Reactions collection (for check-in reactions)
     match /reactions/{reactionId} {
-      // Anyone authenticated can read reactions
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinById(resource.data.checkinId);
 
-      // Users can create reactions with their own userId
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['checkinId', 'type', 'userId', 'createdAt']);
+                      request.resource.data.keys().hasAll(['checkinId', 'type', 'userId', 'createdAt']) &&
+                      canReadCheckinById(request.resource.data.checkinId);
 
-      // Users can only delete their own reactions
       allow delete: if isAuthenticated() &&
-                      resource.data.userId == request.auth.uid;
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId);
 
-      // Allow safe owner updates (used for idempotent reaction writes).
-      // checkinId and userId must remain immutable.
       allow update: if isAuthenticated() &&
                       resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId) &&
                       request.resource.data.userId == resource.data.userId &&
                       request.resource.data.checkinId == resource.data.checkinId &&
                       request.resource.data.keys().hasOnly([
@@ -344,17 +380,32 @@ service cloud.firestore {
 
     // Comments collection (for check-in comments)
     match /comments/{commentId} {
-      // Anyone authenticated can read comments
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinById(resource.data.checkinId);
 
-      // Users can create comments with their own userId
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']);
+                      request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']) &&
+                      canReadCheckinById(request.resource.data.checkinId);
 
-      // Users can update/delete their own comments
-      allow update, delete: if isAuthenticated() &&
-                              resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.checkinId == resource.data.checkinId &&
+                      request.resource.data.keys().hasOnly([
+                        'id',
+                        'checkinId',
+                        'userId',
+                        'userName',
+                        'userHandle',
+                        'text',
+                        'createdAt',
+                        'updatedAt'
+                      ]);
+
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId);
     }
 
     // User stats collection (for gamification)

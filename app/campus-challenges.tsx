@@ -21,6 +21,8 @@ import {
 } from '@/services/campusChallenges';
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
+import { isGrowthProgramsEnabled } from '@/services/runtimeFlags';
+import { FeatureUnavailableScreen } from '@/components/ui/feature-unavailable-screen';
 
 export default function CampusChallengesScreen() {
   const router = useRouter();
@@ -38,9 +40,10 @@ export default function CampusChallengesScreen() {
   const [challenges, setChallenges] = useState<{ challenge: CampusChallenge; progress: ChallengeProgress | null }[]>([]);
   const [rewards, setRewards] = useState<ChallengeReward[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const growthProgramsEnabled = isGrowthProgramsEnabled();
 
   const loadData = useCallback(async () => {
-    if (!user?.id || !user?.campus) return;
+    if (!growthProgramsEnabled || !user?.id || !user?.campus) return;
 
     try {
       // Get campus info
@@ -59,11 +62,21 @@ export default function CampusChallengesScreen() {
     } catch (error) {
       console.error('Failed to load campus challenges:', error);
     }
-  }, [user?.id, user?.campus]);
+  }, [growthProgramsEnabled, user?.id, user?.campus]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  if (!growthProgramsEnabled) {
+    return (
+      <FeatureUnavailableScreen
+        title="Campus Challenges Unavailable"
+        description="Campus challenges are disabled for the App Store build until progress, rewards, and moderation flows move fully server-side."
+        onCtaPress={() => router.back()}
+      />
+    );
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true);

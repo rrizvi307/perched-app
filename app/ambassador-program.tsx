@@ -26,6 +26,8 @@ import {
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 import { useToast } from '@/contexts/ToastContext';
+import { isGrowthProgramsEnabled } from '@/services/runtimeFlags';
+import { FeatureUnavailableScreen } from '@/components/ui/feature-unavailable-screen';
 
 export default function AmbassadorProgramScreen() {
   const router = useRouter();
@@ -48,9 +50,10 @@ export default function AmbassadorProgramScreen() {
   const [topAmbassadors, setTopAmbassadors] = useState<any[]>([]);
   const [motivationStatement, setMotivationStatement] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const growthProgramsEnabled = isGrowthProgramsEnabled();
 
   const loadData = useCallback(async () => {
-    if (!user?.id || !user?.campus) return;
+    if (!growthProgramsEnabled || !user?.id || !user?.campus) return;
 
     try {
       const campus = getCampusById(user.campus.toLowerCase().replace(/\s+/g, '-'));
@@ -77,11 +80,21 @@ export default function AmbassadorProgramScreen() {
     } catch (error) {
       console.error('Failed to load ambassador data:', error);
     }
-  }, [user?.id, user?.campus]);
+  }, [growthProgramsEnabled, user?.id, user?.campus]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  if (!growthProgramsEnabled) {
+    return (
+      <FeatureUnavailableScreen
+        title="Ambassador Program Unavailable"
+        description="This program is not enabled in the App Store build yet. Keep it behind a launch flag until the backend and rules are production-ready."
+        onCtaPress={() => router.back()}
+      />
+    );
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true);

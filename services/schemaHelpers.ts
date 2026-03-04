@@ -247,47 +247,57 @@ export function subscribeApprovedCheckins(
   onUpdate: (items: any[]) => void,
   limit: number = 40
 ): () => void {
-  // Try primary schema first
+  const mapSnapshotItems = (snapshot: any) => {
+    const items: any[] = [];
+    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    return items;
+  };
+
   const primaryQuery = db
     .collection('checkins')
     .where('approved', '==', true)
     .orderBy('createdAt', 'desc')
     .limit(limit);
 
-  let unsubscribePrimary: (() => void) | null = null;
   let unsubscribeLegacy: (() => void) | null = null;
 
-  // Subscribe to primary schema
-  unsubscribePrimary = primaryQuery.onSnapshot(
-    (snapshot: any) => {
-      // If we got results, use them
-      if (!snapshot.empty) {
-        const items: any[] = [];
-        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-        onUpdate(items);
+  const subscribeLegacy = () => {
+    if (unsubscribeLegacy) return;
 
-        // Clean up legacy subscription if it exists
+    const legacyQuery = db
+      .collection('checkins')
+      .where('approved', '==', true)
+      .orderBy('timestamp', 'desc')
+      .limit(limit);
+
+    unsubscribeLegacy = legacyQuery.onSnapshot(
+      (legacySnapshot: any) => {
+        onUpdate(mapSnapshotItems(legacySnapshot));
+      },
+      (error: Error) => {
+        if (String(error?.message || '').includes('index')) {
+          onUpdate([]);
+          return;
+        }
+        console.error('subscribeApprovedCheckins error:', error);
+      }
+    );
+  };
+
+  const unsubscribePrimary = primaryQuery.onSnapshot(
+    (snapshot: any) => {
+      if (!snapshot.empty) {
+        onUpdate(mapSnapshotItems(snapshot));
         if (unsubscribeLegacy) {
           unsubscribeLegacy();
           unsubscribeLegacy = null;
         }
-      } else {
-        // No results from primary, try legacy
-        const legacyQuery = db
-          .collection('checkins')
-          .where('approved', '==', true)
-          .orderBy('timestamp', 'desc')
-          .limit(limit);
-
-        unsubscribeLegacy = legacyQuery.onSnapshot((legacySnapshot: any) => {
-          const items: any[] = [];
-          legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-          onUpdate(items);
-        });
+        return;
       }
+
+      subscribeLegacy();
     },
     (error: Error) => {
-      // Gracefully handle missing index errors — just return empty
       if (String(error?.message || '').includes('index')) {
         onUpdate([]);
         return;
@@ -296,9 +306,8 @@ export function subscribeApprovedCheckins(
     }
   );
 
-  // Return combined unsubscribe function
   return () => {
-    if (unsubscribePrimary) unsubscribePrimary();
+    unsubscribePrimary();
     if (unsubscribeLegacy) unsubscribeLegacy();
   };
 }
