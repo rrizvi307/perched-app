@@ -107,6 +107,7 @@ This document captures the pre-production audit findings, the release blockers, 
      - this removes one major client/backend split in the explore intelligence path and reduces provider drift for `openNow`, hours, and rating aggregation
      - added `googlePlacesProxy` in Cloud Functions for normalized Google `details`, `nearby`, `search_text`, `search_locations`, and `reverse_geocode` lookups
      - `services/googleMaps.ts` now prefers the authenticated backend proxy for spot, check-in, and signed-in search flows, while keeping a direct Google fallback for unauthenticated onboarding/search recovery paths
+     - `services/googleMaps.ts` now also uses the backend proxy when an App Check token is present without a signed-in user, so protected bootstrap flows do not unnecessarily fall back to direct Google calls
    - Follow-up:
      - eliminate the remaining unauthenticated direct Google fallback once App Check or a public-safe bootstrap path is in place
      - initialize and enforce App Check once the mobile-side provider path is fully backend-backed

@@ -37,6 +37,7 @@ describe('googleMaps transport', () => {
   afterEach(() => {
     delete (global as any).GOOGLE_MAPS_API_KEY;
     delete (global as any).GOOGLE_PLACES_ENDPOINT;
+    delete (global as any).FIREBASE_APP_CHECK_TOKEN;
   });
 
   it('prefers the backend proxy for authenticated place details', async () => {
@@ -170,5 +171,43 @@ describe('googleMaps transport', () => {
       radius: 220,
       intent: 'study',
     });
+  });
+
+  it('uses the backend proxy when App Check is available without auth', async () => {
+    (global as any).FIREBASE_APP_CHECK_TOKEN = 'app-check-123';
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        place: {
+          placeId: 'proxy-appcheck-place',
+          name: 'Proxy App Check Cafe',
+          address: '100 Safe Proxy Ave',
+          rating: 4.6,
+          ratingCount: 63,
+          openNow: true,
+        },
+      })
+    );
+
+    const result = await getPlaceDetails('proxy-appcheck-place');
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeId: 'proxy-appcheck-place',
+        name: 'Proxy App Check Cafe',
+        rating: 4.6,
+        ratingCount: 63,
+        openNow: true,
+      })
+    );
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+    expect((global as any).fetch).toHaveBeenCalledWith(
+      'https://us-central1-perched-test.cloudfunctions.net/googlePlacesProxy',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-Firebase-AppCheck': 'app-check-123',
+        }),
+      })
+    );
   });
 });

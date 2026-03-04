@@ -183,7 +183,11 @@ async function fetchGooglePlacesProxy(action: string, payload: Record<string, an
   const endpoint = getGooglePlacesProxyEndpoint();
   if (!endpoint) return null;
   const authHeaders = await getProxyAuthHeaders();
-  if (typeof authHeaders.Authorization !== 'string' || !authHeaders.Authorization.trim()) {
+  const hasAuth = typeof authHeaders.Authorization === 'string' && authHeaders.Authorization.trim();
+  const hasAppCheck =
+    typeof authHeaders['X-Firebase-AppCheck'] === 'string' &&
+    authHeaders['X-Firebase-AppCheck'].trim();
+  if (!hasAuth && !hasAppCheck) {
     return null;
   }
   return fetchWithTimeout(
