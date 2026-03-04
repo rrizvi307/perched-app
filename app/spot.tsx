@@ -9,7 +9,7 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { getCheckinsForSpotRemote, getCheckinsRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
+import { getCheckinsForSpotRemote, getCheckinsRemote, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
 import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
@@ -127,6 +127,7 @@ export default function SpotDetail() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tagVotes, setTagVotes] = useState<Record<string, boolean>>({});
+  const [remoteTagScores, setRemoteTagScores] = useState<Record<string, number>>({});
   const [tagVariant, setTagVariant] = useState<keyof typeof TAG_VARIANTS>('core5');
   const [intelligence, setIntelligence] = useState<PlaceIntelligence | null>(null);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -177,8 +178,12 @@ export default function SpotDetail() {
         scores[normalized] = (scores[normalized] || 0) + 1;
       });
     });
+    Object.entries(remoteTagScores).forEach(([tag, count]) => {
+      if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return;
+      scores[tag] = (scores[tag] || 0) + count;
+    });
     return scores;
-  }, [visibleCheckins]);
+  }, [remoteTagScores, visibleCheckins]);
   const mapsInput = useMemo(() => ({
     placeId,
     coords,
@@ -333,6 +338,23 @@ export default function SpotDetail() {
       } catch {}
     })();
   }, [placeId, nameParam]);
+
+  useEffect(() => {
+    let canceled = false;
+    (async () => {
+      try {
+        const remoteTags = await getPlaceTagRemote(placeId || undefined, displayName);
+        if (!canceled) {
+          setRemoteTagScores(remoteTags && typeof remoteTags === 'object' ? remoteTags : {});
+        }
+      } catch {
+        if (!canceled) setRemoteTagScores({});
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [displayName, placeId]);
 
   useEffect(() => {
     (async () => {
@@ -529,7 +551,6 @@ export default function SpotDetail() {
     persistTagVotes(nextVotes);
     const delta = isActive ? -1 : 1;
     recordPlaceTag(eventPayload.placeId, eventPayload.name, tag, delta);
-    recordPlaceTagRemote({ ...eventPayload, delta });
     if (user?.id) {
       recordPlaceTagVoteRemote({ userId: user.id, placeId: eventPayload.placeId, name: eventPayload.name, tag, active: !isActive });
     }

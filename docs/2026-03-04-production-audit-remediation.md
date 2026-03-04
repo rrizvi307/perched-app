@@ -53,8 +53,10 @@ This document captures the pre-production audit findings, the release blockers, 
    - Current patch:
      - `place_tags` aggregate writes are disabled in client code
      - Firestore rules now treat `place_tags` as server-owned
+     - backend now recomputes `place_tags/{placeKey}` from `place_tag_votes` on every write so aggregate tags come from server-owned data instead of stale client docs
+     - spot intelligence now merges server-aggregated place-tag scores with visible check-in tags, improving low-checkin spots that have explicit user tag votes
    - Follow-up:
-     - add backend aggregation from `place_tag_votes` and check-in evidence
+     - extend tag aggregation with check-in evidence so spots can build credible tag priors before enough direct tag votes exist
 
 4. Server-authoritative rewards and achievements
    - Status: In progress

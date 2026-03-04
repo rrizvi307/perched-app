@@ -1713,6 +1713,72 @@ export const syncGamificationOnFriendsWrite = functions.firestore
     return null;
   });
 
+function normalizePlaceTagLabel(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, 40);
+}
+
+async function rebuildPlaceTagAggregate(placeKey: string): Promise<void> {
+  const normalizedPlaceKey = asId(placeKey);
+  if (!normalizedPlaceKey) return;
+
+  const snapshot = await db.collection('place_tag_votes').where('placeKey', '==', normalizedPlaceKey).get();
+  const counts: Record<string, number> = {};
+  let voters = 0;
+
+  snapshot.forEach((doc) => {
+    const votes = doc.data()?.votes;
+    if (!votes || typeof votes !== 'object') return;
+    voters += 1;
+    Object.entries(votes as Record<string, unknown>).forEach(([rawTag, rawActive]) => {
+      if (rawActive !== true) return;
+      const tag = normalizePlaceTagLabel(rawTag);
+      if (!tag) return;
+      counts[tag] = (counts[tag] || 0) + 1;
+    });
+  });
+
+  const ref = db.collection('place_tags').doc(normalizedPlaceKey);
+  if (!Object.keys(counts).length) {
+    await ref.delete().catch(() => {});
+    return;
+  }
+
+  await ref.set({
+    placeKey: normalizedPlaceKey,
+    tags: counts,
+    voterCount: voters,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAtMs: Date.now(),
+    source: 'place_tag_votes_trigger',
+  }, { merge: true });
+}
+
+export const syncPlaceTagAggregates = functions.firestore
+  .document('place_tag_votes/{voteId}')
+  .onWrite(async (change) => {
+    const placeKeys = Array.from(
+      new Set(
+        [
+          asId(change.before.exists ? change.before.data()?.placeKey : ''),
+          asId(change.after.exists ? change.after.data()?.placeKey : ''),
+        ].filter(Boolean)
+      )
+    );
+    if (!placeKeys.length) return null;
+
+    for (const placeKey of placeKeys) {
+      try {
+        await rebuildPlaceTagAggregate(placeKey);
+      } catch (error) {
+        console.error('syncPlaceTagAggregates error', { placeKey, error });
+      }
+    }
+    return null;
+  });
+
 type ExternalSource = 'foursquare' | 'yelp';
 type ExternalPlaceSignal = {
   source: ExternalSource;
