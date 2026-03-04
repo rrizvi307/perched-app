@@ -222,8 +222,11 @@ This document captures the pre-production audit findings, the release blockers, 
      - personalized recommendation scoring now fetches user preference weights once per request instead of once per candidate spot
      - time-pattern lookups are now batched for the top-ranked candidate subset and cached in memory, replacing one check-in query per spot
      - collaborative recommendations now resolve place names from `spots` docs instead of issuing an extra check-in fan-out query for name hydration
+     - collaborative recommendations now prefer a backend callable, so the app no longer directly scans other users' check-ins when Functions are available
+     - the backend collaborative path only uses other users' public check-ins as recommendation signals, reducing privacy leakage from private activity
+     - the client keeps a narrow Firestore fallback for unavailable or undeployed callable environments so dev and partial deploys do not hard-break recommendations
    - Follow-up:
-     - move collaborative filtering off the client and onto server-owned aggregates or a callable endpoint
+     - replace the remaining fallback with a fully server-owned aggregate once the callable path is stable in production
 
 ## Audit Notes
 

@@ -6,6 +6,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
 import { recordPerfMetric } from './perfMonitor';
 import { parseCheckinTimestamp } from './schemaHelpers';
@@ -64,6 +65,188 @@ const TIME_PATTERN_DOC_LIMIT_PER_SPOT = 60;
 const candidateSpotsMemoryCache = new Map<string, { ts: number; spots: any[] }>();
 const spotTimePatternMemoryCache = new Map<string, { ts: number; patterns: TimePattern[] }>();
 
+function getFunctionsRegion() {
+  return (
+    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+    'us-central1'
+  );
+}
+
+function sanitizeSpotRecommendation(raw: any): SpotRecommendation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const placeId = typeof raw.placeId === 'string' ? raw.placeId.trim() : '';
+  if (!placeId) return null;
+  const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : 'Unknown';
+  const score = typeof raw.score === 'number' && Number.isFinite(raw.score)
+    ? Math.max(0, Math.min(100, raw.score))
+    : 0;
+  const reasons = Array.isArray(raw.reasons)
+    ? raw.reasons.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0).slice(0, 4)
+    : [];
+
+  return {
+    placeId,
+    name,
+    score,
+    reasons,
+    predictedBusyness: typeof raw.predictedBusyness === 'number' ? raw.predictedBusyness : undefined,
+    predictedNoise: typeof raw.predictedNoise === 'number' ? raw.predictedNoise : undefined,
+    bestTimeToVisit: typeof raw.bestTimeToVisit === 'string' ? raw.bestTimeToVisit : undefined,
+    matchScore: typeof raw.matchScore === 'number' ? raw.matchScore : undefined,
+  };
+}
+
+function formatCollaborativeReason(matchCount: number): string {
+  const count = Math.max(0, Math.floor(matchCount));
+  return `${count} ${count === 1 ? 'user' : 'users'} with similar taste checked in here`;
+}
+
+async function callCollaborativeRecommendations(
+  currentSpotId?: string,
+  limit: number = 5,
+): Promise<SpotRecommendation[] | null> {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function' || typeof (fb as any).app !== 'function') {
+    return null;
+  }
+
+  try {
+    const callable = (fb as any)
+      .app()
+      .functions(getFunctionsRegion())
+      .httpsCallable('getCollaborativeRecommendations');
+    const response = await callable({ currentSpotId, limit });
+    const items = Array.isArray(response?.data?.recommendations) ? response.data.recommendations : [];
+    return items
+      .map((item: any) => sanitizeSpotRecommendation(item))
+      .filter((item: SpotRecommendation | null): item is SpotRecommendation => !!item);
+  } catch (error) {
+    devLog('getCollaborativeRecommendations callable failed', { error, currentSpotId, limit });
+    return null;
+  }
+}
+
+async function getCollaborativeRecommendationsFromFirestore(
+  userId: string,
+  currentSpotId?: string,
+  limit: number = 5
+): Promise<SpotRecommendation[]> {
+  const fb = ensureFirebase();
+  if (!fb) return [];
+
+  const db = fb.firestore();
+
+  // Get user's check-in history
+  const userCheckinsSnapshot = await db
+    .collection('checkins')
+    .where('userId', '==', userId)
+    .limit(50)
+    .get();
+
+  const userSpotIds = new Set<string>();
+  userCheckinsSnapshot.forEach((doc: any) => {
+    const placeId = doc.data().spotPlaceId;
+    if (placeId) userSpotIds.add(placeId);
+  });
+
+  // If currentSpotId is provided, use it as the base
+  const baseSpotId = currentSpotId || Array.from(userSpotIds)[0];
+  if (!baseSpotId) return [];
+
+  // Find users who also checked into this spot
+  const similarUsersSnapshot = await db
+    .collection('checkins')
+    .where('spotPlaceId', '==', baseSpotId)
+    .where('visibility', '==', 'public')
+    .limit(100)
+    .get();
+
+  const similarUserIds = new Set<string>();
+  similarUsersSnapshot.forEach((doc: any) => {
+    const uid = doc.data().userId;
+    if (uid && uid !== userId) similarUserIds.add(uid);
+  });
+
+  // Get spots these similar users visited (batched to avoid N+1 queries)
+  const spotScores = new Map<string, number>();
+  const similarUserList = Array.from(similarUserIds).slice(0, 30);
+  const userBatches = similarUserList.reduce<string[][]>((batches, uid, index) => {
+    const batchIndex = Math.floor(index / 10);
+    if (!batches[batchIndex]) batches[batchIndex] = [];
+    batches[batchIndex].push(uid);
+    return batches;
+  }, []);
+
+  const userSnapshots = await Promise.all(
+    userBatches.map(async (batch) => {
+      try {
+        return await db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .where('userId', 'in', batch)
+          .orderBy('createdAt', 'desc')
+          .limit(batch.length * 30)
+          .get();
+      } catch {
+        return db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .where('userId', 'in', batch)
+          .limit(batch.length * 30)
+          .get();
+      }
+    })
+  );
+
+  userSnapshots.forEach((checkinsSnapshot) => {
+    checkinsSnapshot.forEach((doc: any) => {
+      const placeId = doc.data().spotPlaceId;
+      if (placeId && !userSpotIds.has(placeId) && placeId !== baseSpotId) {
+        spotScores.set(placeId, (spotScores.get(placeId) || 0) + 1);
+      }
+    });
+  });
+
+  // Sort by score and get top spots
+  const sortedSpots = Array.from(spotScores.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit);
+
+  // Resolve names from aggregated spot docs instead of issuing another
+  // check-in batch query for each recommendation page.
+  const spotNames = new Map<string, string>();
+  const placeIds = sortedSpots.map(([placeId]) => placeId).filter(Boolean);
+  const placeDocs = await Promise.all(
+    placeIds.map(async (placeId) => {
+      try {
+        return await db.collection('spots').doc(placeId).get();
+      } catch {
+        return null;
+      }
+    })
+  );
+  placeDocs.forEach((doc: any, index) => {
+    const placeId = placeIds[index];
+    if (!placeId || !doc?.exists) return;
+    const data = doc.data() || {};
+    const normalized = normalizeSpotForExplore({ id: placeId, ...data });
+    if (normalized.name) {
+      spotNames.set(placeId, normalized.name);
+    }
+  });
+
+  const denominator = Math.max(similarUserIds.size, 1);
+  return sortedSpots.map(([placeId, score]) => ({
+    placeId,
+    name: spotNames.get(placeId) || 'Unknown',
+    score: Math.min((score / denominator) * 100, 100),
+    reasons: [
+      formatCollaborativeReason(score),
+      'Popular among people who like similar spots',
+    ],
+  }));
+}
 
 /**
  * Get personalized recommendations for a user
@@ -159,115 +342,11 @@ export async function getCollaborativeRecommendations(
   limit: number = 5
 ): Promise<SpotRecommendation[]> {
   return withErrorBoundary('recommendations_collaborative', async () => {
-    const fb = ensureFirebase();
-    if (!fb) return [];
-
-    const db = fb.firestore();
-
-    // Get user's check-in history
-    const userCheckinsSnapshot = await db
-      .collection('checkins')
-      .where('userId', '==', userId)
-      .limit(50)
-      .get();
-
-    const userSpotIds = new Set<string>();
-    userCheckinsSnapshot.forEach((doc: any) => {
-      const placeId = doc.data().spotPlaceId;
-      if (placeId) userSpotIds.add(placeId);
-    });
-
-    // If currentSpotId is provided, use it as the base
-    const baseSpotId = currentSpotId || Array.from(userSpotIds)[0];
-    if (!baseSpotId) return [];
-
-    // Find users who also checked into this spot
-    const similarUsersSnapshot = await db
-      .collection('checkins')
-      .where('spotPlaceId', '==', baseSpotId)
-      .limit(100)
-      .get();
-
-    const similarUserIds = new Set<string>();
-    similarUsersSnapshot.forEach((doc: any) => {
-      const uid = doc.data().userId;
-      if (uid && uid !== userId) similarUserIds.add(uid);
-    });
-
-    // Get spots these similar users visited (batched to avoid N+1 queries)
-    const spotScores = new Map<string, number>();
-    const similarUserList = Array.from(similarUserIds).slice(0, 30);
-    const userBatches = similarUserList.reduce<string[][]>((batches, uid, index) => {
-      const batchIndex = Math.floor(index / 10);
-      if (!batches[batchIndex]) batches[batchIndex] = [];
-      batches[batchIndex].push(uid);
-      return batches;
-    }, []);
-
-    const userSnapshots = await Promise.all(
-      userBatches.map(async (batch) => {
-        try {
-          return await db
-            .collection('checkins')
-            .where('userId', 'in', batch)
-            .orderBy('createdAt', 'desc')
-            .limit(batch.length * 30)
-            .get();
-        } catch {
-          return db.collection('checkins').where('userId', 'in', batch).limit(batch.length * 30).get();
-        }
-      })
-    );
-
-    userSnapshots.forEach((checkinsSnapshot) => {
-      checkinsSnapshot.forEach((doc: any) => {
-        const placeId = doc.data().spotPlaceId;
-        if (placeId && !userSpotIds.has(placeId) && placeId !== baseSpotId) {
-          spotScores.set(placeId, (spotScores.get(placeId) || 0) + 1);
-        }
-      });
-    });
-
-    // Sort by score and get top spots
-    const sortedSpots = Array.from(spotScores.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit);
-
-    // Resolve names from aggregated spot docs instead of issuing another
-    // check-in batch query for each recommendation page.
-    const spotNames = new Map<string, string>();
-    const placeIds = sortedSpots.map(([placeId]) => placeId).filter(Boolean);
-    const placeDocs = await Promise.all(
-      placeIds.map(async (placeId) => {
-        try {
-          return await db.collection('spots').doc(placeId).get();
-        } catch {
-          return null;
-        }
-      })
-    );
-    placeDocs.forEach((doc: any, index) => {
-      const placeId = placeIds[index];
-      if (!placeId || !doc?.exists) return;
-      const data = doc.data() || {};
-      const normalized = normalizeSpotForExplore({ id: placeId, ...data });
-      if (normalized.name) {
-        spotNames.set(placeId, normalized.name);
-      }
-    });
-
-    const denominator = Math.max(similarUserIds.size, 1);
-    const recommendations: SpotRecommendation[] = sortedSpots.map(([placeId, score]) => ({
-      placeId,
-      name: spotNames.get(placeId) || 'Unknown',
-      score: Math.min((score / denominator) * 100, 100),
-      reasons: [
-        `${score} users with similar taste checked in here`,
-        'Popular among people who like similar spots',
-      ],
-    }));
-
-    return recommendations;
+    const callableRecommendations = await callCollaborativeRecommendations(currentSpotId, limit);
+    if (callableRecommendations) {
+      return callableRecommendations;
+    }
+    return getCollaborativeRecommendationsFromFirestore(userId, currentSpotId, limit);
   }, []);
 }
 

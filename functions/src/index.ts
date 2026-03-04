@@ -820,6 +820,128 @@ function sanitizePublicUserProfile(userId: string, data: Record<string, any> | n
   };
 }
 
+function sanitizeRecommendationLimit(value: unknown, fallback = 5, max = 10): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(numeric)));
+}
+
+function buildCollaborativeRecommendationReason(matchCount: number): string {
+  const count = Math.max(0, Math.floor(matchCount));
+  const label = count === 1 ? 'user' : 'users';
+  return `${count} ${label} with similar taste checked in here`;
+}
+
+async function getCollaborativeRecommendationsForUser(
+  userId: string,
+  currentSpotId?: string,
+  limit = 5,
+) {
+  const userCheckinsSnapshot = await db
+    .collection('checkins')
+    .where('userId', '==', userId)
+    .limit(50)
+    .get();
+
+  const userSpotIds = new Set<string>();
+  userCheckinsSnapshot.forEach((doc) => {
+    const placeId = asId(doc.data()?.spotPlaceId);
+    if (placeId) userSpotIds.add(placeId);
+  });
+
+  const baseSpotId = asId(currentSpotId) || Array.from(userSpotIds)[0] || '';
+  if (!baseSpotId) {
+    return [];
+  }
+
+  const similarUsersSnapshot = await db
+    .collection('checkins')
+    .where('spotPlaceId', '==', baseSpotId)
+    .where('visibility', '==', 'public')
+    .limit(100)
+    .get();
+
+  const similarUserIds = new Set<string>();
+  similarUsersSnapshot.forEach((doc) => {
+    const uid = asId(doc.data()?.userId);
+    if (uid && uid !== userId) similarUserIds.add(uid);
+  });
+
+  if (!similarUserIds.size) {
+    return [];
+  }
+
+  const spotScores = new Map<string, number>();
+  const similarUserList = Array.from(similarUserIds).slice(0, 30);
+  const userBatches = chunkArray(similarUserList, 10);
+
+  const userSnapshots = await Promise.all(
+    userBatches.map(async (batch) => {
+      if (!batch.length) return null;
+      try {
+        return await db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .where('userId', 'in', batch)
+          .orderBy('createdAt', 'desc')
+          .limit(batch.length * 30)
+          .get();
+      } catch {
+        return db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .where('userId', 'in', batch)
+          .limit(batch.length * 30)
+          .get();
+      }
+    }),
+  );
+
+  userSnapshots.forEach((checkinsSnapshot) => {
+    checkinsSnapshot?.forEach((doc) => {
+      const placeId = asId(doc.data()?.spotPlaceId);
+      if (!placeId || userSpotIds.has(placeId) || placeId === baseSpotId) return;
+      spotScores.set(placeId, (spotScores.get(placeId) || 0) + 1);
+    });
+  });
+
+  const sortedSpots = Array.from(spotScores.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, sanitizeRecommendationLimit(limit));
+
+  if (!sortedSpots.length) {
+    return [];
+  }
+
+  const spotNames = new Map<string, string>();
+  await Promise.all(
+    sortedSpots.map(async ([placeId]) => {
+      try {
+        const doc = await db.collection('spots').doc(placeId).get();
+        if (!doc.exists) return;
+        const data = doc.data() || {};
+        const name = asId(data.name || data.displayName || data.spotName);
+        if (name) {
+          spotNames.set(placeId, name);
+        }
+      } catch {
+        // Ignore individual hydration failures so the rest of the batch still returns.
+      }
+    }),
+  );
+
+  const denominator = Math.max(similarUserIds.size, 1);
+  return sortedSpots.map(([placeId, score]) => ({
+    placeId,
+    name: spotNames.get(placeId) || 'Unknown',
+    score: Math.min((score / denominator) * 100, 100),
+    reasons: [
+      buildCollaborativeRecommendationReason(score),
+      'Popular among people who like similar spots',
+    ],
+  }));
+}
+
 // CORS allowed origins whitelist
 const ALLOWED_ORIGINS = [
   'https://perched.app',
@@ -1398,6 +1520,36 @@ export const syncMyGamification = functions.https.onCall(async (_data, context) 
 
   await syncGamificationForUser(userId);
   return { ok: true };
+});
+
+export const getCollaborativeRecommendations = functions.https.onCall(async (data, context) => {
+  const userId = context.auth?.uid;
+  if (!userId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const limit = sanitizeRecommendationLimit(data?.limit);
+  const currentSpotId = asId(data?.currentSpotId);
+  const startedAt = Date.now();
+
+  try {
+    const recommendations = await getCollaborativeRecommendationsForUser(userId, currentSpotId, limit);
+    await recordBackendPerf('collaborative_recommendations', Date.now() - startedAt, true, {
+      userId,
+      baseSpotId: currentSpotId || null,
+      count: recommendations.length,
+      limit,
+    });
+    return { recommendations };
+  } catch (error: any) {
+    await recordBackendPerf('collaborative_recommendations', Date.now() - startedAt, false, {
+      userId,
+      baseSpotId: currentSpotId || null,
+      limit,
+      error: error?.message || String(error),
+    });
+    throw new functions.https.HttpsError('internal', 'Unable to load collaborative recommendations');
+  }
 });
 
 export const sendSigninAlert = functions
