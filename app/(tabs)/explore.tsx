@@ -93,6 +93,31 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T) => Promise<R | null>
+): Promise<R[]> {
+  const results: R[] = [];
+  const queue = items.slice();
+  const workerCount = Math.max(1, Math.min(limit, queue.length || 1));
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        if (item === undefined) return;
+        const value = await mapper(item);
+        if (value !== null) {
+          results.push(value);
+        }
+      }
+    })
+  );
+
+  return results;
+}
+
 const EXPLORE_REMOTE_CHECKIN_LIMIT = 600;
 const EXPLORE_SPOT_QUERY_LIMIT = 90;
 const EXPLORE_SPOT_FALLBACK_LIMIT = 140;
@@ -1108,60 +1133,74 @@ export default function Explore() {
 
   useEffect(() => {
     let active = true;
-    const spotsToProcess = listData.slice(0, 12);
+    const spotsToProcess = listData.slice(0, 12).filter((spot) => {
+      const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
+      const name = spot?.name || '';
+      return Boolean(name) && !intelligenceMap.has(spotKey(placeId, name));
+    });
     if (!spotsToProcess.length) return;
 
     const task = InteractionManager.runAfterInteractions(() => {
-      spotsToProcess.forEach(async (spot) => {
-        const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
-        const name = spot?.name || '';
-        const intelKey = spotKey(placeId, name);
-        try {
-          const intel = await buildPlaceIntelligence({
-            placeName: name,
-            placeId,
-            location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
-            openNow: spot?.openNow,
-            types: spot?.types,
-            checkins: spot?._checkins || [],
-            inferred: spot?.intel
-              ? {
-                  noise: spot.intel.inferredNoise ?? null,
-                  noiseConfidence: spot.intel.inferredNoiseConfidence,
-                  hasWifi: spot.intel.hasWifi,
-                  wifiConfidence: spot.intel.wifiConfidence,
-                  goodForStudying: spot.intel.goodForStudying,
-                  goodForMeetings: spot.intel.goodForMeetings,
-                  goodForDates: spot.intel.goodForDates,
-                  goodForGroups: spot.intel.goodForGroups,
-                  instagramWorthy: spot.intel.instagramWorthy,
-                  foodQualitySignal: spot.intel.foodQualitySignal,
-                  aestheticVibe: spot.intel.aestheticVibe,
-                  musicAtmosphere: spot.intel.musicAtmosphere,
-                  avgRating: spot.intel.avgRating,
-                  reviewCount: spot.intel.reviewCount,
-                  priceLevel: spot.intel.priceLevel,
-                  isOpenNow: spot.intel.isOpenNow,
-                }
-              : null,
-          });
-          if (active) {
-            setIntelligenceMap((prev) => {
-              if (prev.has(intelKey)) return prev;
-              const next = new Map(prev);
-              next.set(intelKey, intel);
-              return next;
+      void (async () => {
+        const entries = await mapWithConcurrencyLimit(spotsToProcess, 4, async (spot) => {
+          const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
+          const name = spot?.name || '';
+          const intelKey = spotKey(placeId, name);
+          try {
+            const intel = await buildPlaceIntelligence({
+              placeName: name,
+              placeId,
+              location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
+              openNow: spot?.openNow,
+              types: spot?.types,
+              checkins: spot?._checkins || [],
+              inferred: spot?.intel
+                ? {
+                    noise: spot.intel.inferredNoise ?? null,
+                    noiseConfidence: spot.intel.inferredNoiseConfidence,
+                    hasWifi: spot.intel.hasWifi,
+                    wifiConfidence: spot.intel.wifiConfidence,
+                    goodForStudying: spot.intel.goodForStudying,
+                    goodForMeetings: spot.intel.goodForMeetings,
+                    goodForDates: spot.intel.goodForDates,
+                    goodForGroups: spot.intel.goodForGroups,
+                    instagramWorthy: spot.intel.instagramWorthy,
+                    foodQualitySignal: spot.intel.foodQualitySignal,
+                    aestheticVibe: spot.intel.aestheticVibe,
+                    musicAtmosphere: spot.intel.musicAtmosphere,
+                    avgRating: spot.intel.avgRating,
+                    reviewCount: spot.intel.reviewCount,
+                    priceLevel: spot.intel.priceLevel,
+                    isOpenNow: spot.intel.isOpenNow,
+                  }
+                : null,
             });
+            return { intelKey, intel };
+          } catch {
+            return null;
           }
-        } catch {}
-      });
+        });
+
+        if (!active || !entries.length) return;
+
+        setIntelligenceMap((prev) => {
+          const next = new Map(prev);
+          let changed = false;
+          entries.forEach(({ intelKey, intel }) => {
+            if (next.has(intelKey)) return;
+            next.set(intelKey, intel);
+            changed = true;
+          });
+          return changed ? next : prev;
+        });
+      })();
     });
 
     return () => {
       active = false;
       task.cancel();
     };
-  }, [listData]);
+  }, [intelligenceMap, listData]);
 
   const selectedSpotKey = useMemo(() => {
     if (!selectedSpot) return null;
@@ -2081,5 +2120,3 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 });
-
-

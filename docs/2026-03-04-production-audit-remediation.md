@@ -141,6 +141,16 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add unit coverage around managed notification scheduling and preference disable flows
 
+12. Explore enrichment fan-out control
+   - Status: In progress
+   - Goal: reduce provider-call bursts and repeated render churn on explore load.
+   - Current patch:
+     - explore now skips intelligence builds for spots already present in the in-memory map
+     - initial enrichment now runs through a bounded concurrency pool instead of unconstrained per-item async launches
+     - completed intelligence results are merged into state in one batched update instead of one `setState` per spot
+   - Follow-up:
+     - move place-intelligence computation fully server-side for cacheable normalized payloads
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
