@@ -11,8 +11,10 @@ import { recordPerfMetric } from './perfMonitor';
 import { parseCheckinTimestamp } from './schemaHelpers';
 import { withErrorBoundary } from './errorBoundary';
 import { devLog } from './logger';
+import { normalizeSpotForExplore } from './spotNormalizer';
 import { getUserPreferenceScores } from '@/storage/local';
 import { inferIntentsFromCheckin, scoreSpotForIntent, type DiscoveryIntent } from './discoveryIntents';
+import { distanceBetween, geohashQueryBounds } from 'geofire-common';
 
 export interface SpotRecommendation {
   placeId: string;
@@ -52,7 +54,15 @@ const RECOMMENDATIONS_CACHE_KEY = '@perched_recommendations';
 const USER_PREFERENCES_KEY = '@perched_user_preferences';
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 const CANDIDATE_SPOTS_CACHE_TTL = 10 * 60 * 1000;
+const TIME_PATTERN_CACHE_TTL = 15 * 60 * 1000;
+const MAX_RECOMMENDATION_SPOTS = 10;
+const MAX_PATTERN_SPOTS = 12;
+const RECOMMENDATION_SPOT_QUERY_LIMIT = 40;
+const RECOMMENDATION_SPOT_FALLBACK_LIMIT = 120;
+const TIME_PATTERN_BATCH_SIZE = 10;
+const TIME_PATTERN_DOC_LIMIT_PER_SPOT = 60;
 const candidateSpotsMemoryCache = new Map<string, { ts: number; spots: any[] }>();
+const spotTimePatternMemoryCache = new Map<string, { ts: number; patterns: TimePattern[] }>();
 
 
 /**
@@ -83,21 +93,38 @@ export async function getPersonalizedRecommendations(
 
     // Get user preferences
     const preferences = await getUserPreferences(userId);
+    const preferenceScores = await getUserPreferenceScores(userId).catch(() => ({} as Record<string, number>));
 
     // Get candidate spots (nearby spots)
     const candidateSpots = await getCandidateSpots(userLocation, 5); // 5km radius
 
-    // Score each spot
-    const scoredSpots = await Promise.all(
-      candidateSpots.map(async (spot) => {
+    // Score candidates first using aggregate spot docs, then fetch time patterns only
+    // for the highest ranked subset instead of one pattern query per spot.
+    const scoredSpots = candidateSpots
+      .map((spot) => {
         const intentSignal = context?.intent ? scoreSpotForIntent(spot, context.intent) : null;
-        const score = await calculateSpotScore(spot, userId, preferences, context, intentSignal);
+        const score = calculateSpotScore(spot, preferences, preferenceScores, context, intentSignal);
         const reasons = generateRecommendationReasons(spot, preferences, context, intentSignal);
-        const timePatterns = await getSpotTimePatterns(spot.placeId);
-        const currentHour = new Date().getHours();
-        const currentDay = new Date().getDay();
+        return {
+          spot,
+          score,
+          reasons,
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const patternCandidates = scoredSpots.slice(0, Math.min(MAX_PATTERN_SPOTS, scoredSpots.length));
+    const timePatternsByPlace = await getSpotTimePatternsBatch(patternCandidates.map(({ spot }) => spot.placeId));
+    const currentHour = new Date().getHours();
+    const currentDay = new Date().getDay();
+
+    // Sort by score and get top 10
+    const recommendations = scoredSpots
+      .slice(0, MAX_RECOMMENDATION_SPOTS)
+      .map(({ spot, score, reasons }) => {
+        const timePatterns = timePatternsByPlace.get(spot.placeId) || [];
         const currentPattern = timePatterns.find(
-          p => p.hour === currentHour && p.dayOfWeek === currentDay
+          (pattern) => pattern.hour === currentHour && pattern.dayOfWeek === currentDay
         );
 
         return {
@@ -105,18 +132,12 @@ export async function getPersonalizedRecommendations(
           name: spot.name,
           score,
           reasons,
-          predictedBusyness: currentPattern?.avgBusyness || spot.avgBusyness,
-          predictedNoise: currentPattern?.avgNoise || spot.avgNoiseLevel,
+          predictedBusyness: currentPattern?.avgBusyness ?? spot.avgBusyness ?? undefined,
+          predictedNoise: currentPattern?.avgNoise ?? spot.avgNoiseLevel ?? undefined,
           bestTimeToVisit: getBestTimeToVisit(timePatterns, preferences),
           matchScore: score,
-        };
-      })
-    );
-
-    // Sort by score and get top 10
-    const recommendations = scoredSpots
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
+        } satisfies SpotRecommendation;
+      });
 
     // Cache recommendations
     await AsyncStorage.setItem(
@@ -212,28 +233,27 @@ export async function getCollaborativeRecommendations(
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit);
 
-    // Get spot details in batches
+    // Resolve names from aggregated spot docs instead of issuing another
+    // check-in batch query for each recommendation page.
     const spotNames = new Map<string, string>();
-    const placeIds = sortedSpots.map(([placeId]) => placeId);
-    const placeIdBatches = placeIds.reduce<string[][]>((batches, placeId, index) => {
-      const batchIndex = Math.floor(index / 10);
-      if (!batches[batchIndex]) batches[batchIndex] = [];
-      batches[batchIndex].push(placeId);
-      return batches;
-    }, []);
-
-    const placeSnapshots = await Promise.all(
-      placeIdBatches.map((batch) =>
-        db.collection('checkins').where('spotPlaceId', 'in', batch).limit(batch.length * 10).get()
-      )
-    );
-    placeSnapshots.forEach((snapshot) => {
-      snapshot.forEach((doc: any) => {
-        const data = doc.data();
-        if (data?.spotPlaceId && data?.spotName && !spotNames.has(data.spotPlaceId)) {
-          spotNames.set(data.spotPlaceId, data.spotName);
+    const placeIds = sortedSpots.map(([placeId]) => placeId).filter(Boolean);
+    const placeDocs = await Promise.all(
+      placeIds.map(async (placeId) => {
+        try {
+          return await db.collection('spots').doc(placeId).get();
+        } catch {
+          return null;
         }
-      });
+      })
+    );
+    placeDocs.forEach((doc: any, index) => {
+      const placeId = placeIds[index];
+      if (!placeId || !doc?.exists) return;
+      const data = doc.data() || {};
+      const normalized = normalizeSpotForExplore({ id: placeId, ...data });
+      if (normalized.name) {
+        spotNames.set(placeId, normalized.name);
+      }
     });
 
     const denominator = Math.max(similarUserIds.size, 1);
@@ -365,71 +385,115 @@ export async function getUserPreferences(userId: string): Promise<UserPreference
 /**
  * Get time patterns for a spot (predict busyness/noise)
  */
-async function getSpotTimePatterns(placeId: string): Promise<TimePattern[]> {
+function buildTimePatterns(checkins: any[]): TimePattern[] {
+  const patterns = new Map<string, { busynessSum: number; noiseSum: number; count: number }>();
+
+  checkins.forEach((checkin) => {
+    const timestamp = parseCheckinTimestamp(checkin);
+    if (!timestamp) return;
+    const hour = timestamp.getHours();
+    const dayOfWeek = timestamp.getDay();
+    const key = `${dayOfWeek}_${hour}`;
+
+    const existing = patterns.get(key) || { busynessSum: 0, noiseSum: 0, count: 0 };
+    existing.busynessSum += typeof checkin.busyness === 'number' ? checkin.busyness : 0;
+    existing.noiseSum += typeof checkin.noiseLevel === 'number' ? checkin.noiseLevel : 0;
+    existing.count += 1;
+    patterns.set(key, existing);
+  });
+
+  const timePatterns: TimePattern[] = [];
+  patterns.forEach((value, key) => {
+    const [dayOfWeek, hour] = key.split('_').map(Number);
+    timePatterns.push({
+      hour,
+      dayOfWeek,
+      avgBusyness: value.busynessSum / value.count,
+      avgNoise: value.noiseSum / value.count,
+      checkinCount: value.count,
+    });
+  });
+
+  return timePatterns;
+}
+
+async function getSpotTimePatternsBatch(placeIds: string[]): Promise<Map<string, TimePattern[]>> {
   try {
+    const uniquePlaceIds = Array.from(new Set(placeIds.filter((placeId) => typeof placeId === 'string' && placeId.trim())));
+    const resolved = new Map<string, TimePattern[]>();
+    const missing: string[] = [];
+
+    uniquePlaceIds.forEach((placeId) => {
+      const cached = spotTimePatternMemoryCache.get(placeId);
+      if (cached && Date.now() - cached.ts < TIME_PATTERN_CACHE_TTL) {
+        resolved.set(placeId, cached.patterns);
+      } else {
+        missing.push(placeId);
+      }
+    });
+
+    if (missing.length === 0) {
+      return resolved;
+    }
+
     const fb = ensureFirebase();
-    if (!fb) return [];
+    if (!fb) return resolved;
 
     const db = fb.firestore();
 
-    // Get all check-ins for this spot
-    const checkinsSnapshot = await db
-      .collection('checkins')
-      .where('spotPlaceId', '==', placeId)
-      .limit(200)
-      .get();
+    const batches: string[][] = [];
+    for (let index = 0; index < missing.length; index += TIME_PATTERN_BATCH_SIZE) {
+      batches.push(missing.slice(index, index + TIME_PATTERN_BATCH_SIZE));
+    }
 
-    const patterns = new Map<string, { busynessSum: number; noiseSum: number; count: number }>();
+    await Promise.all(
+      batches.map(async (batch) => {
+        const perSpot = new Map<string, any[]>();
+        batch.forEach((placeId) => perSpot.set(placeId, []));
 
-    checkinsSnapshot.forEach((doc: any) => {
-      const data = doc.data();
-      const timestamp = parseCheckinTimestamp(data);
-      if (!timestamp) return;
-      const hour = timestamp.getHours();
-      const dayOfWeek = timestamp.getDay();
-      const key = `${dayOfWeek}_${hour}`;
+        const snapshot = await db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .where('spotPlaceId', 'in', batch)
+          .limit(batch.length * TIME_PATTERN_DOC_LIMIT_PER_SPOT)
+          .get();
 
-      const existing = patterns.get(key) || { busynessSum: 0, noiseSum: 0, count: 0 };
-      existing.busynessSum += data.busyness || 0;
-      existing.noiseSum += data.noiseLevel || 0;
-      existing.count += 1;
-      patterns.set(key, existing);
-    });
+        snapshot.forEach((doc: any) => {
+          const data = doc.data();
+          const placeId = typeof data?.spotPlaceId === 'string' ? data.spotPlaceId : '';
+          if (!placeId || !perSpot.has(placeId)) return;
+          perSpot.get(placeId)?.push(data);
+        });
 
-    // Convert to array
-    const timePatterns: TimePattern[] = [];
-    patterns.forEach((value, key) => {
-      const [dayOfWeek, hour] = key.split('_').map(Number);
-      timePatterns.push({
-        hour,
-        dayOfWeek,
-        avgBusyness: value.busynessSum / value.count,
-        avgNoise: value.noiseSum / value.count,
-        checkinCount: value.count,
-      });
-    });
+        batch.forEach((placeId) => {
+          const patterns = buildTimePatterns(perSpot.get(placeId) || []);
+          spotTimePatternMemoryCache.set(placeId, { ts: Date.now(), patterns });
+          resolved.set(placeId, patterns);
+        });
+      })
+    );
 
-    return timePatterns;
+    return resolved;
   } catch (error) {
     devLog('Failed to get spot time patterns:', error);
-    return [];
+    return new Map();
   }
 }
 
 /**
  * Calculate recommendation score for a spot
  */
-async function calculateSpotScore(
+function calculateSpotScore(
   spot: any,
-  userId: string,
   preferences: UserPreferences,
+  preferenceScores: Record<string, number>,
   context?: {
     timeOfDay?: 'morning' | 'afternoon' | 'evening';
     weather?: 'sunny' | 'rainy' | 'cloudy';
     intent?: DiscoveryIntent;
   },
   intentSignal?: { score: number; reasons: string[] } | null
-): Promise<number> {
+): number {
   let score = 50; // Base score
 
   // Preference matching
@@ -448,13 +512,10 @@ async function calculateSpotScore(
   }
 
   // Behavioral preference boost from place events
-  try {
-    const prefScores = await getUserPreferenceScores(userId);
-    const categoryWeight = prefScores[spot.category] || 0;
-    if (categoryWeight > 0) {
-      score = score * (1 + 0.3 * Math.min(categoryWeight, 1));
-    }
-  } catch {}
+  const categoryWeight = preferenceScores?.[spot.category] || 0;
+  if (categoryWeight > 0) {
+    score = score * (1 + 0.3 * Math.min(categoryWeight, 1));
+  }
 
   // Frequency bonus (user's frequent spots)
   if (preferences.frequentSpots.includes(spot.placeId)) {
@@ -671,6 +732,43 @@ function getTimeRange(timeOfDay: 'morning' | 'afternoon' | 'evening'): { start: 
   }
 }
 
+function toNoiseScore(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'quiet') return 2;
+  if (normalized === 'moderate') return 3;
+  if (normalized === 'loud' || normalized === 'lively') return 4;
+  return null;
+}
+
+function toBusynessScore(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'empty') return 1;
+  if (normalized === 'some') return 3;
+  if (normalized === 'packed') return 5;
+  return null;
+}
+
+function deriveWifiScore(spot: any): number | null {
+  if (typeof spot?.avgWifiSpeed === 'number' && Number.isFinite(spot.avgWifiSpeed)) {
+    return spot.avgWifiSpeed;
+  }
+  if (spot?.intel?.hasWifi === true) {
+    const confidence = typeof spot?.intel?.wifiConfidence === 'number' ? spot.intel.wifiConfidence : 0.6;
+    return Math.max(1, Math.min(5, 2.8 + Math.max(0.2, Math.min(1, confidence)) * 1.4));
+  }
+  return null;
+}
+
+function deriveOutletAvailability(spot: any): 'plenty' | 'some' | 'few' | 'none' | null {
+  const direct = typeof spot?.topOutletAvailability === 'string' ? spot.topOutletAvailability : null;
+  if (direct === 'plenty' || direct === 'some' || direct === 'few' || direct === 'none') return direct;
+  return null;
+}
+
 async function getCandidateSpots(location: { lat: number; lng: number }, radiusKm: number): Promise<any[]> {
   try {
     const cacheKey = `${location.lat.toFixed(2)}:${location.lng.toFixed(2)}:${radiusKm.toFixed(1)}`;
@@ -684,115 +782,78 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
     if (!fb.auth()?.currentUser?.uid) return [];
 
     const db = fb.firestore();
+    const radiusMeters = radiusKm * 1000;
+    const bounds = geohashQueryBounds([location.lat, location.lng], radiusMeters);
+    const merged = new Map<string, any>();
 
-    // Query only public check-ins so reads satisfy Firestore query rules.
-    const checkinsSnapshot = await db
-      .collection('checkins')
-      .where('visibility', '==', 'public')
-      .limit(200)
-      .get();
-
-    const spotsMap = new Map<string, any>();
-
-    checkinsSnapshot.forEach((doc: any) => {
-      const data = doc.data();
-      const spotLatLng = data.spotLatLng;
-      if (!spotLatLng) return;
-
-      const distance = haversineDistance(
-        location.lat,
-        location.lng,
-        spotLatLng.lat,
-        spotLatLng.lng
+    try {
+      const snapshots = await Promise.all(
+        bounds.map((bound) =>
+          db
+            .collection('spots')
+            .orderBy('geoHash')
+            .startAt(bound[0])
+            .endAt(bound[1])
+            .limit(RECOMMENDATION_SPOT_QUERY_LIMIT)
+            .get()
+        )
       );
 
-      if (distance <= radiusKm) {
-        const placeId = data.spotPlaceId;
-        if (!placeId) return;
-        if (!spotsMap.has(placeId)) {
-          spotsMap.set(placeId, {
-            placeId,
-            name: data.spotName || 'Unknown',
-            distance,
-            category: data.spotType || data.category || 'cafe',
-            checkinCount: 0,
-            _noiseSum: 0,
-            _noiseCount: 0,
-            _busynessSum: 0,
-            _busynessCount: 0,
-            _wifiSum: 0,
-            _wifiCount: 0,
-            _outletCounts: {} as Record<string, number>,
-            intentScores: {} as Record<string, number>,
-          });
-        }
-        const spot = spotsMap.get(placeId);
-        spot.checkinCount += 1;
-        if (distance < spot.distance) spot.distance = distance;
-
-        const noiseValue = typeof data.noiseLevel === 'number'
-          ? data.noiseLevel
-          : data.noiseLevel === 'quiet'
-            ? 2
-            : data.noiseLevel === 'moderate'
-              ? 3
-              : data.noiseLevel === 'lively' || data.noiseLevel === 'loud'
-                ? 4
-                : null;
-        if (typeof noiseValue === 'number') {
-          spot._noiseSum += noiseValue;
-          spot._noiseCount += 1;
-        }
-
-        const busynessValue = typeof data.busyness === 'number'
-          ? data.busyness
-          : data.busyness === 'empty'
-            ? 1
-            : data.busyness === 'some'
-              ? 3
-              : data.busyness === 'packed'
-                ? 5
-                : null;
-        if (typeof busynessValue === 'number') {
-          spot._busynessSum += busynessValue;
-          spot._busynessCount += 1;
-        }
-
-        if (typeof data.wifiSpeed === 'number') {
-          spot._wifiSum += data.wifiSpeed;
-          spot._wifiCount += 1;
-        }
-
-        if (typeof data.outletAvailability === 'string') {
-          const outletKey = data.outletAvailability.trim().toLowerCase();
-          if (outletKey) {
-            spot._outletCounts[outletKey] = (spot._outletCounts[outletKey] || 0) + 1;
+      snapshots.forEach((snapshot: any) => {
+        snapshot.docs.forEach((doc: any) => {
+          if (!merged.has(doc.id)) {
+            merged.set(doc.id, { id: doc.id, ...doc.data() });
           }
-        }
-
-        const intents = inferIntentsFromCheckin(data);
-        intents.forEach((intent) => {
-          spot.intentScores[intent] = (spot.intentScores[intent] || 0) + 1;
         });
-      }
-    });
+      });
+    } catch {
+      const fallback = await db.collection('spots').limit(RECOMMENDATION_SPOT_FALLBACK_LIMIT).get();
+      fallback.docs.forEach((doc: any) => {
+        if (!merged.has(doc.id)) {
+          merged.set(doc.id, { id: doc.id, ...doc.data() });
+        }
+      });
+    }
 
-    const spots = Array.from(spotsMap.values()).map((spot) => {
-      const outletEntries = Object.entries(spot._outletCounts || {}) as [string, number][];
-      const topOutletAvailability = outletEntries.sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-      return {
-        placeId: spot.placeId,
-        name: spot.name,
-        distance: spot.distance,
-        category: spot.category,
-        checkinCount: spot.checkinCount,
-        avgNoiseLevel: spot._noiseCount ? spot._noiseSum / spot._noiseCount : null,
-        avgBusyness: spot._busynessCount ? spot._busynessSum / spot._busynessCount : null,
-        avgWifiSpeed: spot._wifiCount ? spot._wifiSum / spot._wifiCount : null,
-        topOutletAvailability,
-        intentScores: spot.intentScores,
-      };
-    });
+    const spots = Array.from(merged.values())
+      .map((rawSpot) => normalizeSpotForExplore(rawSpot))
+      .map((spot) => {
+        const lat = typeof spot?.lat === 'number' ? spot.lat : spot?.location?.lat;
+        const lng = typeof spot?.lng === 'number' ? spot.lng : spot?.location?.lng;
+        if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+
+        const distance = distanceBetween([location.lat, location.lng], [lat, lng]);
+        if (!Number.isFinite(distance) || distance > radiusKm) return null;
+
+        return {
+          placeId: spot.placeId || spot.id,
+          name: spot.name,
+          distance,
+          category: spot?.intel?.category || spot?.category || 'cafe',
+          checkinCount: typeof spot?.live?.checkinCount === 'number' ? spot.live.checkinCount : 0,
+          avgNoiseLevel:
+            toNoiseScore(spot?.avgNoiseLevel) ??
+            toNoiseScore(spot?.display?.noise) ??
+            toNoiseScore(spot?.live?.noise) ??
+            toNoiseScore(spot?.intel?.inferredNoise),
+          avgBusyness:
+            toBusynessScore(spot?.avgBusyness) ??
+            toBusynessScore(spot?.display?.busyness) ??
+            toBusynessScore(spot?.live?.busyness),
+          avgWifiSpeed: deriveWifiScore(spot),
+          topOutletAvailability: deriveOutletAvailability(spot),
+          intentScores:
+            spot?.intentScores && typeof spot.intentScores === 'object'
+              ? spot.intentScores
+              : {},
+          indoor:
+            typeof spot?.indoor === 'boolean'
+              ? spot.indoor
+              : ['cafe', 'coworking', 'library'].includes(spot?.intel?.category || ''),
+        };
+      })
+      .filter((spot): spot is NonNullable<typeof spot> => Boolean(spot));
+
     candidateSpotsMemoryCache.set(cacheKey, { ts: Date.now(), spots });
     while (candidateSpotsMemoryCache.size > 30) {
       const oldestKey = candidateSpotsMemoryCache.keys().next().value;
@@ -809,23 +870,6 @@ async function getCandidateSpots(location: { lat: number; lng: number }, radiusK
     devLog('Failed to get candidate spots:', error);
     return [];
   }
-}
-
-function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371; // Earth's radius in km
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-function toRad(degrees: number): number {
-  return degrees * (Math.PI / 180);
 }
 
 /**

@@ -212,6 +212,17 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add a CI gate that fails on lint warnings so warning debt does not reaccumulate
 
+18. Recommendations query scalability
+   - Status: In progress
+   - Goal: stop recommendation generation from fan-out scanning raw check-ins on-device.
+   - Current patch:
+     - candidate spot discovery now reads geohash-bounded `spots` aggregates instead of scanning public `checkins`
+     - personalized recommendation scoring now fetches user preference weights once per request instead of once per candidate spot
+     - time-pattern lookups are now batched for the top-ranked candidate subset and cached in memory, replacing one check-in query per spot
+     - collaborative recommendations now resolve place names from `spots` docs instead of issuing an extra check-in fan-out query for name hydration
+   - Follow-up:
+     - move collaborative filtering off the client and onto server-owned aggregates or a callable endpoint
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
