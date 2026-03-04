@@ -169,6 +169,16 @@ This document captures the pre-production audit findings, the release blockers, 
    - Follow-up:
      - add backend tests around throttle behavior and SendGrid failure handling
 
+14. Security-rules emulator coverage
+   - Status: In progress
+   - Goal: add repeatable Firestore and Storage rules coverage for the privacy and media paths we hardened.
+   - Current patch:
+     - added `__tests__/securityRules.test.ts` covering `userPrivate` access, public `users` contact-field blocking, verified-email / phone-auth check-in creation, raffle write lockout, and check-in media access rules
+     - added `npm run test:rules` to execute the rules suite through `firebase emulators:exec`
+     - removed the repo-wide `ajv` override that was breaking `firebase-tools` by forcing an incompatible major
+   - Environment blocker:
+     - Firestore emulator execution currently requires Java on PATH; the test harness is committed, but this machine cannot run `npm run test:rules` until Java is installed
+
 ## Audit Notes
 
 - This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
