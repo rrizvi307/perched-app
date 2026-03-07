@@ -4,9 +4,9 @@
  * Manages local partnerships with coffee shops and coworking spaces
  */
 
-import { ensureFirebase } from './firebaseClient';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { callFirebaseCallable, ensureFirebase } from './firebaseClient';
 import { track } from './analytics';
+import { haversineKm, readEntityLatLng, type LatLng } from './geo';
 
 export interface Partner {
   id: string;
@@ -145,65 +145,58 @@ const PARTNER_TIERS = {
   },
 };
 
+async function loadSpotLocationMap(db: any, spotIds: string[]): Promise<Map<string, LatLng>> {
+  const uniqueIds = Array.from(new Set(spotIds.map((spotId) => String(spotId || '').trim()).filter(Boolean)));
+  const locationMap = new Map<string, LatLng>();
+  if (!uniqueIds.length) return locationMap;
+
+  const docs = await Promise.all(
+    uniqueIds.map((spotId) =>
+      db.collection('spots').doc(spotId).get().catch(() => null)
+    )
+  );
+
+  docs.forEach((doc: any, index) => {
+    if (!doc?.exists) return;
+    const coords = readEntityLatLng(doc.data());
+    if (coords) {
+      locationMap.set(uniqueIds[index], coords);
+    }
+  });
+
+  return locationMap;
+}
+
 /**
  * Create a new partner
  */
 export async function createPartner(
   spotId: string,
-  ownerId: string,
+  _ownerId: string,
   tier: Partner['tier'],
   loyaltyConfig?: Partner['loyaltyConfig']
 ): Promise<{ success: boolean; partnerId?: string; error?: string }> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Get spot name
-    const spotDoc = await db.collection('spots').doc(spotId).get();
-    if (!spotDoc.exists) {
-      return { success: false, error: 'Spot not found' };
+    const result = await callFirebaseCallable<{ ok?: boolean; partnerId?: string }>('createPartnerSecure', {
+      spotId,
+      tier,
+      loyaltyConfig,
+    });
+    if (!result?.ok || !result.partnerId) {
+      return { success: false, error: 'Partner service unavailable' };
     }
 
-    const spotName = spotDoc.data()?.name || 'Unknown';
-
-    const now = Date.now();
-    const tierConfig = PARTNER_TIERS[tier];
-
-    const partner: Omit<Partner, 'id'> = {
-      spotId,
-      spotName,
-      ownerId,
-      tier,
-      status: 'pending', // Requires approval
-      benefits: tierConfig.benefits,
-      loyaltyConfig: loyaltyConfig || undefined,
-      monthlyFee: tierConfig.monthlyFee,
-      revenueShare: loyaltyConfig?.enabled ? 20 : undefined, // 20% for loyalty
-      stats: {
-        totalCheckins: 0,
-        loyaltyRedemptions: 0,
-        eventsHosted: 0,
-        revenue: 0,
-      },
-      joinedAt: now,
-      renewsAt: now + 30 * 24 * 60 * 60 * 1000, // Renews in 30 days
-    };
-
-    const docRef = await db.collection('partners').add(partner);
-
     track('partner_created', {
-      partner_id: docRef.id,
+      partner_id: result.partnerId,
       spot_id: spotId,
       tier,
       loyalty_enabled: loyaltyConfig?.enabled || false,
     });
 
-    return { success: true, partnerId: docRef.id };
+    return { success: true, partnerId: result.partnerId };
   } catch (error) {
     console.error('Failed to create partner:', error);
-    return { success: false, error: 'Failed to create partner' };
+    return { success: false, error: (error as any)?.message || 'Failed to create partner' };
   }
 }
 
@@ -511,8 +504,34 @@ export async function getUpcomingPartnerEvents(
       ...doc.data(),
     } as PartnerEvent));
 
-    // TODO: Filter by location if provided
-    return events;
+    const spotLocations = userLocation
+      ? await loadSpotLocationMap(db, events.map((event: PartnerEvent) => event.spotId))
+      : new Map<string, LatLng>();
+
+    const filtered = events
+      .map((event: PartnerEvent) => {
+        if (!userLocation) return { event, distanceKm: null as number | null };
+        const coords = spotLocations.get(String(event.spotId || '')) || readEntityLatLng(event as any);
+        if (!coords) return null;
+        const distanceKm = haversineKm(userLocation, coords);
+        if (distanceKm > radiusKm) return null;
+        return { event, distanceKm };
+      })
+      .filter(
+        (entry: { event: PartnerEvent; distanceKm: number | null } | null): entry is { event: PartnerEvent; distanceKm: number | null } =>
+          entry !== null
+      );
+
+    filtered.sort((left: { event: PartnerEvent; distanceKm: number | null }, right: { event: PartnerEvent; distanceKm: number | null }) => {
+      if (left.distanceKm !== null && right.distanceKm !== null && left.distanceKm !== right.distanceKm) {
+        return left.distanceKm - right.distanceKm;
+      }
+      if (left.distanceKm !== null && right.distanceKm === null) return -1;
+      if (left.distanceKm === null && right.distanceKm !== null) return 1;
+      return (left.event.date || 0) - (right.event.date || 0);
+    });
+
+    return filtered.map((entry: { event: PartnerEvent; distanceKm: number | null }) => entry.event);
   } catch (error) {
     console.error('Failed to get upcoming events:', error);
     return [];

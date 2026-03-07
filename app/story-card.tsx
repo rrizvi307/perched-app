@@ -7,7 +7,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { buildStoryCard, renderStoryCardSVG } from '@/services/storyCards';
 import { withAlpha } from '@/utils/colors';
-import { cacheDirectory, documentDirectory, EncodingType, writeAsStringAsync } from 'expo-file-system/legacy';
+import { File, Paths } from 'expo-file-system';
 import { useLocalSearchParams } from 'expo-router';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
@@ -179,11 +179,11 @@ export default function StoryCardScreen() {
   const html = useMemo(() => (svg ? buildStoryCardHtml(svg) : ''), [svg]);
 
   async function writeJpegToCache(base64: string) {
-    const dir = cacheDirectory || documentDirectory;
-    if (!dir) throw new Error('No writable directory available');
-    const uri = `${dir}PerchedRecap.jpg`;
-    await writeAsStringAsync(uri, base64, { encoding: EncodingType.Base64 });
-    return uri;
+    const baseDir = Paths.cache?.uri ? Paths.cache : Paths.document;
+    const file = new File(baseDir, 'PerchedRecap.jpg');
+    file.create({ intermediates: true, overwrite: true });
+    file.write(base64, { encoding: 'base64' });
+    return file.uri;
   }
 
   async function saveToPhotos(uri: string, stripped?: boolean) {

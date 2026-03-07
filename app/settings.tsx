@@ -9,6 +9,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
+import { scheduleWeeklyRecap, updateNotificationPreferences } from '@/services/smartNotifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
@@ -68,23 +69,42 @@ export default function SettingsScreen() {
 
   async function toggleNotifications() {
     const next = !notificationsEnabled;
-    setNotificationsEnabledState(next);
-    await setNotificationsEnabled(next);
-
-    if (!fbAvailable || !user) return;
-
     if (next) {
       try {
         await clearNotificationHandlers();
         const token = await registerForPushNotificationsAsync();
-        if (token) await savePushToken(user.id, token);
+        if (!token) {
+          setNotificationsEnabledState(false);
+          await setNotificationsEnabled(false);
+          await updateNotificationPreferences({ enabled: false });
+          showToast('Notifications stay off until you allow them in system settings.', 'warning');
+          return;
+        }
+
+        setNotificationsEnabledState(true);
+        await setNotificationsEnabled(true);
+        await updateNotificationPreferences({ enabled: true });
+        if (fbAvailable && user) {
+          await savePushToken(user.id, token);
+        }
+        await scheduleWeeklyRecap();
+        showToast('Notifications on.', 'success');
       } catch {
+        setNotificationsEnabledState(false);
+        await setNotificationsEnabled(false);
+        await updateNotificationPreferences({ enabled: false });
         showToast('Unable to enable notifications right now.', 'warning');
       }
     } else {
       try {
+        setNotificationsEnabledState(false);
+        await setNotificationsEnabled(false);
+        await updateNotificationPreferences({ enabled: false });
         await clearNotificationHandlers();
-        await clearPushToken(user.id);
+        if (fbAvailable && user) {
+          await clearPushToken(user.id);
+        }
+        showToast('Notifications off.', 'info');
       } catch {}
     }
   }
@@ -328,4 +348,3 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
-

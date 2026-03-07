@@ -53,20 +53,21 @@ function checkPairs(name, obj) {
   console.log('\nTheme:', name);
   if (!obj) return;
   const pairs = [
-    ['text','background'],
-    ['muted','background'],
-    ['tint','background'],
-    ['border','background'],
-    ['card','background'],
-    ['tabIconDefault','background'],
-    ['tabIconSelected','background']
+    { a: 'text', b: 'background', min: 4.5 },
+    { a: 'muted', b: 'background', min: 4.5 },
+    { a: 'tint', b: 'background', min: 4.5 },
+    { a: 'tabIconDefault', b: 'background', min: 4.5 },
+    { a: 'tabIconSelected', b: 'background', min: 4.5 },
+    { a: 'border', b: 'background', min: 1.2, note: 'decorative edge' },
+    { a: 'card', b: 'background', min: 1.0, note: 'surface separation' },
   ];
-  for (const [a,b] of pairs) {
+  for (const { a, b, min, note } of pairs) {
     const va = obj[a];
     const vb = obj[b];
     if (!va || !vb) continue;
     const r = contrast(va, vb);
-    console.log(`  ${a} (${va}) vs ${b} (${vb}) => ${r.toFixed(2)}:1` + (r < 4.5 ? '  <-- below 4.5:1' : ''));
+    const detail = note ? ` (${note})` : '';
+    console.log(`  ${a} (${va}) vs ${b} (${vb}) => ${r.toFixed(2)}:1${detail}` + (r < min ? `  <-- below ${min}:1` : ''));
   }
 }
 

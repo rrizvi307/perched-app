@@ -966,6 +966,162 @@ function serializeCreatedCheckin(checkinId: string, payload: Record<string, any>
   };
 }
 
+const PROMOTION_TYPES = ['discount', 'freebie', 'special', 'boost'] as const;
+const PARTNER_TIER_CONFIG = {
+  basic: {
+    monthlyFee: 50,
+    benefits: {
+      verifiedBadge: true,
+      featuredInDiscovery: false,
+      loyaltyProgram: false,
+      eventHosting: false,
+      sponsoredEquipment: false,
+      coMarketing: false,
+    },
+  },
+  premium: {
+    monthlyFee: 100,
+    benefits: {
+      verifiedBadge: true,
+      featuredInDiscovery: true,
+      loyaltyProgram: true,
+      eventHosting: true,
+      sponsoredEquipment: false,
+      coMarketing: true,
+    },
+  },
+  elite: {
+    monthlyFee: 200,
+    benefits: {
+      verifiedBadge: true,
+      featuredInDiscovery: true,
+      loyaltyProgram: true,
+      eventHosting: true,
+      sponsoredEquipment: true,
+      coMarketing: true,
+    },
+  },
+} as const;
+
+function sanitizeEmailLike(value: unknown): string {
+  const normalized = asId(value).toLowerCase();
+  if (!normalized || normalized.length > 254 || !normalized.includes('@')) return '';
+  return normalized;
+}
+
+function sanitizePositiveInteger(value: unknown, min = 1, max = 100000): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const rounded = Math.floor(numeric);
+  if (rounded < min || rounded > max) return null;
+  return rounded;
+}
+
+function sanitizePromotionType(value: unknown): typeof PROMOTION_TYPES[number] | null {
+  const normalized = asId(value) as typeof PROMOTION_TYPES[number];
+  return PROMOTION_TYPES.includes(normalized) ? normalized : null;
+}
+
+function sanitizePartnerTier(value: unknown): keyof typeof PARTNER_TIER_CONFIG | null {
+  const normalized = asId(value) as keyof typeof PARTNER_TIER_CONFIG;
+  return Object.prototype.hasOwnProperty.call(PARTNER_TIER_CONFIG, normalized) ? normalized : null;
+}
+
+function sanitizeDayOfWeekList(value: unknown): number[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<number>();
+  const days: number[] = [];
+  value.forEach((raw) => {
+    const next = sanitizePositiveInteger(raw, 0, 6);
+    if (next === null || seen.has(next)) return;
+    seen.add(next);
+    days.push(next);
+  });
+  return days.length ? days : undefined;
+}
+
+function sanitizeTimeOfDay(value: unknown): string | null {
+  const normalized = asId(value);
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized) ? normalized : null;
+}
+
+function sanitizePromotionTimeRange(value: unknown): { start: string; end: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const start = sanitizeTimeOfDay((value as Record<string, unknown>).start);
+  const end = sanitizeTimeOfDay((value as Record<string, unknown>).end);
+  if (!start || !end) return undefined;
+  return { start, end };
+}
+
+function sanitizeBusinessMetadata(value: unknown): { address?: string; phone?: string; website?: string; hours?: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const address = sanitizeOptionalText(raw.address, 240);
+  const phone = normalizePhone(typeof raw.phone === 'string' ? raw.phone : '');
+  const website = sanitizeOptionalText(raw.website, 2048);
+  const hours = sanitizeOptionalText(raw.hours, 240);
+  const next: Record<string, string> = {};
+  if (address) next.address = address;
+  if (phone) next.phone = phone;
+  if (website) next.website = website;
+  if (hours) next.hours = hours;
+  return Object.keys(next).length ? next : undefined;
+}
+
+function sanitizeLoyaltyConfig(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.enabled !== true) return undefined;
+  const checkinsRequired = sanitizePositiveInteger(raw.checkinsRequired, 1, 50);
+  const rewardType = asId(raw.rewardType);
+  const rewardValue = sanitizeOptionalText(raw.rewardValue, 120);
+  const rewardDescription = sanitizeOptionalText(raw.rewardDescription, 240);
+  if (!checkinsRequired || !['free_item', 'discount', 'custom'].includes(rewardType) || !rewardValue || !rewardDescription) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid loyalty configuration');
+  }
+  return {
+    enabled: true,
+    checkinsRequired,
+    rewardType: rewardType as 'free_item' | 'discount' | 'custom',
+    rewardValue,
+    rewardDescription,
+  };
+}
+
+async function getSpotDocById(spotId: string) {
+  return db.collection('spots').doc(spotId).get();
+}
+
+async function requireOwnedBusinessSpot(actorId: string, spotId: string) {
+  let snapshot = await db
+    .collection('businessSpots')
+    .where('spotId', '==', spotId)
+    .where('ownerId', '==', actorId)
+    .limit(1)
+    .get();
+
+  if (!snapshot.empty) {
+    return snapshot.docs[0];
+  }
+
+  const spotDoc = await getSpotDocById(spotId);
+  const placeId = asId(spotDoc.data()?.placeId);
+  if (placeId) {
+    snapshot = await db
+      .collection('businessSpots')
+      .where('placeId', '==', placeId)
+      .where('ownerId', '==', actorId)
+      .limit(1)
+      .get();
+  }
+
+  if (snapshot.empty) {
+    throw new functions.https.HttpsError('permission-denied', 'You do not own this spot');
+  }
+
+  return snapshot.docs[0];
+}
+
 function buildCollaborativeRecommendationReason(matchCount: number): string {
   const count = Math.max(0, Math.floor(matchCount));
   const label = count === 1 ? 'user' : 'users';
@@ -1439,6 +1595,217 @@ export const createCheckinSecure = functions.https.onCall(async (data, context) 
   }
 
   return { checkin: serializeCreatedCheckin(checkinRef.id, payload) };
+});
+
+export const claimBusinessSpotSecure = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const spotId = asId(data?.spotId);
+  const ownerEmail = sanitizeEmailLike(data?.ownerEmail);
+  if (!spotId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing spotId');
+  }
+  if (!ownerEmail) {
+    throw new functions.https.HttpsError('invalid-argument', 'Valid ownerEmail is required');
+  }
+
+  const spotDoc = await getSpotDocById(spotId);
+  if (!spotDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Spot not found');
+  }
+
+  const existingClaim = await db
+    .collection('businessSpots')
+    .where('spotId', '==', spotId)
+    .limit(1)
+    .get();
+  const placeId = asId(spotDoc.data()?.placeId);
+  const existingPlaceClaim = placeId
+    ? await db
+        .collection('businessSpots')
+        .where('placeId', '==', placeId)
+        .limit(1)
+        .get()
+    : null;
+  if (!existingClaim.empty || (existingPlaceClaim && !existingPlaceClaim.empty)) {
+    throw new functions.https.HttpsError('already-exists', 'Spot already claimed');
+  }
+
+  const spotData = spotDoc.data() || {};
+  const metadata = sanitizeBusinessMetadata(data?.metadata);
+  const payload: Record<string, any> = {
+    name: sanitizeOptionalText(spotData.name, 160) || 'Unknown Spot',
+    spotId,
+    placeId: placeId || spotId,
+    ownerId: actorId,
+    ownerEmail,
+    claimedAt: Date.now(),
+    verified: false,
+    subscriptionTier: null,
+    locationCount: 1,
+  };
+  if (metadata) {
+    payload.metadata = metadata;
+  }
+
+  const docRef = await db.collection('businessSpots').add(payload);
+  return { ok: true, businessSpotId: docRef.id };
+});
+
+export const createPromotionSecure = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const spotId = asId(data?.spotId);
+  if (!spotId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Missing spotId');
+  }
+
+  await requireOwnedBusinessSpot(actorId, spotId);
+  const spotDoc = await getSpotDocById(spotId);
+  if (!spotDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Spot not found');
+  }
+
+  const promotionInput = data?.promotion || {};
+  const type = sanitizePromotionType(promotionInput?.type);
+  const title = sanitizeOptionalText(promotionInput?.title, 120);
+  const description = sanitizeOptionalText(promotionInput?.description, 500);
+  const startDate = toFiniteNumber(promotionInput?.startDate);
+  const endDate = toFiniteNumber(promotionInput?.endDate);
+  if (!type || !title || !description || startDate === null || endDate === null || endDate <= startDate) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid promotion payload');
+  }
+
+  const now = Date.now();
+  const docRef = await db.collection('promotions').add({
+    spotId,
+    spotName: sanitizeOptionalText(spotDoc.data()?.name, 160) || 'Unknown Spot',
+    ownerId: actorId,
+    type,
+    title,
+    description,
+    discountPercent: toFiniteNumber(promotionInput?.discountPercent),
+    termsAndConditions: sanitizeOptionalText(promotionInput?.termsAndConditions, 1200),
+    startDate,
+    endDate,
+    daysOfWeek: sanitizeDayOfWeekList(promotionInput?.daysOfWeek),
+    timeRange: sanitizePromotionTimeRange(promotionInput?.timeRange),
+    maxRedemptions: sanitizePositiveInteger(promotionInput?.maxRedemptions, 1, 100000),
+    currentRedemptions: 0,
+    requiresCheckin: promotionInput?.requiresCheckin === true,
+    featured: promotionInput?.featured === true,
+    boostExpiry: toFiniteNumber(promotionInput?.boostExpiry),
+    status: now >= startDate && now <= endDate ? 'active' : 'paused',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { ok: true, promotionId: docRef.id };
+});
+
+export const respondToCheckinSecure = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const spotId = asId(data?.spotId);
+  const checkinId = asId(data?.checkinId);
+  const responseText = sanitizeOptionalText(data?.responseText, 500);
+  if (!spotId || !checkinId || !responseText) {
+    throw new functions.https.HttpsError('invalid-argument', 'spotId, checkinId, and responseText are required');
+  }
+
+  const businessSpotDoc = await requireOwnedBusinessSpot(actorId, spotId);
+  const businessSpot = businessSpotDoc.data() || {};
+  const ownedSpotId = asId(businessSpot.spotId) || spotId;
+  const ownedPlaceId = asId(businessSpot.placeId);
+  const checkinDoc = await db.collection('checkins').doc(checkinId).get();
+  if (!checkinDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Check-in not found');
+  }
+
+  const checkin = checkinDoc.data() || {};
+  const checkinSpotId = asId(checkin.spotId);
+  const checkinPlaceId = asId(checkin.spotPlaceId);
+  const matchesOwnedSpot = [ownedSpotId, ownedPlaceId]
+    .filter(Boolean)
+    .some((value) => value === checkinSpotId || value === checkinPlaceId);
+  if (!matchesOwnedSpot) {
+    throw new functions.https.HttpsError('permission-denied', 'Check-in does not belong to this business');
+  }
+
+  const existingResponse = await db
+    .collection('checkinResponses')
+    .where('checkinId', '==', checkinId)
+    .limit(1)
+    .get();
+  if (!existingResponse.empty) {
+    throw new functions.https.HttpsError('already-exists', 'Already responded to this check-in');
+  }
+
+  const docRef = await db.collection('checkinResponses').add({
+    spotId: ownedSpotId,
+    ownerId: actorId,
+    checkinId,
+    userId: asId(checkin.userId),
+    userName: sanitizeOptionalText(checkin.userName, 120) || 'User',
+    userCaption: sanitizeOptionalText(checkin.caption, 240) || '',
+    responseText,
+    respondedAt: Date.now(),
+  });
+
+  return { ok: true, responseId: docRef.id };
+});
+
+export const createPartnerSecure = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const spotId = asId(data?.spotId);
+  const tier = sanitizePartnerTier(data?.tier);
+  if (!spotId || !tier) {
+    throw new functions.https.HttpsError('invalid-argument', 'spotId and tier are required');
+  }
+
+  await requireOwnedBusinessSpot(actorId, spotId);
+  const spotDoc = await getSpotDocById(spotId);
+  if (!spotDoc.exists) {
+    throw new functions.https.HttpsError('not-found', 'Spot not found');
+  }
+
+  const loyaltyConfig = sanitizeLoyaltyConfig(data?.loyaltyConfig);
+  const tierConfig = PARTNER_TIER_CONFIG[tier];
+  const now = Date.now();
+  const docRef = await db.collection('partners').add({
+    spotId,
+    spotName: sanitizeOptionalText(spotDoc.data()?.name, 160) || 'Unknown',
+    ownerId: actorId,
+    tier,
+    status: 'pending',
+    benefits: tierConfig.benefits,
+    loyaltyConfig: loyaltyConfig || undefined,
+    monthlyFee: tierConfig.monthlyFee,
+    revenueShare: loyaltyConfig ? 20 : undefined,
+    stats: {
+      totalCheckins: 0,
+      loyaltyRedemptions: 0,
+      eventsHosted: 0,
+      revenue: 0,
+    },
+    joinedAt: now,
+    renewsAt: now + 30 * 24 * 60 * 60 * 1000,
+  });
+
+  return { ok: true, partnerId: docRef.id };
 });
 
 type SocialGraphAction =

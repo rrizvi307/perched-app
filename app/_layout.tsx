@@ -20,10 +20,8 @@ import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
 import { initFirebaseAppCheck, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
 import { learnUserPreferences } from '@/services/recommendations';
-import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
-import { savePushToken } from '@/services/firebaseClient';
+import { addNotificationResponseListener } from '@/services/smartNotifications';
 import { AppHeader } from '@/components/ui/app-header';
-import { devLog } from '@/services/logger';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 
 export const unstable_settings = {
@@ -68,7 +66,6 @@ function InnerApp() {
   const colorScheme = useColorScheme();
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
-  const notificationsInitializedForUser = useRef<string | null>(null);
   const interactiveMarked = useRef(false);
   const { showToast } = useToast();
   const lightNavTheme = {
@@ -204,8 +201,7 @@ function InnerApp() {
   }, [colorScheme]);
 
   useEffect(() => {
-    const userId = user?.id;
-    if (!userId || isDemoMode()) return;
+    if (!user?.id || isDemoMode()) return;
     const runSync = async () => {
       const markId = startPerfMark('app_pending_sync');
       try {
@@ -220,44 +216,14 @@ function InnerApp() {
       }
     };
 
-    // Initialize push notifications
-    const setupNotifications = async () => {
-      const markId = startPerfMark('app_notifications_setup');
-      try {
-        if (notificationsInitializedForUser.current === userId) return;
-        notificationsInitializedForUser.current = userId;
-
-        const token = await initPushNotifications();
-        if (token) {
-          // Save token to Firebase for Cloud Function notifications
-          await savePushToken(userId, token);
-        }
-        // Schedule weekly recap
-        await scheduleWeeklyRecap();
-        void endPerfMark(markId, true);
-      } catch (error) {
-        notificationsInitializedForUser.current = null;
-        devLog('Failed to setup notifications:', error);
-        void endPerfMark(markId, false, { error: String(error) });
-      }
-    };
-
     const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(() => {
       void runSync();
     });
-    const notificationsTimer = Platform.OS === 'web'
-      ? null
-      : setTimeout(() => {
-        void setupNotifications();
-      }, 1200);
 
     if (Platform.OS === 'web') {
       void runSync();
-      // Skip notifications on web
     } else {
-      // Also set up notification response handler
       const notificationSubscription = addNotificationResponseListener((response) => {
-        // Handle notification tap - navigate based on type
         const notifType = response.notification.request.content.data?.type;
         if (notifType === 'achievement') {
           router.push('/achievements');
@@ -279,7 +245,6 @@ function InnerApp() {
 
       return () => {
         initialTask?.cancel?.();
-        if (notificationsTimer) clearTimeout(notificationsTimer);
         sub.remove();
         notificationSubscription.remove();
       };

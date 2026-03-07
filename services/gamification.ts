@@ -177,6 +177,12 @@ const REMOTE_USER_STATS_COLLECTION = 'userStats';
 const REMOTE_ACHIEVEMENTS_COLLECTION = 'achievements';
 const gamificationSyncRequests = new Map<string, Promise<boolean>>();
 
+function normalizeAchievementTier(value: unknown): Achievement['tier'] {
+  return value === 'bronze' || value === 'silver' || value === 'gold' || value === 'platinum'
+    ? value
+    : 'bronze';
+}
+
 function createDefaultStats(): UserStats {
   return {
     totalCheckins: 0,
@@ -268,11 +274,22 @@ function hydrateAchievement(raw: Record<string, any> | null | undefined): Achiev
   const id = String(raw?.achievementId || raw?.id || '').trim();
   if (!id) return null;
   const base = ACHIEVEMENTS.find((achievement) => achievement.id === id);
-  if (!base) return null;
   const unlockedAt =
     toMillis(raw?.unlockedAt) ||
     (typeof raw?.unlockedAtMs === 'number' ? raw.unlockedAtMs : 0) ||
     Date.now();
+  if (!base) {
+    return {
+      id,
+      name: String(raw?.name || 'Special Achievement').trim() || 'Special Achievement',
+      description: String(raw?.description || 'Unlocked a special achievement.').trim() || 'Unlocked a special achievement.',
+      icon: String(raw?.icon || '🏅') || '🏅',
+      tier: normalizeAchievementTier(raw?.tier),
+      condition: () => false,
+      reward: typeof raw?.reward === 'string' ? raw.reward : undefined,
+      unlockedAt,
+    };
+  }
   return {
     ...base,
     unlockedAt,
@@ -755,7 +772,7 @@ export function getAchievementProgressDetails(
 
     default: {
       const target = 1;
-      const current = achievement.condition(stats) ? 1 : 0;
+      const current = achievement.unlockedAt ? 1 : achievement.condition(stats) ? 1 : 0;
       return progressFor(current, target);
     }
   }

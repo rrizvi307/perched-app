@@ -11,6 +11,8 @@ import { PremiumButton } from './premium-button';
 import { IconSymbol } from './icon-symbol';
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
+import { getInviteLink, WEB_URL } from '@/services/shareInvite';
 
 export type ShareCardType = 'streak' | 'achievement' | 'referral' | 'checkin' | 'milestone';
 
@@ -46,19 +48,19 @@ export function ShareCard({
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
       let message = '';
-      let url = 'https://perched.app'; // TODO: Replace with actual app URL
+      let url = WEB_URL;
 
       switch (type) {
         case 'streak':
           message = `🔥 I just hit a ${title} on Perched! Join me in discovering great places to work and study.`;
           break;
         case 'achievement':
-          message = `${emoji} ${title}! ${subtitle || ''} Check out Perched to track your own progress.`;
+          message = `${emoji ? `${emoji} ` : ''}${title}! ${subtitle || ''} Check out Perched to track your own progress.`;
           break;
         case 'referral':
-          message = `Hey! I'm using Perched to find the best cafes and study spots. Join me and get 3 days of premium free!`;
+          message = `Hey! I'm using Perched to find the best cafes and study spots. Join me and get 1 week of Premium free!`;
           if (referralCode) {
-            url = `https://perched.app/invite/${referralCode}`;
+            url = getInviteLink(referralCode);
           }
           break;
         case 'checkin':
@@ -146,18 +148,19 @@ export function generateShareText(
   }
 ): string {
   const { title, subtitle, emoji, referralCode } = data;
-  const baseUrl = 'https://perched.app'; // TODO: Replace with actual URL
-  const inviteUrl = referralCode ? `${baseUrl}/invite/${referralCode}` : baseUrl;
+  const inviteUrl = referralCode ? getInviteLink(referralCode) : WEB_URL;
 
   switch (type) {
     case 'streak':
       return `🔥 I just hit a ${title} on Perched! Discovering great places to work and study every day. Join me: ${inviteUrl}`;
 
     case 'achievement':
-      return `${emoji} ${title}! ${subtitle || ''} Tracking my work spot adventures on Perched. ${inviteUrl}`;
+      return `${emoji ? `${emoji} ` : ''}${title}! ${subtitle || ''} Tracking my work spot adventures on Perched. ${inviteUrl}`;
 
     case 'referral':
-      return `Hey! I'm using Perched to find the best cafes, libraries, and study spots. Join me and get 3 days of premium free with code ${referralCode}! ${inviteUrl}`;
+      return referralCode
+        ? `Hey! I'm using Perched to find the best cafes, libraries, and study spots. Join me and get 1 week of Premium free with code ${referralCode}! ${inviteUrl}`
+        : `Hey! I'm using Perched to find the best cafes, libraries, and study spots. Join me on Perched. ${inviteUrl}`;
 
     case 'checkin':
       return `Just checked in at ${title}! ${subtitle || ''} Find your perfect work spot on Perched. ${inviteUrl}`;
@@ -179,9 +182,7 @@ export async function shareToPlatform(
 ): Promise<void> {
   try {
     if (platform === 'copy') {
-      // Copy to clipboard
-      // TODO: Use Clipboard API
-      await Share.share({ message: text });
+      await Clipboard.setStringAsync(text);
     } else {
       // Native share
       await Share.share({ message: text });

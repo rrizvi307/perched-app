@@ -136,6 +136,7 @@ export default function ProfileScreen() {
     setRefreshing(true);
     try {
       const remoteRes = await getCheckinsForUserRemote(user?.id || '', 180);
+      const remoteFallback = (remoteRes as any)?.source === 'fallback';
       const remote = Array.isArray(remoteRes) ? remoteRes : (remoteRes && (remoteRes.items ?? [])) as any[];
       const mineRemote = remote.filter((c: any) => c.userId === user?.id);
       const local = await getCheckins();
@@ -145,14 +146,24 @@ export default function ProfileScreen() {
       const merged = [...mineRemote, ...mineLocal.filter((c: any) => !remoteKeys.has(keyOf(c)))];
       // Keep full history in Profile; Feed/Explore handle "live now" filtering separately.
       setCheckins(merged);
-      setStatus(null);
+      setStatus(remoteFallback
+        ? {
+            message: merged.length
+              ? 'Live profile updates are unavailable. Showing your saved check-ins.'
+              : 'Unable to load profile history right now. Pull to retry.',
+            tone: 'warning',
+          }
+        : null);
       try {
         const refreshedStats = await getUserStats();
         setUserStats(refreshedStats);
       } catch {}
-      if (wasOfflineRef.current) {
+      if (!remoteFallback && wasOfflineRef.current) {
         showToast('Back online. Profile updated.', 'success');
         wasOfflineRef.current = false;
+      }
+      if (remoteFallback) {
+        wasOfflineRef.current = true;
       }
     } catch {
       if (isDemoMode()) {
@@ -851,6 +862,8 @@ export default function ProfileScreen() {
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
                 onPress={() => router.push('/verify')}
+                accessibilityRole="button"
+                accessibilityLabel="Verify your email"
                 style={[styles.banner, { borderColor, backgroundColor: withAlpha(danger, 0.12) }]}
               >
                 <Text style={{ color: danger, fontWeight: '600' }}>Email not verified — tap to resend</Text>
@@ -898,6 +911,8 @@ export default function ProfileScreen() {
                         {(cityResults.length ? cityResults : getLocationOptions('city', cityQuery).slice(0, 8)).map((option) => (
                           <Pressable
                             key={option}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Select city ${option}`}
                             onPress={() => {
                               setCityDraft(option);
                               setCityQuery(option);
@@ -930,6 +945,8 @@ export default function ProfileScreen() {
                           setCityDraft(detected);
                           setCityQuery(detected);
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Use current city"
                         style={[styles.inlineButton, { borderColor }]}
                       >
                         <Text style={{ color: primary, fontWeight: '600' }}>Use current city</Text>
@@ -955,6 +972,8 @@ export default function ProfileScreen() {
                         {(campusResults.length ? campusResults : getLocationOptions('campus', campusQuery).slice(0, 8)).map((option) => (
                           <Pressable
                             key={option}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Select campus ${option}`}
                             onPress={() => {
                               setCampusDraft(option);
                               setCampusQuery(option);
@@ -991,6 +1010,8 @@ export default function ProfileScreen() {
                     <View style={{ flexDirection: 'row' }}>
                   <Pressable
                     onPress={saveNameAndCampus}
+                    accessibilityRole="button"
+                    accessibilityLabel={savingName ? 'Saving profile' : 'Save profile'}
                     style={[styles.inlineButton, { backgroundColor: primary }, nameSaveDisabled ? { opacity: 0.5 } : null]}
                     disabled={nameSaveDisabled}
                   >
@@ -1015,6 +1036,8 @@ export default function ProfileScreen() {
                           setCampusQuery(user.campus || '');
                           setPhoneDraft(user.phone || '');
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Cancel profile changes"
                         style={[styles.inlineButton, { borderColor }]}
                       >
                         <Text style={{ color: textColor }}>Cancel</Text>
@@ -1023,7 +1046,12 @@ export default function ProfileScreen() {
                   </View>
                 ) : (
                   <View style={[{ flexDirection: 'row', alignItems: 'center' }, gapStyle(12)]}>
-                    <Pressable onPress={() => setEditingName(true)} style={styles.linkButton}>
+                    <Pressable
+                      onPress={() => setEditingName(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit profile"
+                      style={styles.linkButton}
+                    >
                       <Text style={{ color: primary, fontWeight: '600' }}>Edit profile</Text>
                     </Pressable>
                   </View>
@@ -1056,6 +1084,8 @@ export default function ProfileScreen() {
                       <View style={{ height: 6 }} />
                       <Pressable
                         onPress={saveHandle}
+                        accessibilityRole="button"
+                        accessibilityLabel={savingHandle ? 'Saving handle' : 'Save handle'}
                         style={[styles.inlineButton, { backgroundColor: primary }, handleSaveDisabled ? { opacity: 0.5 } : null]}
                         disabled={handleSaveDisabled}
                       >
@@ -1063,7 +1093,12 @@ export default function ProfileScreen() {
                       </Pressable>
                     </View>
                   ) : (
-                    <Pressable onPress={() => setEditingHandle(true)} style={styles.linkButton}>
+                    <Pressable
+                      onPress={() => setEditingHandle(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel={user?.handle ? 'Edit handle' : 'Add handle'}
+                      style={styles.linkButton}
+                    >
                       <Text style={{ color: primary, fontWeight: '600' }}>{user?.handle ? 'Edit @handle' : 'Add @handle'}</Text>
                     </Pressable>
                   )}
@@ -1107,6 +1142,8 @@ export default function ProfileScreen() {
                   {savedSpots.map((s: any) => (
                     <Pressable
                       key={s.key}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open saved spot ${s.name}`}
                       onPress={() => {
                         try {
                           router.push(`/spot?placeId=${encodeURIComponent(s.placeId || '')}&name=${encodeURIComponent(s.name || '')}`);
@@ -1123,7 +1160,12 @@ export default function ProfileScreen() {
                 <View style={{ marginTop: 16 }}>
                   <H2 style={{ color: textColor }}>Saved spots</H2>
                   <Text style={{ color: muted, marginTop: 6 }}>Save your favorite places to find them fast.</Text>
-                  <Pressable onPress={() => router.push('/(tabs)/explore')} style={[styles.inlineButton, { borderColor, marginTop: 12 }]}>
+                  <Pressable
+                    onPress={() => router.push('/(tabs)/explore')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Explore spots"
+                    style={[styles.inlineButton, { borderColor, marginTop: 12 }]}
+                  >
                     <Text style={{ color: primary, fontWeight: '600' }}>Explore spots</Text>
                   </Pressable>
                 </View>
@@ -1160,6 +1202,8 @@ export default function ProfileScreen() {
                     alert('Unable to build story card');
                   }
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Create story card"
                 style={[styles.storyButton, { backgroundColor: primary }]}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Create story card</Text>
@@ -1231,6 +1275,8 @@ export default function ProfileScreen() {
               return (
                 <Pressable
                   key={it.id || it.clientId || `${row.key}-${idx}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open post from ${it.spotName || it.spot || 'saved check-in'}`}
                   onPress={() => {
                     if (!focus) return;
                     router.push(`/my-posts?focus=${encodeURIComponent(focus)}${sectionKey ? `&section=${encodeURIComponent(sectionKey)}` : ''}` as any);

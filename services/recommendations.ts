@@ -427,7 +427,7 @@ export async function learnUserPreferences(userId: string): Promise<UserPreferen
       outletImportance: toImportance(avgOutletAvailability),
       frequentSpots: Array.from(spotIds).slice(0, 10),
       checkinTimes: checkinTimes.slice(0, 20),
-      avgSessionLength: 60, // TODO: Calculate from check-in duration
+      avgSessionLength: 60, // Conservative fallback until explicit session-duration telemetry exists.
       lastUpdated: Date.now(),
     };
 

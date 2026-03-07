@@ -15,7 +15,7 @@ interface DemoControlPanelProps {
 
 /**
  * Demo Control Panel - Toggle demo mode for filming and presentations
- * Access via: Triple-tap the settings icon or add /demo route
+ * Access via: internal developer affordances only
  */
 export function DemoControlPanel({ onClose }: DemoControlPanelProps) {
   const { user } = useAuth();

@@ -20,7 +20,7 @@ import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
-import { getReactions, type ReactionType } from '@/services/social';
+import { getReactions, getReactionsForCheckins, type ReactionType } from '@/services/social';
 import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
 import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
 import SpotImage from '@/components/ui/spot-image';
@@ -472,6 +472,21 @@ function FeedPhoto({
 		} catch {}
 	}, [user?.id]);
 
+	const loadReactionSummariesForCheckins = useCallback(async (checkinIds: string[]) => {
+		const uniqueIds = Array.from(new Set((checkinIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+		if (!uniqueIds.length) return;
+		try {
+			const grouped = await getReactionsForCheckins(uniqueIds);
+			setReactionByCheckin((prev) => {
+				const next = { ...prev };
+				uniqueIds.forEach((id) => {
+					next[id] = toReactionSummary(grouped[id] || [], user?.id);
+				});
+				return next;
+			});
+		} catch {}
+	}, [user?.id]);
+
 	// Feed shows full history; "live" is a 24h status indicated with a dot.
 	const filterExpired = useCallback((list: Checkin[]) => list, []);
 
@@ -618,6 +633,7 @@ function FeedPhoto({
 						} catch {}
 					});
 					}
+				const remoteFallback = res?.source === 'fallback';
 				const cleaned = filterExpired(res.items as any);
 				const normalized = await normalizeCheckins(cleaned as any);
 				let merged = await mergeRemoteWithLocal(normalized as any);
@@ -634,11 +650,21 @@ function FeedPhoto({
 					setLastSelfCheckinAt(sorted[0]?.createdAt || null);
 				}
 			}
-			setRemoteCursor(res.lastCursor || null);
-			setHasMoreRemote(cleaned.length >= PAGE);
+			setRemoteCursor(remoteFallback ? null : (res.lastCursor || null));
+			setHasMoreRemote(!remoteFallback && cleaned.length >= PAGE);
 			void logEvent('feed_viewed', user?.id);
-			setStatus(null);
-			if (wasOfflineRef.current) {
+			if (remoteFallback) {
+				setStatus({
+					message: merged.length
+						? 'Live feed unavailable. Showing saved check-ins until the network recovers.'
+						: 'Unable to load the live feed right now. Pull to retry.',
+					tone: 'warning',
+				});
+				wasOfflineRef.current = true;
+			} else {
+				setStatus(null);
+			}
+			if (!remoteFallback && wasOfflineRef.current) {
 				showToast('Back online. Feed updated.', 'success');
 				wasOfflineRef.current = false;
 			}
@@ -677,14 +703,18 @@ function FeedPhoto({
 			}
 			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
 
-		const loadMore = useCallback(async () => {
-			if (loadingMore || !hasMoreRemote) return;
-			setLoadingMore(true);
-			const markId = startPerfMark('feed_fetch_more');
-			let ok = true;
-			try {
-				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
-				if (res.items && res.items.length) {
+	const loadMore = useCallback(async () => {
+		if (loadingMore || !hasMoreRemote) return;
+		setLoadingMore(true);
+		const markId = startPerfMark('feed_fetch_more');
+		let ok = true;
+		try {
+			const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
+			if (res?.source === 'fallback') {
+				setHasMoreRemote(false);
+				return;
+			}
+			if (res.items && res.items.length) {
 					const cleaned = filterExpired(res.items as any);
 					const normalized = await normalizeCheckins(cleaned as any);
 					setItems((prev) => {
@@ -1009,18 +1039,16 @@ function FeedPhoto({
 			if (!ids.length) return;
 			let active = true;
 			const task = InteractionManager.runAfterInteractions(() => {
-				ids.forEach((id) => {
-					void (async () => {
-						if (!active) return;
-						await loadReactionsForCheckin(id);
-					})();
-				});
+				void (async () => {
+					if (!active) return;
+					await loadReactionSummariesForCheckins(ids);
+				})();
 			});
 			return () => {
 				active = false;
 				task.cancel();
 			};
-		}, [feedItems, reactionByCheckin, loadReactionsForCheckin]);
+		}, [feedItems, reactionByCheckin, loadReactionSummariesForCheckins]);
 
 	useEffect(() => {
 		if (initialLoading || firstItemMarkedRef.current) return;
@@ -1149,6 +1177,8 @@ function FeedPhoto({
 						<View style={styles.quickActions}>
 							<Pressable
 								onPress={() => router.push('/(tabs)/explore')}
+								accessibilityRole="button"
+								accessibilityLabel="Explore spots"
 								style={({ pressed }) => [
 									styles.quickButton,
 									{ borderColor: border, backgroundColor: pressed ? highlight : card },
@@ -1160,6 +1190,8 @@ function FeedPhoto({
 								onPress={async () => {
 									await Share.share({ message: 'Join me on Perched. Download: https://perched.app' });
 								}}
+								accessibilityRole="button"
+								accessibilityLabel="Invite friends to Perched"
 								style={({ pressed }) => [
 									styles.quickButton,
 									{ borderColor: border, backgroundColor: pressed ? highlight : card },
@@ -1184,6 +1216,8 @@ function FeedPhoto({
 										return (
 											<Pressable
 												key={`${placeId || name}-${index}`}
+												accessibilityRole="button"
+												accessibilityLabel={`Open trending spot ${name}`}
 												onPress={() => {
 													startPerfMark('spot_navigation');
 													void markPerfEvent('spot_nav_start', { source: 'feed_trending' });
@@ -1208,6 +1242,8 @@ function FeedPhoto({
 						{user && !hasCheckedInToday ? (
 							<Pressable
 								onPress={() => router.push('/checkin')}
+								accessibilityRole="button"
+								accessibilityLabel="Create a new check-in"
 								style={({ pressed }) => [
 									{
 										marginHorizontal: 16,
@@ -1345,6 +1381,8 @@ function FeedPhoto({
 								<View style={styles.cardHeader}>
 									<Pressable
 										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={`Open ${displayName}'s profile`}
 										style={({ pressed }) => [styles.avatarRow, pressed ? { opacity: 0.75 } : null]}
 										onPress={() => {
 											if (profilePending) return;
@@ -1391,6 +1429,16 @@ function FeedPhoto({
 								{user && targetUserId && targetUserId !== user.id ? (
 									<View style={styles.cardActions}>
 										<Pressable
+											accessibilityRole="button"
+											accessibilityLabel={
+												isFriend
+													? `Manage friendship with ${displayName}`
+													: isIncoming
+														? `Accept ${displayName}'s friend request`
+														: isOutgoing
+															? `Friend request pending for ${displayName}`
+															: `Add ${displayName} as a friend`
+											}
 											onPress={async () => {
 												try {
 													const targetId = targetUserId;
@@ -1438,6 +1486,8 @@ function FeedPhoto({
 										</Pressable>
 											<Pressable
 												hitSlop={8}
+												accessibilityRole="button"
+												accessibilityLabel={`${closePending ? 'Saving close friend status for' : 'Toggle close friend for'} ${displayName}`}
 												onPress={async () => {
 													if (!user) return;
 													if (!beginAction(closeActionKey)) return;
@@ -1467,6 +1517,8 @@ function FeedPhoto({
 							</View>
 
 							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel={`Open check-in details for ${item.spotName || item.spot || 'this spot'}`}
 								onPress={() => {
 									if (!reactionCheckinId) return;
 									router.push(`/checkin-detail?cid=${encodeURIComponent(reactionCheckinId)}` as any);
@@ -1482,6 +1534,8 @@ function FeedPhoto({
 							</Pressable>
 							<View style={styles.cardContent}>
 								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel={`Open spot details for ${item.spotName || item.spot || 'this spot'}`}
 									onPress={() => {
 										const placeId = (item as any).spotPlaceId;
 										const name = item.spotName || item.spot || '';
@@ -1525,6 +1579,8 @@ function FeedPhoto({
 								<View style={styles.cardFooter}>
 									<Pressable
 										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={`Share check-in from ${item.spotName || item.spot || 'this spot'}`}
 										onPress={async () => {
 											try {
 													const spotTitle = (item as any).spotName || item.spot || 'Check this spot';
@@ -1549,6 +1605,8 @@ function FeedPhoto({
 									</Pressable>
 									<Pressable
 										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={reportPending ? 'Reporting check-in' : 'Report this check-in'}
 										onPress={async () => {
 											if (!user?.id || !reactionCheckinId) {
 												showToast('You need to be signed in to report this check-in.', 'warning');
@@ -1577,6 +1635,8 @@ function FeedPhoto({
 									{user && targetUserId && targetUserId !== user.id ? (
 										<Pressable
 											hitSlop={8}
+											accessibilityRole="button"
+											accessibilityLabel={targetIsBlocked ? `Unblock ${displayName}` : `Block ${displayName}`}
 											onPress={async () => {
 												if (!beginAction(blockActionKey)) return;
 												try {

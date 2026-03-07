@@ -225,7 +225,7 @@ export function track(
       logFirebaseEvent(event, enrichedProperties);
     }
 
-    // TODO: Add Segment, Mixpanel, etc. when configured
+    // Optional downstream sinks plug in here when write keys are configured.
     // if (SEGMENT_WRITE_KEY) {
     //   logSegmentEvent(event, enrichedProperties);
     // }
@@ -251,7 +251,7 @@ export function identify(userId: string, properties?: UserProperties) {
     // Firebase Analytics
     logFirebaseUserProperties(properties);
 
-    // TODO: Segment, Mixpanel
+    // Additional identity sinks can be added here when enabled.
   } catch (error) {
     console.error('Failed to identify user:', error);
   }
@@ -271,7 +271,7 @@ export function resetAnalytics() {
     // Firebase Analytics doesn't need explicit reset
     // User ID will be null on next event
 
-    // TODO: Reset Segment, Mixpanel
+    // Additional analytics sinks can reset here when enabled.
   } catch (error) {
     console.error('Failed to reset analytics:', error);
   }

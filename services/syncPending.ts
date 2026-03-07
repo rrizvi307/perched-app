@@ -39,9 +39,8 @@ async function localFileExists(uri: string): Promise<boolean> {
   if (uri.startsWith('http') || uri.startsWith('data:') || uri.startsWith('gs://')) return true;
   try {
     const FileSystem = require('expo-file-system');
-    if (FileSystem?.getInfoAsync) {
-      const info = await FileSystem.getInfoAsync(uri);
-      return !!info?.exists;
+    if (FileSystem?.File) {
+      return !!new FileSystem.File(uri).exists;
     }
   } catch {
     return true;

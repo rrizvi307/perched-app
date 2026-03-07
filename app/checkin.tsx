@@ -2,7 +2,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import * as ImagePicker from 'expo-image-picker';
-import { copyAsync, documentDirectory, makeDirectoryAsync } from 'expo-file-system/legacy';
+import { Directory, File, Paths } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import SpotImage from '@/components/ui/spot-image';
 import PermissionSheet from '@/components/ui/permission-sheet';
@@ -732,14 +732,14 @@ export default function CheckinScreen() {
 
 			let persistedImage = image as string;
 			try {
-				if (persistedImage && !persistedImage.startsWith('http') && !persistedImage.startsWith('data:') && documentDirectory) {
-					const dir = `${documentDirectory}perched-photos`;
+				if (persistedImage && !persistedImage.startsWith('http') && !persistedImage.startsWith('data:')) {
+					const dir = new Directory(Paths.document, 'perched-photos');
 					try {
-						await makeDirectoryAsync(dir, { intermediates: true });
+						dir.create({ idempotent: true, intermediates: true });
 					} catch {}
-					const target = `${dir}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
-					await copyAsync({ from: persistedImage, to: target });
-					persistedImage = target;
+					const target = new File(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+					new File(persistedImage).copy(target);
+					persistedImage = target.uri;
 				}
 			} catch {}
 
@@ -1053,6 +1053,8 @@ export default function CheckinScreen() {
 										void triggerHaptic();
 										void openCamera();
 									}}
+									accessibilityRole="button"
+									accessibilityLabel="Take a photo with the camera"
 								>
 									<IconSymbol name="camera.fill" size={18} color={text} />
 									<Body style={{ marginBottom: 0, color: text }}>Camera</Body>
@@ -1063,6 +1065,8 @@ export default function CheckinScreen() {
 										void triggerHaptic();
 										void pickImage();
 									}}
+									accessibilityRole="button"
+									accessibilityLabel="Choose a photo from your library"
 								>
 									<IconSymbol name="photo.fill" size={18} color={text} />
 									<Body style={{ marginBottom: 0, color: text }}>Library</Body>
@@ -1075,6 +1079,8 @@ export default function CheckinScreen() {
 						<SpotImage source={{ uri: image as string }} style={[styles.preview, { backgroundColor: inputBorder }]} />
 						<Pressable
 							onPress={() => setPlaceModal(true)}
+							accessibilityRole="button"
+							accessibilityLabel={spot ? `Change selected spot from ${spot}` : 'Select a spot'}
 							style={[styles.input, styles.selectInput, { borderColor: inputBorder, backgroundColor: inputBg }]}
 						>
 							<Text style={{ color: spot ? text : muted, fontWeight: spot ? '600' : '400' }}>
@@ -1092,6 +1098,7 @@ export default function CheckinScreen() {
 							placeholderTextColor={muted}
 							value={caption}
 							onChangeText={setCaption}
+							accessibilityLabel="Check-in caption"
 							style={[styles.input, { borderColor: inputBorder, backgroundColor: inputBg, color: text }]}
 							maxLength={140}
 						/>
@@ -1104,6 +1111,8 @@ export default function CheckinScreen() {
 									<Pressable
 										key={tag}
 										onPress={() => toggleTag(tag)}
+										accessibilityRole="button"
+										accessibilityLabel={`${active ? 'Remove' : 'Add'} tag ${tag}`}
 										style={({ pressed }) => [
 											styles.tagChip,
 											{ borderColor: inputBorder, backgroundColor: active ? primary : pressed ? withAlpha(primary, 0.12) : 'transparent' },
@@ -1124,6 +1133,8 @@ export default function CheckinScreen() {
 									<Pressable
 										key={intent.key}
 										onPress={() => toggleVisitIntent(intent.key as DiscoveryIntent)}
+										accessibilityRole="button"
+										accessibilityLabel={`${active ? 'Remove' : 'Add'} visit intent ${intent.shortLabel}`}
 										style={({ pressed }) => [
 											styles.tagChip,
 											{
@@ -1156,6 +1167,8 @@ export default function CheckinScreen() {
 									<Pressable
 										key={option.key}
 										onPress={() => setAmbiance((prev) => (prev === option.key ? null : option.key))}
+										accessibilityRole="button"
+										accessibilityLabel={`${active ? 'Remove' : 'Select'} ambiance ${option.label}`}
 										style={({ pressed }) => [
 											styles.tagChip,
 											{
@@ -1181,6 +1194,8 @@ export default function CheckinScreen() {
 									<Pressable
 										key={tag}
 										onPress={() => togglePhotoTag(tag)}
+										accessibilityRole="button"
+										accessibilityLabel={`${active ? 'Remove' : 'Add'} photo tag ${tag}`}
 										style={({ pressed }) => [
 											styles.tagChip,
 											{
@@ -1652,6 +1667,8 @@ export default function CheckinScreen() {
 									setSpot('');
 									setPlaceInfo(null);
 								}}
+								accessibilityRole="button"
+								accessibilityLabel="Clear selected spot"
 								style={{ marginBottom: 8, alignSelf: 'flex-start' }}
 							>
 								<Body style={{ color: muted }}>Clear spot</Body>
@@ -1671,6 +1688,8 @@ export default function CheckinScreen() {
 										if (!spot) setSpot(detectedPlace.name);
 									}}
 									disabled={placeInfo?.placeId === detectedPlace?.placeId}
+									accessibilityRole="button"
+									accessibilityLabel={placeInfo?.placeId === detectedPlace?.placeId ? `Selected detected spot ${detectedPlace.name}` : `Use detected spot ${detectedPlace.name}`}
 									style={[
 										styles.detectedChip,
 										{ backgroundColor: placeInfo?.placeId === detectedPlace?.placeId ? inputBorder : primary },
@@ -1696,6 +1715,8 @@ export default function CheckinScreen() {
 											setPlaceInfo(c);
 											if (!spot) setSpot(c.name);
 										}}
+										accessibilityRole="button"
+										accessibilityLabel={`Use suggested spot ${c.name}`}
 										style={[styles.suggestionRow, { borderColor: inputBorder, backgroundColor: inputBg }]}
 									>
 										{(() => {
@@ -1728,13 +1749,28 @@ export default function CheckinScreen() {
 
 						<View style={{ height: 8 }} />
 						<View style={[{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }, gapStyle(10)]}>
-							<Pressable onPress={() => setVisibility('public')} style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'public' ? primary : 'transparent' }]}>
+							<Pressable
+								onPress={() => setVisibility('public')}
+								accessibilityRole="button"
+								accessibilityLabel="Set visibility to public"
+								style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'public' ? primary : 'transparent' }]}
+							>
 								<Body style={[styles.visibilityText, { color: visibility === 'public' ? '#FFFFFF' : text }]}>Public</Body>
 							</Pressable>
-							<Pressable onPress={() => setVisibility('friends')} style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'friends' ? primary : 'transparent' }]}>
+							<Pressable
+								onPress={() => setVisibility('friends')}
+								accessibilityRole="button"
+								accessibilityLabel="Set visibility to friends"
+								style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'friends' ? primary : 'transparent' }]}
+							>
 								<Body style={[styles.visibilityText, { color: visibility === 'friends' ? '#FFFFFF' : text }]}>Friends</Body>
 							</Pressable>
-							<Pressable onPress={() => setVisibility('close')} style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'close' ? primary : 'transparent' }]}>
+							<Pressable
+								onPress={() => setVisibility('close')}
+								accessibilityRole="button"
+								accessibilityLabel="Set visibility to close friends"
+								style={[styles.visibilityChip, { borderColor: inputBorder, backgroundColor: visibility === 'close' ? primary : 'transparent' }]}
+							>
 								<Body style={[styles.visibilityText, { color: visibility === 'close' ? '#FFFFFF' : text }]}>Close</Body>
 							</Pressable>
 						</View>
@@ -1750,7 +1786,11 @@ export default function CheckinScreen() {
 							/>
 						) : null}
 						<View style={{ height: 8 }} />
-						<Pressable onPress={() => { setImage(null); setCaptured(false); }}>
+						<Pressable
+							onPress={() => { setImage(null); setCaptured(false); }}
+							accessibilityRole="button"
+							accessibilityLabel="Retake photo"
+						>
 							<Body style={{ color: text }}>Retake</Body>
 						</Pressable>
 					</View>
@@ -1779,6 +1819,8 @@ export default function CheckinScreen() {
 								]}
 								onPress={handlePost}
 								disabled={loading || !spot || !activePlace?.placeId}
+								accessibilityRole="button"
+								accessibilityLabel={loading ? 'Posting check-in' : !spot || !activePlace?.placeId ? 'Select a spot before posting' : 'Post check-in'}
 							>
 								<View style={styles.ctaRow}>
 									{!loading && spot && activePlace?.placeId ? (

@@ -1,8 +1,9 @@
 import { getMapsKey } from '@/services/googleMaps';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import SpotImage from '@/components/ui/spot-image';
 import { withAlpha } from '@/utils/colors';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 type MapContextValue = {
   map: any;
@@ -111,7 +112,7 @@ export default function MapView({ children, style, initialRegion, onRegionChange
   return (
     <View style={containerStyle}>
       <div ref={mapRef} style={{ position: 'absolute', inset: 0 }} />
-      {!ready && fallbackUri ? <Image source={{ uri: fallbackUri }} style={StyleSheet.absoluteFill} /> : null}
+      {!ready && fallbackUri ? <SpotImage source={fallbackUri} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}
       <MapContext.Provider value={{ map }}>{children}</MapContext.Provider>
     </View>
   );

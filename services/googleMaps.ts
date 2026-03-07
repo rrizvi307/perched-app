@@ -16,8 +16,7 @@ export function getMapsKey() {
     (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string) ||
     (process.env.GOOGLE_MAPS_API_KEY as string) ||
     (typeof global !== 'undefined' ? (global as any).GOOGLE_MAPS_API_KEY : '') ||
-    (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY ||
-    (Constants as any)?.manifest?.extra?.GOOGLE_MAPS_API_KEY
+    (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY
   );
 }
 

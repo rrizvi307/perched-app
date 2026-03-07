@@ -24,7 +24,7 @@ async function seedFirestore(
   docId: string,
   data: Record<string, unknown>,
 ) {
-  await testEnv.withSecurityRulesDisabled(async (context) => {
+  await testEnv.withSecurityRulesDisabled(async (context: any) => {
     await context.firestore().collection(collection).doc(docId).set(data);
   });
 }
@@ -34,7 +34,7 @@ async function seedCheckinMedia(
   filename: string,
   visibility: 'public' | 'friends' | 'close',
 ) {
-  await testEnv.withSecurityRulesDisabled(async (context) => {
+  await testEnv.withSecurityRulesDisabled(async (context: any) => {
     await context
       .storage(TEST_BUCKET)
       .ref(`checkins/${ownerId}/${filename}`)

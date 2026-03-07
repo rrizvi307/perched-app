@@ -1,7 +1,8 @@
-import { createAccountWithEmail, deleteCurrentUser, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
+import { clearPushToken, createAccountWithEmail, deleteCurrentUser, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, resetFirebaseClientCaches, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
-import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
+import { cleanupDemoDataForRealUser, clearAuthenticatedSessionState, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
+import { clearNotificationHandlers } from '@/services/notifications';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import React, { createContext, useContext, useState } from 'react';
@@ -526,13 +527,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
+    const currentUserId = user?.id;
     const fb = ensureFirebase();
+    try {
+      if (currentUserId) {
+        await clearPushToken(currentUserId);
+      }
+    } catch {}
+    try {
+      await clearNotificationHandlers();
+    } catch {}
     try {
       if (fb) await fb.auth().signOut();
     } catch {}
-    // keep local user cache so local/demo accounts can sign back in
+    await clearAuthenticatedSessionState(currentUserId || undefined).catch(() => {});
+    resetFirebaseClientCaches();
     setUser(null);
-    await logEvent('user_signed_out', user?.id);
+    await logEvent('user_signed_out', currentUserId);
   }
 
   async function changePassword(newPassword: string, currentPassword?: string) {

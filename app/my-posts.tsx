@@ -37,6 +37,14 @@ function formatWhen(createdAt: any) {
   }
 }
 
+function getPostKey(checkin: any, index = 0) {
+  return String(
+    checkin?.id ||
+    checkin?.clientId ||
+    `${checkin?.userId || 'anon'}-${createdAtMs(checkin)}-${checkin?.spotPlaceId || checkin?.spotName || checkin?.spot || index}`
+  );
+}
+
 export default function MyPostsScreen() {
   const { user } = useAuth();
   const router = useRouter();
@@ -144,6 +152,8 @@ export default function MyPostsScreen() {
         <Pressable
           onPress={() => router.back()}
           hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Back to profile"
           style={({ pressed }) => [styles.backButton, pressed ? { opacity: 0.7 } : null]}
         >
           <IconSymbol name="chevron.left" size={22} color={muted} />
@@ -156,7 +166,7 @@ export default function MyPostsScreen() {
           listRef.current = r;
         }}
         data={data}
-        keyExtractor={(item) => String(item?.id || item?.clientId || Math.random())}
+        keyExtractor={(item, index) => getPostKey(item, index)}
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
         ListHeaderComponent={
@@ -191,6 +201,8 @@ export default function MyPostsScreen() {
                 if (!cid) return;
                 router.push(`/checkin-detail?cid=${encodeURIComponent(cid)}` as any);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={`Open check-in at ${item?.spotName || item?.spot || 'this spot'}`}
               style={({ pressed }) => [
                 styles.card,
                 {

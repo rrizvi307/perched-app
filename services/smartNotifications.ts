@@ -139,7 +139,7 @@ export async function getNotificationPreferences(): Promise<NotificationPreferen
 
   // Defaults
   return {
-    enabled: true,
+    enabled: false,
     streakReminders: true,
     friendActivity: true,
     nearbySpots: true,

@@ -4,7 +4,7 @@
  * Provides analytics and insights for coffee shop owners and coworking spaces
  */
 
-import { ensureFirebase } from './firebaseClient';
+import { callFirebaseCallable, ensureFirebase } from './firebaseClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseCheckinTimestamp, queryCheckinsBySpot } from './schemaHelpers';
 
@@ -85,6 +85,7 @@ export interface CompetitiveIntelligence {
 export interface BusinessSpot {
   id: string;
   name: string;
+  spotId?: string;
   placeId: string;
   ownerId: string;
   ownerEmail: string;
@@ -470,54 +471,22 @@ export async function getCompetitiveIntelligence(
  * Claim a spot as a business owner
  */
 export async function claimSpot(
-  userId: string,
+  _userId: string,
   spotId: string,
   ownerEmail: string,
   metadata?: BusinessSpot['metadata']
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Check if spot exists
-    const spotDoc = await db.collection('spots').doc(spotId).get();
-    if (!spotDoc.exists) {
-      return { success: false, error: 'Spot not found' };
-    }
-
-    // Check if already claimed
-    const existingClaim = await db
-      .collection('businessSpots')
-      .where('spotId', '==', spotId)
-      .get();
-
-    if (!existingClaim.empty) {
-      return { success: false, error: 'Spot already claimed' };
-    }
-
-    const spotData = spotDoc.data()!;
-
-    // Create business spot claim
-    const businessSpot: Omit<BusinessSpot, 'id'> = {
-      name: spotData.name || 'Unknown Spot',
-      placeId: spotData.placeId || spotId,
-      ownerId: userId,
+    const result = await callFirebaseCallable<{ ok?: boolean }>('claimBusinessSpotSecure', {
+      spotId,
       ownerEmail,
-      claimedAt: Date.now(),
-      verified: false, // Requires manual verification
-      subscriptionTier: null,
-      locationCount: 1,
       metadata,
-    };
-
-    const docRef = await db.collection('businessSpots').add(businessSpot);
-
-    return { success: true };
+    });
+    if (result?.ok) return { success: true };
+    return { success: false, error: 'Business claim service unavailable' };
   } catch (error) {
     console.error('Failed to claim spot:', error);
-    return { success: false, error: 'Failed to claim spot' };
+    return { success: false, error: (error as any)?.message || 'Failed to claim spot' };
   }
 }
 

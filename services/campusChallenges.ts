@@ -34,6 +34,98 @@ export interface ChallengeReward {
 
 const CHALLENGE_PROGRESS_KEY = '@perched_challenge_progress';
 const CHALLENGE_REWARDS_KEY = '@perched_challenge_rewards';
+const CHALLENGE_VISITED_SPOTS_KEY = '@perched_challenge_visited_spots';
+
+function calculateLevelFromXp(xp: number): { level: number; xpToNextLevel: number } {
+  const levels = [0, 100, 250, 500, 1000, 2000, 3500, 5500, 8000, 12000, 20000];
+  let level = 1;
+  for (let index = 1; index < levels.length; index += 1) {
+    if (xp >= levels[index]) {
+      level = index + 1;
+    } else {
+      break;
+    }
+  }
+  const nextLevelXp = levels[level] || levels[levels.length - 1] + 10000;
+  return {
+    level,
+    xpToNextLevel: Math.max(0, nextLevelXp - xp),
+  };
+}
+
+async function grantChallengeXp(userId: string, xp: number): Promise<void> {
+  const fb = ensureFirebase();
+  if (!fb || !userId || !Number.isFinite(xp) || xp <= 0) return;
+
+  const db = fb.firestore();
+  const profileRef = db.collection('gamification').doc(userId);
+  const profileDoc = await profileRef.get().catch(() => null);
+  const currentXp = typeof profileDoc?.data?.()?.xp === 'number' ? profileDoc.data().xp : 0;
+  const nextXp = currentXp + xp;
+  const { level, xpToNextLevel } = calculateLevelFromXp(nextXp);
+
+  await profileRef.set(
+    {
+      userId,
+      xp: nextXp,
+      level,
+      xpToNextLevel,
+      lastUpdated: Date.now(),
+    },
+    { merge: true }
+  );
+}
+
+async function grantChallengeBadge(
+  userId: string,
+  challengeId: string,
+  challengeName: string,
+  campusId: string
+): Promise<void> {
+  const fb = ensureFirebase();
+  if (!fb || !userId || !challengeId) return;
+
+  const badgeId = `campus_challenge_${challengeId}`;
+  await fb.firestore().collection('achievements').doc(`${userId}_${badgeId}`).set(
+    {
+      userId,
+      achievementId: badgeId,
+      name: challengeName || 'Campus Challenge Winner',
+      description: `Completed a campus challenge${campusId ? ` for ${campusId}` : ''}.`,
+      icon: '🏅',
+      tier: 'gold',
+      unlockedAt: fb.firestore.FieldValue.serverTimestamp(),
+      unlockedAtMs: Date.now(),
+      source: 'campus_challenge',
+      campusId,
+    },
+    { merge: true }
+  );
+}
+
+function visitedSpotsKey(userId: string, challengeId: string): string {
+  return `${CHALLENGE_VISITED_SPOTS_KEY}_${userId}_${challengeId}`;
+}
+
+async function getVisitedChallengeSpots(userId: string, challengeId: string): Promise<string[]> {
+  try {
+    const json = await AsyncStorage.getItem(visitedSpotsKey(userId, challengeId));
+    const parsed = json ? JSON.parse(json) : [];
+    return Array.isArray(parsed) ? parsed.map((value) => String(value || '').trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function markChallengeSpotVisited(userId: string, challengeId: string, spotPlaceId: string): Promise<boolean> {
+  const spotId = String(spotPlaceId || '').trim();
+  if (!spotId) return false;
+  const visited = await getVisitedChallengeSpots(userId, challengeId);
+  if (visited.includes(spotId)) return false;
+  visited.push(spotId);
+  await AsyncStorage.setItem(visitedSpotsKey(userId, challengeId), JSON.stringify(visited));
+  return true;
+}
 
 /**
  * Get user's progress on a challenge
@@ -201,12 +293,10 @@ async function awardChallengeRewards(
         await saveReward(userId, reward);
       }
     } else if (rewardStr.includes('xp')) {
-      // Grant XP
       const xpMatch = rewardStr.match(/(\d+)\s*xp/);
       if (xpMatch) {
         const xp = parseInt(xpMatch[1], 10);
-        // TODO: Implement XP system
-        // For now, just record the reward
+        await grantChallengeXp(userId, xp);
         const reward: ChallengeReward = {
           id: `${challengeId}_${userId}_${Date.now()}`,
           challengeId,
@@ -220,7 +310,6 @@ async function awardChallengeRewards(
         await saveReward(userId, reward);
       }
     } else if (rewardStr.includes('badge')) {
-      // Grant badge
       const badgeId = `campus_challenge_${challengeId}`;
       const reward: ChallengeReward = {
         id: `${challengeId}_${userId}_${Date.now()}`,
@@ -233,8 +322,7 @@ async function awardChallengeRewards(
         createdAt: Date.now(),
       };
       await saveReward(userId, reward);
-
-      // TODO: Grant badge in user profile
+      await grantChallengeBadge(userId, challengeId, challenge.title || 'Campus Challenge Winner', campusId);
     }
 
     // Increment challenge participants counter
@@ -366,10 +454,10 @@ export async function trackCheckinForChallenges(
         // Increment check-in count
         await updateChallengeProgress(userId, challenge.id, campusId, 1, challenge.target);
       } else if (challenge.type === 'visit_spots') {
-        // Track unique spots visited
-        // TODO: Need to track unique spot visits
-        // For now, just increment
-        await updateChallengeProgress(userId, challenge.id, campusId, 1, challenge.target);
+        const isNewSpot = await markChallengeSpotVisited(userId, challenge.id, spotPlaceId);
+        if (isNewSpot) {
+          await updateChallengeProgress(userId, challenge.id, campusId, 1, challenge.target);
+        }
       }
     }
   } catch (error) {
@@ -417,7 +505,10 @@ export async function clearChallengeCache(userId: string): Promise<void> {
   try {
     const keys = await AsyncStorage.getAllKeys();
     const challengeKeys = keys.filter(
-      key => key.includes(CHALLENGE_PROGRESS_KEY) || key.includes(CHALLENGE_REWARDS_KEY)
+      key =>
+        key.includes(CHALLENGE_PROGRESS_KEY) ||
+        key.includes(CHALLENGE_REWARDS_KEY) ||
+        key.includes(CHALLENGE_VISITED_SPOTS_KEY)
     );
     await AsyncStorage.multiRemove(challengeKeys);
   } catch (error) {

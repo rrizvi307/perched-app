@@ -26,7 +26,7 @@ export interface PremiumStatus {
 export interface SubscriptionPricing {
   monthly: {
     price: number;
-    priceId: string; // Stripe price ID
+    priceId: string; // Internal catalog identifier for display/analytics
     displayPrice: string;
   };
   annual: {
@@ -41,12 +41,12 @@ export interface SubscriptionPricing {
 export const PRICING: SubscriptionPricing = {
   monthly: {
     price: 499, // $4.99
-    priceId: 'price_monthly_perched_premium', // TODO: Replace with actual Stripe price ID
+    priceId: 'perched_premium_monthly',
     displayPrice: '$4.99',
   },
   annual: {
     price: 4999, // $49.99
-    priceId: 'price_annual_perched_premium', // TODO: Replace with actual Stripe price ID
+    priceId: 'perched_premium_annual',
     displayPrice: '$49.99',
     savings: '17% off',
   },

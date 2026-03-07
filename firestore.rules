@@ -29,6 +29,40 @@ service cloud.firestore {
       return !(value is list) || value.size() == 0 || value[0] is string;
     }
 
+    function isRequiredBoundedString(value, maxLength) {
+      return value is string && value.size() > 0 && value.size() <= maxLength;
+    }
+
+    function isOptionalBoundedString(value, maxLength) {
+      return value == null || (value is string && value.size() <= maxLength);
+    }
+
+    function isValidCampusType(value) {
+      return value == null || value == 'campus' || value == 'city';
+    }
+
+    function isValidAmbiancePreference(value) {
+      return value == null ||
+        value == 'cozy' ||
+        value == 'modern' ||
+        value == 'rustic' ||
+        value == 'bright' ||
+        value == 'intimate' ||
+        value == 'energetic';
+    }
+
+    function isValidPlaceVoteMap(votes) {
+      return votes is map &&
+        votes.keys().hasOnly(['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Bright', 'Spacious', 'Late-night']) &&
+        (!votes.keys().hasAny(['Quiet']) || votes.Quiet is bool) &&
+        (!votes.keys().hasAny(['Wi-Fi']) || votes['Wi-Fi'] is bool) &&
+        (!votes.keys().hasAny(['Outlets']) || votes.Outlets is bool) &&
+        (!votes.keys().hasAny(['Seating']) || votes.Seating is bool) &&
+        (!votes.keys().hasAny(['Bright']) || votes.Bright is bool) &&
+        (!votes.keys().hasAny(['Spacious']) || votes.Spacious is bool) &&
+        (!votes.keys().hasAny(['Late-night']) || votes['Late-night'] is bool);
+    }
+
     function socialGraphExists(userId) {
       return exists(/databases/$(database)/documents/socialGraph/$(userId));
     }
@@ -87,7 +121,21 @@ service cloud.firestore {
                         'referralCode',
                         'createdAt',
                         'updatedAt'
-                      ]);
+                      ]) &&
+                      isOptionalBoundedString(request.resource.data.name, 80) &&
+                      isOptionalBoundedString(request.resource.data.nameLower, 80) &&
+                      isOptionalBoundedString(request.resource.data.city, 120) &&
+                      isOptionalBoundedString(request.resource.data.campus, 120) &&
+                      isOptionalBoundedString(request.resource.data.campusOrCity, 120) &&
+                      isValidCampusType(request.resource.data.campusType) &&
+                      isOptionalBoundedString(request.resource.data.handle, 32) &&
+                      isOptionalBoundedString(request.resource.data.photoUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.avatarUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.referralCode, 32) &&
+                      isValidAmbiancePreference(request.resource.data.ambiancePreference) &&
+                      (!(request.resource.data.coffeeIntents is list) ||
+                        (request.resource.data.coffeeIntents.size() <= 3 &&
+                         isStringList(request.resource.data.coffeeIntents)));
 
       allow update: if isOwner(userId) &&
                       request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -104,7 +152,21 @@ service cloud.firestore {
                         'ambiancePreference',
                         'referralCode',
                         'updatedAt'
-                      ]);
+                      ]) &&
+                      isOptionalBoundedString(request.resource.data.name, 80) &&
+                      isOptionalBoundedString(request.resource.data.nameLower, 80) &&
+                      isOptionalBoundedString(request.resource.data.city, 120) &&
+                      isOptionalBoundedString(request.resource.data.campus, 120) &&
+                      isOptionalBoundedString(request.resource.data.campusOrCity, 120) &&
+                      isValidCampusType(request.resource.data.campusType) &&
+                      isOptionalBoundedString(request.resource.data.handle, 32) &&
+                      isOptionalBoundedString(request.resource.data.photoUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.avatarUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.referralCode, 32) &&
+                      isValidAmbiancePreference(request.resource.data.ambiancePreference) &&
+                      (!(request.resource.data.coffeeIntents is list) ||
+                        (request.resource.data.coffeeIntents.size() <= 3 &&
+                         isStringList(request.resource.data.coffeeIntents)));
 
       allow delete: if isOwner(userId) || isAdmin();
     }
@@ -225,7 +287,11 @@ service cloud.firestore {
       allow create: if isAuthenticated() &&
                       request.resource.data.reporterId == request.auth.uid &&
                       request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt']) &&
-                      request.resource.data.keys().hasAny(['reportedUserId', 'reportedId', 'checkinId']);
+                      request.resource.data.keys().hasAny(['reportedUserId', 'reportedId', 'checkinId']) &&
+                      isRequiredBoundedString(request.resource.data.reason, 300) &&
+                      isOptionalBoundedString(request.resource.data.reportedUserId, 160) &&
+                      isOptionalBoundedString(request.resource.data.reportedId, 160) &&
+                      isOptionalBoundedString(request.resource.data.checkinId, 160);
 
       // Only admins can update (to change status)
       allow update: if isAdmin();
@@ -298,11 +364,17 @@ service cloud.firestore {
                     (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.placeKey is string;
+                      voteId == request.auth.uid + '_' + request.resource.data.placeKey &&
+                      request.resource.data.keys().hasOnly(['userId', 'placeKey', 'votes', 'updatedAt']) &&
+                      isRequiredBoundedString(request.resource.data.placeKey, 160) &&
+                      isValidPlaceVoteMap(request.resource.data.votes);
       allow update: if isAuthenticated() &&
                       resource.data.userId == request.auth.uid &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.placeKey == resource.data.placeKey;
+                      voteId == request.auth.uid + '_' + resource.data.placeKey &&
+                      request.resource.data.placeKey == resource.data.placeKey &&
+                      request.resource.data.keys().hasOnly(['userId', 'placeKey', 'votes', 'updatedAt']) &&
+                      isValidPlaceVoteMap(request.resource.data.votes);
       allow delete: if isAuthenticated() &&
                       resource.data.userId == request.auth.uid;
     }
@@ -385,6 +457,9 @@ service cloud.firestore {
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
                       request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']) &&
+                      isRequiredBoundedString(request.resource.data.text, 500) &&
+                      isOptionalBoundedString(request.resource.data.userName, 120) &&
+                      isOptionalBoundedString(request.resource.data.userHandle, 64) &&
                       canReadCheckinById(request.resource.data.checkinId);
 
       allow update: if isAuthenticated() &&
@@ -401,7 +476,10 @@ service cloud.firestore {
                         'text',
                         'createdAt',
                         'updatedAt'
-                      ]);
+                      ]) &&
+                      isRequiredBoundedString(request.resource.data.text, 500) &&
+                      isOptionalBoundedString(request.resource.data.userName, 120) &&
+                      isOptionalBoundedString(request.resource.data.userHandle, 64);
 
       allow delete: if isAuthenticated() &&
                       resource.data.userId == request.auth.uid &&
@@ -438,8 +516,7 @@ service cloud.firestore {
     match /businessSpots/{businessSpotId} {
       allow read: if isAuthenticated() &&
                     (resource.data.ownerId == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() &&
-                      request.resource.data.ownerId == request.auth.uid;
+      allow create: if false;
       allow update, delete: if isAuthenticated() &&
                               (resource.data.ownerId == request.auth.uid || isAdmin());
     }
@@ -447,8 +524,7 @@ service cloud.firestore {
     // Promotions for business spots
     match /promotions/{promotionId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() &&
-                      request.resource.data.ownerId == request.auth.uid;
+      allow create: if false;
       allow update, delete: if isAuthenticated() &&
                               (resource.data.ownerId == request.auth.uid || isAdmin());
     }
@@ -465,8 +541,7 @@ service cloud.firestore {
                     (resource.data.userId == request.auth.uid ||
                      resource.data.ownerId == request.auth.uid ||
                      isAdmin());
-      allow create: if isAuthenticated() &&
-                      request.resource.data.ownerId == request.auth.uid;
+      allow create: if false;
       allow update, delete: if isAuthenticated() &&
                               (resource.data.ownerId == request.auth.uid || isAdmin());
     }
@@ -474,8 +549,7 @@ service cloud.firestore {
     // Partner program
     match /partners/{partnerId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() &&
-                      request.resource.data.ownerId == request.auth.uid;
+      allow create: if false;
       allow update, delete: if isAuthenticated() &&
                               (resource.data.ownerId == request.auth.uid || isAdmin());
     }

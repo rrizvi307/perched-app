@@ -101,6 +101,16 @@ export async function getReactions(checkinId: string): Promise<Reaction[]> {
   }
 }
 
+export async function getReactionsForCheckins(checkinIds: string[]): Promise<Record<string, Reaction[]>> {
+  try {
+    const { getReactionsForCheckinsFromFirestore } = await import('./firebaseClient');
+    return await getReactionsForCheckinsFromFirestore(checkinIds) as Record<string, Reaction[]>;
+  } catch (error) {
+    devLog('getReactionsForCheckins failed', error);
+    return Object.fromEntries((checkinIds || []).map((id) => [id, []]));
+  }
+}
+
 /**
  * Get reaction counts grouped by type
  */
@@ -203,6 +213,7 @@ export default {
   addReaction,
   removeReaction,
   getReactions,
+  getReactionsForCheckins,
   getReactionCounts,
   addComment,
   getComments,

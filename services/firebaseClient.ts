@@ -97,6 +97,8 @@ export function isFirebaseConfigured() {
 let _initialized = false;
 let _firebaseApp: any = null;
 let _initError: any = null;
+let _authPersistenceConfigured = false;
+let _authPersistencePromise: Promise<void> | null = null;
 const checkinsCache = new Map<string, { ts: number; payload: any }>();
 const usersByIdCache = new Map<string, { ts: number; payload: any[] }>();
 const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
@@ -145,6 +147,41 @@ function stripPrivateUserFields<T extends Record<string, any> | null | undefined
   });
   if (id && !next.id) next.id = id;
   return next;
+}
+
+function shouldConfigureWebAuthPersistence() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+async function ensureAuthPersistenceConfigured(firebaseApp?: any) {
+  const fb = firebaseApp || _firebaseApp;
+  if (!fb?.auth) return;
+  if (_authPersistenceConfigured) return;
+  if (!shouldConfigureWebAuthPersistence()) {
+    _authPersistenceConfigured = true;
+    return;
+  }
+  if (_authPersistencePromise) return _authPersistencePromise;
+
+  _authPersistencePromise = Promise.resolve()
+    .then(async () => {
+      const auth = fb.auth?.();
+      const persistence = fb?.auth?.Auth?.Persistence?.LOCAL;
+      if (!auth || !persistence || typeof auth.setPersistence !== 'function') {
+        _authPersistenceConfigured = true;
+        return;
+      }
+      await auth.setPersistence(persistence);
+      _authPersistenceConfigured = true;
+    })
+    .catch((error) => {
+      devLog('ensureAuthPersistenceConfigured failed', error);
+    })
+    .finally(() => {
+      _authPersistencePromise = null;
+    });
+
+  return _authPersistencePromise;
 }
 
 function splitUserDocumentFields(fields: Record<string, any> | null | undefined): SplitUserFields {
@@ -326,6 +363,12 @@ function invalidateUserFriendsCache(userIds: Array<string | undefined | null>) {
     if (!userId) return;
     userFriendsCache.delete(userId);
   });
+}
+
+export function resetFirebaseClientCaches() {
+  checkinsCache.clear();
+  usersByIdCache.clear();
+  userFriendsCache.clear();
 }
 
 function resolveSpotId(payload: Record<string, any> | null | undefined): string {
@@ -787,7 +830,10 @@ function removeLocalMutualFriend(map: any, userA: string, userB: string) {
 }
 
 export function ensureFirebase() {
-  if (_initialized) return _firebaseApp;
+  if (_initialized) {
+    void ensureAuthPersistenceConfigured(_firebaseApp);
+    return _firebaseApp;
+  }
 
   try {
     const firebaseApp = (firebase as any)?.default ?? firebase;
@@ -796,6 +842,7 @@ export function ensureFirebase() {
     }
     _firebaseApp = firebaseApp;
     _initialized = true;
+    void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
   } catch (e) {
     _initError = e;
@@ -813,8 +860,8 @@ async function getBlobFromUri(uri: string): Promise<Blob | null> {
     if (response.ok) return await response.blob();
   } catch {}
   try {
-    const mod = await import('expo-file-system/legacy');
-    const base64 = await mod.readAsStringAsync(uri, { encoding: mod.EncodingType.Base64 });
+    const mod = await import('expo-file-system');
+    const base64 = await new mod.File(uri).base64();
     const dataUri = `data:image/jpeg;base64,${base64}`;
     const response = await fetch(dataUri);
     if (response.ok) return await response.blob();
@@ -828,8 +875,8 @@ async function getBase64FromUri(uri: string): Promise<string | null> {
     return uri;
   }
   try {
-    const mod = await import('expo-file-system/legacy');
-    const base64 = await mod.readAsStringAsync(uri, { encoding: mod.EncodingType.Base64 });
+    const mod = await import('expo-file-system');
+    const base64 = await new mod.File(uri).base64();
     return base64 || null;
   } catch {}
   return null;
@@ -1180,13 +1227,13 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
     const fb = ensureFirebase();
     if (!fb) throw new Error('Firebase not initialized.');
     if (!fb.auth()?.currentUser?.uid) {
-      return { items: [], lastCursor: null };
+      return { items: [], lastCursor: null, source: 'remote' as const };
     }
     const cacheKey = `${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
       void recordPerfMetric('firebase_get_checkins_remote_cache_hit', Date.now() - startedAt, true);
-      return cached;
+      return { ...cached, source: 'remote' as const };
     }
 
     const db = fb.firestore();
@@ -1284,10 +1331,10 @@ export async function getCheckinsRemote(limit = 50, startAfter?: any) {
     const lastCursor = publicItems.length
       ? (publicItems[publicItems.length - 1].createdAt ?? publicItems[publicItems.length - 1].timestamp ?? null)
       : null;
-    const payload = { items, lastCursor };
+    const payload = { items, lastCursor, source: 'remote' as const };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
-  }, { items: [], lastCursor: null });
+  }, { items: [], lastCursor: null, source: 'fallback' as const });
 }
 
 export async function getCheckinsForSpotRemote(spotId: string, limit = 200) {
@@ -1390,12 +1437,12 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     const startedAt = Date.now();
     const fb = ensureFirebase();
     if (!fb) throw new Error('Firebase not initialized.');
-    if (!userId) return { items: [], lastCursor: null };
+    if (!userId) return { items: [], lastCursor: null, source: 'remote' as const };
     const cacheKey = `user:${userId}:${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
       void recordPerfMetric('firebase_get_checkins_for_user_cache_hit', Date.now() - startedAt, true);
-      return cached;
+      return { ...cached, source: 'remote' as const };
     }
 
     const db = fb.firestore();
@@ -1455,12 +1502,12 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
         const fallbackCursor = fallbackItems.length
           ? (fallbackItems[fallbackItems.length - 1].createdAt ?? fallbackItems[fallbackItems.length - 1].timestamp ?? null)
           : null;
-        const fallbackPayload = { items: fallbackItems, lastCursor: fallbackCursor };
+        const fallbackPayload = { items: fallbackItems, lastCursor: fallbackCursor, source: 'remote' as const };
         setCachedValue(checkinsCache, cacheKey, fallbackPayload, CHECKINS_CACHE_MAX);
         return fallbackPayload;
       } catch (unorderedError) {
         devLog('getCheckinsForUserRemote unordered fallback to empty', unorderedError);
-        return { items: [], lastCursor: null };
+        return { items: [], lastCursor: null, source: 'fallback' as const };
       }
     }
     const items: any[] = [];
@@ -1469,10 +1516,10 @@ export async function getCheckinsForUserRemote(userId: string, limit = 80, start
     const lastCursor = items.length
       ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
       : null;
-    const payload = { items, lastCursor };
+    const payload = { items, lastCursor, source: 'remote' as const };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
     return payload;
-  }, { items: [], lastCursor: null });
+  }, { items: [], lastCursor: null, source: 'fallback' as const });
 }
 
 export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
@@ -1568,6 +1615,14 @@ function getRegionCallable(fb: any, name: string) {
   const region =
     getFunctionsRegion();
   return (fb as any).app().functions(region).httpsCallable(name);
+}
+
+export async function callFirebaseCallable<T = any>(name: string, payload: Record<string, any> = {}): Promise<T | null> {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  const callable = getRegionCallable(fb, name);
+  const response = await callable(payload);
+  return (response?.data ?? null) as T | null;
 }
 
 async function callSecureUserLookup(type: 'email' | 'phone', query: string) {
@@ -2534,6 +2589,7 @@ export async function clearPushToken(userId: string) {
 export async function linkAnonymousWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
 
   const auth = fb.auth();
   const user = auth.currentUser;
@@ -2547,6 +2603,7 @@ export async function linkAnonymousWithEmail({ email, password }: { email: strin
 export async function signInWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
   const auth = fb.auth();
   const res = await auth.signInWithEmailAndPassword(email, password);
   return res.user;
@@ -2567,6 +2624,7 @@ export async function createAccountWithEmail({
 }: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
   const auth = fb.auth();
   const res = await auth.createUserWithEmailAndPassword(email, password);
   const uid = res.user.uid;
@@ -2871,6 +2929,51 @@ export async function getReactionsFromFirestore(checkinId: string, limit = 250) 
   return Array.from(dedupedByUser.values());
 }
 
+export async function getReactionsForCheckinsFromFirestore(checkinIds: string[], limitPerCheckin = 24) {
+  const fb = ensureFirebase();
+  if (!fb || !Array.isArray(checkinIds) || checkinIds.length === 0) return {};
+  const db = fb.firestore();
+  const uniqueIds = Array.from(new Set(checkinIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!uniqueIds.length) return {};
+
+  const safePerCheckin = Math.min(Math.max(limitPerCheckin, 1), 50);
+  const grouped = new Map<string, Map<string, any>>();
+  uniqueIds.forEach((id) => grouped.set(id, new Map()));
+
+  for (let i = 0; i < uniqueIds.length; i += 10) {
+    const batch = uniqueIds.slice(i, i + 10);
+    try {
+      const snap = await db
+        .collection('reactions')
+        .where('checkinId', 'in', batch)
+        .limit(Math.min(batch.length * safePerCheckin, 500))
+        .get();
+      snap.forEach((doc: any) => {
+        const item = { id: doc.id, ...(doc.data() || {}) };
+        const reactionCheckinId = String(item?.checkinId || '');
+        if (!reactionCheckinId || !grouped.has(reactionCheckinId)) return;
+        const userMap = grouped.get(reactionCheckinId)!;
+        const dedupeKey = item?.userId ? String(item.userId) : `anon:${item?.id || doc.id}`;
+        const existing = userMap.get(dedupeKey);
+        if (!existing) {
+          userMap.set(dedupeKey, item);
+          return;
+        }
+        const nextTs = toMillisSafe(item?.updatedAt || item?.createdAt);
+        const prevTs = toMillisSafe(existing?.updatedAt || existing?.createdAt);
+        if (nextTs >= prevTs) {
+          userMap.set(dedupeKey, item);
+        }
+      });
+    } catch (error) {
+      devLog('getReactionsForCheckinsFromFirestore failed', error);
+      batch.forEach((id) => grouped.set(id, new Map()));
+    }
+  }
+
+  return Object.fromEntries(uniqueIds.map((id) => [id, Array.from(grouped.get(id)?.values() || [])]));
+}
+
 export async function addCommentToFirestore(comment: {
   id: string;
   checkinId: string;
@@ -2939,4 +3042,3 @@ export async function updateCommentInFirestore(commentId: string, userId: string
     { merge: true }
   );
 }
-

@@ -1,8 +1,9 @@
 import { Fonts } from '@/constants/theme';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import SpotImage from '@/components/ui/spot-image';
 import React from 'react';
-import { Image, Platform, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import { Platform, StyleSheet, Text, View, useColorScheme } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 
 type LogoVariant = 'auto' | 'wordmark' | 'mark' | 'lockup';
@@ -76,7 +77,7 @@ export default function Logo({
 
   const LogoMark = ({ size: s }: { size: number }) => (
     Platform.OS === 'web'
-      ? <Image source={MARK_IMAGE} style={{ width: s, height: s }} resizeMode="contain" />
+      ? <SpotImage source={MARK_IMAGE} style={{ width: s, height: s }} contentFit="contain" />
       : <SvgXml xml={MARK_SVG} width={s} height={s} />
   );
 

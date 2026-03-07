@@ -97,6 +97,30 @@ describe('deepLinking', () => {
     expect(push).toHaveBeenCalledWith('/checkin-detail?cid=abc123');
   });
 
+  it('routesProfileLinks_toProfileView', async () => {
+    const { handleDeepLink, parseDeepLink } = await import('../deepLinking');
+
+    const parsed = parseDeepLink('https://perched.app/profile/user_42');
+    expect(parsed).toEqual({ route: 'profile', params: { userId: 'user_42' } });
+
+    const handled = handleDeepLink('https://perched.app/profile/user_42');
+    expect(handled).toBe(true);
+    expect(push).toHaveBeenCalledWith('/profile-view?userId=user_42');
+  });
+
+  it('routesInviteLinks_toSignup_andStoresReferralCode', async () => {
+    const AsyncStorage = (await import('@react-native-async-storage/async-storage')) as any;
+    const { handleDeepLink, parseDeepLink } = await import('../deepLinking');
+
+    const parsed = parseDeepLink('https://perched.app/invite?ref=campus42');
+    expect(parsed).toEqual({ route: 'invite', params: { referralCode: 'campus42' } });
+
+    const handled = handleDeepLink('https://perched.app/invite?ref=campus42');
+    expect(handled).toBe(true);
+    expect(push).toHaveBeenCalledWith('/signup');
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('perched_referral_code', 'CAMPUS42');
+  });
+
   it('openDeepLink_routesInternalWithoutExternalOpen', async () => {
     const { openDeepLink } = await import('../deepLinking');
 

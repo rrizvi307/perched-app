@@ -1486,6 +1486,142 @@ const PLACE_EVENTS_KEY = 'spot_place_events_v1';
 const PLACE_PREFS_KEY = 'spot_place_prefs_v1';
 const PLACE_TAGS_KEY = 'spot_place_tags_v1';
 const savedSpotListeners = new Set<(spots: any[]) => void>();
+const SESSION_STORAGE_KEYS = [
+  KEY,
+  CHECKIN_COOLDOWN_KEY,
+  PENDING_CHECKIN_KEY,
+  PENDING_PROFILE_KEY,
+  CHECKIN_DRAFT_KEY,
+  USER_PROFILE_KEY,
+  STATS_KEY,
+  STATS_META_KEY,
+  NOTIF_KEY,
+  LAST_KNOWN_LOCATION_KEY,
+  SAVED_SPOTS_KEY,
+  PLACE_EVENTS_KEY,
+  PLACE_PREFS_KEY,
+  PLACE_TAGS_KEY,
+  'spot_user_v1',
+  'spot_users_v1',
+  'spot_friends_v1',
+  'spot_friend_requests_v1',
+  'spot_blocked_v1',
+  'spot_push_tokens_v1',
+  'spot_tag_votes_v1',
+  'spot_tag_variant_v1',
+  'perched_referral_code',
+  '@perched_notification_prefs',
+  '@perched_last_notification',
+  '@perched_scheduled_notification_ids',
+  '@perched_user_stats',
+  '@perched_saved_spots',
+  '@perched_achievements',
+  '@perched_sync_queue',
+  '@perched_sync_conflicts',
+  '@perched_last_sync',
+  '@perched_cache_stats',
+] as const;
+const SESSION_STORAGE_PREFIXES = [
+  '@perched_metrics_impact_',
+  '@perched_friend_requests_',
+  '@perched_demo_comprehensive_last_seeded_at_',
+  '@last_friend_check_',
+  '@offline_cache_',
+  '@perched_recommendations_',
+  '@perched_user_preferences_',
+  '@perched_challenge_progress_',
+  '@perched_challenge_rewards_',
+  '@perched_weekly_raffle_entry_',
+  '@perched_premium_status_',
+  '@perched_onboarding_progress_',
+  '@perched_referral_rewards_',
+  '@perched_referral_stats_',
+  '@perched_ambassador_application_',
+  '@perched_ambassador_profile_',
+  '@perched_campus_preferences_',
+  '@business_analytics_',
+  '@promotions_',
+  '@perched_cache_',
+] as const;
+
+async function removeKeysFromStore(store: any, keys: string[]) {
+  const uniqueKeys = Array.from(new Set(keys.filter(Boolean)));
+  if (uniqueKeys.length === 0) return;
+
+  if (isWeb()) {
+    uniqueKeys.forEach((key) => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch {}
+    });
+    return;
+  }
+
+  if (!store) return;
+  if (typeof store.multiRemove === 'function') {
+    try {
+      await store.multiRemove(uniqueKeys);
+      return;
+    } catch {
+      // Fall through to per-key removal.
+    }
+  }
+
+  await Promise.all(uniqueKeys.map(async (key) => {
+    try {
+      await store.removeItem(key);
+    } catch {}
+  }));
+}
+
+export async function clearAuthenticatedSessionState(userId?: string) {
+  const store = isWeb() ? null : await getAsyncStorage();
+  const exactKeys = new Set<string>(SESSION_STORAGE_KEYS);
+  if (userId) {
+    exactKeys.add(`@last_friend_check_${userId}`);
+    exactKeys.add(`@perched_metrics_impact_${userId}`);
+    exactKeys.add(`@perched_premium_status_${userId}`);
+    exactKeys.add(`@perched_onboarding_progress_${userId}`);
+    exactKeys.add(`@perched_referral_rewards_${userId}`);
+    exactKeys.add(`@perched_referral_stats_${userId}`);
+    exactKeys.add(`@perched_campus_preferences_${userId}`);
+    exactKeys.add(`@perched_demo_comprehensive_last_seeded_at_${userId}`);
+  }
+
+  const keysToRemove = new Set<string>(exactKeys);
+  if (isWeb()) {
+    try {
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i);
+        if (!key) continue;
+        if (SESSION_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+          keysToRemove.add(key);
+        }
+      }
+    } catch {}
+  } else if (store && typeof store.getAllKeys === 'function') {
+    try {
+      const allKeys: string[] = await store.getAllKeys();
+      allKeys.forEach((key) => {
+        if (SESSION_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+          keysToRemove.add(key);
+        }
+      });
+    } catch {}
+  }
+
+  await removeKeysFromStore(store, Array.from(keysToRemove));
+
+  memory = [];
+  pendingMemory = [];
+  pendingMemoryPreferred = false;
+  pendingProfileMemory = [];
+  try { delete (global as any)._spot_last_checkin; } catch {}
+  try { delete (global as any)._spot_stats; } catch {}
+  try { delete (global as any)._spot_stats_meta; } catch {}
+  try { delete (global as any)._spot_place_events; } catch {}
+  try { delete (global as any)._spot_place_tags; } catch {}
+}
 
 export async function recordSpotVisit(spotName: string, spotPlaceId?: string) {
   if (!spotName && !spotPlaceId) return;

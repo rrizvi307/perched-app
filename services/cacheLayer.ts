@@ -6,6 +6,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordPerfMetric } from './perfMonitor';
+import { devLog } from './logger';
 
 interface CacheEntry<T> {
   data: T;
@@ -493,7 +494,7 @@ export async function initCache(): Promise<void> {
     // Evict LRU if needed
     await cacheLRUEvict();
 
-    console.log('Cache system initialized');
+    devLog('Cache system initialized');
     void recordPerfMetric('cache_init', Date.now() - startedAt, true);
   } catch (error) {
     console.error('Cache init error:', error);

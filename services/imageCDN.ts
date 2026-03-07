@@ -7,7 +7,7 @@
 import { Platform } from 'react-native';
 import { ensureFirebase } from './firebaseClient';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as FileSystem from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type ImageSize = 'thumbnail' | 'small' | 'medium' | 'large' | 'original';
@@ -26,8 +26,7 @@ interface CachedImage {
   timestamp: number;
 }
 
-// FileSystem.cacheDirectory exists at runtime but may not be in types
-const IMAGE_CACHE_DIR = `${(FileSystem as any).cacheDirectory ?? ''}images/`;
+const IMAGE_CACHE_METADATA_KEY = '@image_cache_metadata';
 const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CACHE_MAX_SIZE = 100 * 1024 * 1024; // 100 MB
 
@@ -39,14 +38,40 @@ const SIZE_PRESETS: Record<ImageSize, ImageTransformOptions> = {
   original: { quality: 100 },
 };
 
+function getImageCacheDir() {
+  return new Directory(Paths.cache, 'images');
+}
+
+function getImageCacheFile(name: string) {
+  return new File(getImageCacheDir(), name);
+}
+
+function readFileInfo(file: File) {
+  try {
+    return file.info();
+  } catch {
+    return { exists: false, size: 0 } as const;
+  }
+}
+
+function listCachedFiles(): File[] {
+  try {
+    return getImageCacheDir()
+      .list()
+      .filter((entry): entry is File => entry instanceof File);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Initialize image cache directory
  */
 export async function initImageCache(): Promise<void> {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(IMAGE_CACHE_DIR);
-    if (!dirInfo.exists) {
-      await FileSystem.makeDirectoryAsync(IMAGE_CACHE_DIR, { intermediates: true });
+    const dir = getImageCacheDir();
+    if (!dir.exists) {
+      dir.create({ idempotent: true, intermediates: true });
     }
   } catch (error) {
     console.error('Failed to init image cache:', error);
@@ -159,10 +184,11 @@ export async function cacheImage(
 ): Promise<string | null> {
   try {
     const key = cacheKey || generateCacheKey(url);
-    const cachePath = `${IMAGE_CACHE_DIR}${key}`;
+    const cacheFile = getImageCacheFile(key);
+    const cachePath = cacheFile.uri;
 
     // Check if already cached
-    const fileInfo = await FileSystem.getInfoAsync(cachePath);
+    const fileInfo = readFileInfo(cacheFile);
     if (fileInfo.exists) {
       // Check if cache is still valid
       const cacheData = await getCacheMetadata(key);
@@ -172,16 +198,17 @@ export async function cacheImage(
     }
 
     // Download image
-    const downloadResult = await FileSystem.downloadAsync(url, cachePath);
+    await File.downloadFileAsync(url, cacheFile, { idempotent: true });
+    const downloadedInfo = readFileInfo(cacheFile);
 
     // Save cache metadata
     await saveCacheMetadata(key, {
       uri: cachePath,
-      size: fileInfo.exists ? fileInfo.size || 0 : 0,
+      size: downloadedInfo.exists ? downloadedInfo.size || 0 : 0,
       timestamp: Date.now(),
     });
 
-    return downloadResult.uri;
+    return cachePath;
   } catch (error) {
     console.error('Failed to cache image:', error);
     return null;
@@ -225,19 +252,21 @@ export async function preloadImages(urls: string[]): Promise<void> {
  */
 export async function clearImageCache(): Promise<number> {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(IMAGE_CACHE_DIR);
-    if (!dirInfo.exists) return 0;
+    const dir = getImageCacheDir();
+    if (!dir.exists) return 0;
 
-    const files = await FileSystem.readDirectoryAsync(IMAGE_CACHE_DIR);
+    const files = listCachedFiles();
     let deletedCount = 0;
 
     for (const file of files) {
-      await FileSystem.deleteAsync(`${IMAGE_CACHE_DIR}${file}`, { idempotent: true });
-      deletedCount++;
+      try {
+        file.delete();
+        deletedCount++;
+      } catch {}
     }
 
     // Clear metadata
-    await AsyncStorage.removeItem('@image_cache_metadata');
+    await AsyncStorage.removeItem(IMAGE_CACHE_METADATA_KEY);
 
     return deletedCount;
   } catch (error) {
@@ -251,10 +280,10 @@ export async function clearImageCache(): Promise<number> {
  */
 export async function cleanupImageCache(): Promise<number> {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(IMAGE_CACHE_DIR);
-    if (!dirInfo.exists) return 0;
+    const dir = getImageCacheDir();
+    if (!dir.exists) return 0;
 
-    const files = await FileSystem.readDirectoryAsync(IMAGE_CACHE_DIR);
+    const files = listCachedFiles();
     const now = Date.now();
     let deletedCount = 0;
     let totalSize = 0;
@@ -263,13 +292,12 @@ export async function cleanupImageCache(): Promise<number> {
 
     // Get info for all cached files
     for (const file of files) {
-      const filePath = `${IMAGE_CACHE_DIR}${file}`;
-      const info = await FileSystem.getInfoAsync(filePath);
-      const metadata = await getCacheMetadata(file);
+      const info = readFileInfo(file);
+      const metadata = await getCacheMetadata(file.name);
 
       if (info.exists && info.size) {
         fileInfos.push({
-          name: file,
+          name: file.name,
           size: info.size,
           timestamp: metadata?.timestamp || 0,
         });
@@ -280,9 +308,11 @@ export async function cleanupImageCache(): Promise<number> {
     // Delete files older than CACHE_MAX_AGE
     for (const fileInfo of fileInfos) {
       if (now - fileInfo.timestamp > CACHE_MAX_AGE) {
-        await FileSystem.deleteAsync(`${IMAGE_CACHE_DIR}${fileInfo.name}`, { idempotent: true });
-        deletedCount++;
-        totalSize -= fileInfo.size;
+        try {
+          getImageCacheFile(fileInfo.name).delete();
+          deletedCount++;
+          totalSize -= fileInfo.size;
+        } catch {}
       }
     }
 
@@ -295,9 +325,11 @@ export async function cleanupImageCache(): Promise<number> {
       for (const fileInfo of sorted) {
         if (totalSize <= CACHE_MAX_SIZE) break;
 
-        await FileSystem.deleteAsync(`${IMAGE_CACHE_DIR}${fileInfo.name}`, { idempotent: true });
-        deletedCount++;
-        totalSize -= fileInfo.size;
+        try {
+          getImageCacheFile(fileInfo.name).delete();
+          deletedCount++;
+          totalSize -= fileInfo.size;
+        } catch {}
       }
     }
 
@@ -317,23 +349,22 @@ export async function getImageCacheStats(): Promise<{
   oldestFile: number;
 }> {
   try {
-    const dirInfo = await FileSystem.getInfoAsync(IMAGE_CACHE_DIR);
-    if (!dirInfo.exists) {
+    const dir = getImageCacheDir();
+    if (!dir.exists) {
       return { fileCount: 0, totalSize: 0, oldestFile: 0 };
     }
 
-    const files = await FileSystem.readDirectoryAsync(IMAGE_CACHE_DIR);
+    const files = listCachedFiles();
     let totalSize = 0;
-    let oldestTimestamp = Date.now();
+    let oldestTimestamp = 0;
 
     for (const file of files) {
-      const filePath = `${IMAGE_CACHE_DIR}${file}`;
-      const info = await FileSystem.getInfoAsync(filePath);
-      const metadata = await getCacheMetadata(file);
+      const info = readFileInfo(file);
+      const metadata = await getCacheMetadata(file.name);
 
       if (info.exists && info.size) {
         totalSize += info.size;
-        if (metadata && metadata.timestamp < oldestTimestamp) {
+        if (metadata && (!oldestTimestamp || metadata.timestamp < oldestTimestamp)) {
           oldestTimestamp = metadata.timestamp;
         }
       }
@@ -398,7 +429,7 @@ function simpleHash(str: string): string {
 
 async function getCacheMetadata(key: string): Promise<CachedImage | null> {
   try {
-    const metadataJson = await AsyncStorage.getItem('@image_cache_metadata');
+    const metadataJson = await AsyncStorage.getItem(IMAGE_CACHE_METADATA_KEY);
     if (!metadataJson) return null;
 
     const metadata = JSON.parse(metadataJson);
@@ -410,12 +441,12 @@ async function getCacheMetadata(key: string): Promise<CachedImage | null> {
 
 async function saveCacheMetadata(key: string, data: CachedImage): Promise<void> {
   try {
-    const metadataJson = await AsyncStorage.getItem('@image_cache_metadata');
+    const metadataJson = await AsyncStorage.getItem(IMAGE_CACHE_METADATA_KEY);
     const metadata = metadataJson ? JSON.parse(metadataJson) : {};
 
     metadata[key] = data;
 
-    await AsyncStorage.setItem('@image_cache_metadata', JSON.stringify(metadata));
+    await AsyncStorage.setItem(IMAGE_CACHE_METADATA_KEY, JSON.stringify(metadata));
   } catch (error) {
     console.error('Failed to save cache metadata:', error);
   }

@@ -61,7 +61,10 @@ export default function AchievementsScreen() {
 
   const unlockedIds = unlocked.map(a => a.id);
   const unlockedCount = unlockedIds.length;
-  const totalCount = ACHIEVEMENTS.length;
+  const specialAchievements = unlocked.filter(
+    (achievement) => !ACHIEVEMENTS.some((baseAchievement) => baseAchievement.id === achievement.id)
+  );
+  const totalCount = ACHIEVEMENTS.length + specialAchievements.length;
 
   useEffect(() => {
     if (prevUnlockedCountRef.current === null) {
@@ -164,6 +167,25 @@ export default function AchievementsScreen() {
               </View>
             );
           })}
+
+          {specialAchievements.length ? (
+            <View style={styles.categorySection}>
+              <View style={styles.categoryHeader}>
+                <Text style={[styles.categoryTitle, { color: text }]}>Special</Text>
+                <Text style={[styles.categoryCount, { color: muted }]}>
+                  {specialAchievements.length}/{specialAchievements.length}
+                </Text>
+              </View>
+              {specialAchievements.map((achievement) => (
+                <AchievementCard
+                  key={achievement.id}
+                  achievement={achievement}
+                  stats={stats || {} as UserStats}
+                  unlocked
+                />
+              ))}
+            </View>
+          ) : null}
 
           {unlockedCount === 0 ? (
             <View style={styles.emptyState}>

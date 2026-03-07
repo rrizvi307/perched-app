@@ -16,6 +16,15 @@ interface ReactionBarProps {
   onReactionChange?: () => void;
 }
 
+const REACTION_LABELS: Record<ReactionType, string> = {
+  fire: 'fire',
+  coffee: 'coffee',
+  book: 'book',
+  party: 'party',
+  heart: 'heart',
+  thumbs_up: 'thumbs up',
+};
+
 function ReactionButton({
   type,
   emoji,
@@ -52,7 +61,12 @@ function ReactionButton({
   };
 
   return (
-    <Pressable onPress={handlePress}>
+    <Pressable
+      onPress={handlePress}
+      accessibilityRole="button"
+      accessibilityLabel={`${isSelected ? 'Remove' : 'Add'} ${REACTION_LABELS[type]} reaction`}
+      accessibilityState={{ selected: isSelected }}
+    >
       <Animated.View
         style={[
           styles.reaction,

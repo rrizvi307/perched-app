@@ -59,12 +59,13 @@ export function initSentry() {
 			deviceYearClass: Device.deviceYearClass,
 		});
 
-		// Set update context
-		if (Updates.manifest) {
-			Sentry.setContext('update', {
-				updateId: Updates.updateId,
-				channel: Updates.channel,
-			});
+		// Set update context without relying on deprecated manifest fields.
+		const updateContext = {
+			...(Updates.updateId ? { updateId: Updates.updateId } : {}),
+			...(Updates.channel ? { channel: Updates.channel } : {}),
+		};
+		if (Object.keys(updateContext).length) {
+			Sentry.setContext('update', updateContext);
 		}
 
 		initialized = true;

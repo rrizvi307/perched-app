@@ -66,10 +66,11 @@ export default function CompetitiveIntelligenceScreen() {
 
   const loadIntelligence = useCallback(async () => {
     if (!selectedSpot) return;
+    const activeSpotId = selectedSpot.spotId || selectedSpot.placeId || selectedSpot.id;
 
     try {
       setLoading(true);
-      const data = await getCompetitiveIntelligence(selectedSpot.id, radius);
+      const data = await getCompetitiveIntelligence(activeSpotId, radius);
       setIntelligence(data);
     } catch (error) {
       console.error('Failed to load competitive intelligence:', error);

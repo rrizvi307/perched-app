@@ -24,7 +24,6 @@ import {
   type BusinessSpot,
   type BusinessAnalytics,
 } from '@/services/businessAnalytics';
-import { getSpotPromotions, type Promotion } from '@/services/promotions';
 import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 
@@ -45,7 +44,6 @@ export default function BusinessDashboard() {
   const [businessSpots, setBusinessSpots] = useState<BusinessSpot[]>([]);
   const [selectedSpot, setSelectedSpot] = useState<BusinessSpot | null>(null);
   const [analytics, setAnalytics] = useState<BusinessAnalytics | null>(null);
-  const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<'week' | 'month' | 'quarter'>('month');
@@ -70,15 +68,11 @@ export default function BusinessDashboard() {
 
   const loadSpotData = useCallback(async () => {
     if (!selectedSpot) return;
+    const activeSpotId = selectedSpot.spotId || selectedSpot.placeId || selectedSpot.id;
 
     try {
-      const [analyticsData, promotionsData] = await Promise.all([
-        getBusinessAnalytics(selectedSpot.id, period),
-        getSpotPromotions(selectedSpot.id, true),
-      ]);
-
+      const analyticsData = await getBusinessAnalytics(activeSpotId, period);
       setAnalytics(analyticsData);
-      setPromotions(promotionsData);
     } catch (error) {
       console.error('Failed to load spot data:', error);
     }
@@ -141,8 +135,6 @@ export default function BusinessDashboard() {
       </View>
     );
   }
-
-  const activePromotions = promotions.filter(p => p.status === 'active').length;
 
   return (
     <ScrollView
@@ -421,16 +413,6 @@ export default function BusinessDashboard() {
           icon="chart.line.uptrend.xyaxis"
           label="Analytics"
           onPress={() => router.push('/business/analytics' as any)}
-          backgroundColor={card}
-          textColor={text}
-          iconColor={primary}
-          borderColor={border}
-        />
-        <ActionButton
-          icon="megaphone.fill"
-          label="Promotions"
-          badge={activePromotions > 0 ? activePromotions.toString() : undefined}
-          onPress={() => router.push('/business/promotions' as any)}
           backgroundColor={card}
           textColor={text}
           iconColor={primary}

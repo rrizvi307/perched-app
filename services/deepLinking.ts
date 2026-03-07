@@ -54,6 +54,7 @@ export type DeepLinkRoute =
   | 'profile'
   | 'checkin'
   | 'spot'
+  | 'invite'
   | 'explore'
   | 'feed'
   | 'settings'
@@ -138,6 +139,8 @@ export function parseDeepLink(url: string): {
       const placeId = getParam(queryParams?.placeId);
       if (spotId) params.spotId = spotId;
       if (placeId) params.placeId = placeId;
+    } else if (hostname === 'invite' || normalizedPath.startsWith('/invite')) {
+      route = 'invite';
     } else if (hostname === 'explore' || normalizedPath.startsWith('/explore')) {
       route = 'explore';
     } else if (hostname === 'feed' || normalizedPath.startsWith('/feed')) {
@@ -193,7 +196,7 @@ export function handleDeepLink(url: string) {
     switch (route) {
       case 'profile':
         if (params.userId) {
-          router.push(`/profile?userId=${params.userId}`);
+          router.push(`/profile-view?userId=${params.userId}`);
         }
         break;
 
@@ -210,6 +213,10 @@ export function handleDeepLink(url: string) {
             : `spotId=${params.spotId}`;
           router.push(`/spot?${query}`);
         }
+        break;
+
+      case 'invite':
+        router.push('/signup');
         break;
 
       case 'explore':
@@ -290,6 +297,10 @@ export function createDeepLink(
     case 'spot':
       path = `/s/${params?.spotId || params?.placeId || ''}`;
       if (params?.placeId) queryParams.set('placeId', params.placeId);
+      break;
+
+    case 'invite':
+      path = '/invite';
       break;
 
     case 'explore':

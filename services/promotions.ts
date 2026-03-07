@@ -4,10 +4,11 @@
  * Allows business owners to run promotions and boost spot visibility
  */
 
-import { ensureFirebase } from './firebaseClient';
+import { callFirebaseCallable, ensureFirebase } from './firebaseClient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { track } from './analytics';
 import { queryCheckinsBySpot } from './schemaHelpers';
+import { haversineKm, readEntityLatLng, type LatLng } from './geo';
 
 export interface Promotion {
   id: string;
@@ -64,65 +65,56 @@ export interface CheckinResponse {
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+async function loadSpotLocationMap(db: any, spotIds: string[]): Promise<Map<string, LatLng>> {
+  const uniqueIds = Array.from(new Set(spotIds.map((spotId) => String(spotId || '').trim()).filter(Boolean)));
+  const locationMap = new Map<string, LatLng>();
+  if (!uniqueIds.length) return locationMap;
+
+  const docs = await Promise.all(
+    uniqueIds.map((spotId) =>
+      db.collection('spots').doc(spotId).get().catch(() => null)
+    )
+  );
+
+  docs.forEach((doc: any, index) => {
+    if (!doc?.exists) return;
+    const coords = readEntityLatLng(doc.data());
+    if (coords) {
+      locationMap.set(uniqueIds[index], coords);
+    }
+  });
+
+  return locationMap;
+}
+
 /**
  * Create a new promotion
  */
 export async function createPromotion(
-  ownerId: string,
+  _ownerId: string,
   spotId: string,
   promotion: Omit<Promotion, 'id' | 'ownerId' | 'spotId' | 'spotName' | 'currentRedemptions' | 'status' | 'createdAt' | 'updatedAt'>
 ): Promise<{ success: boolean; promotionId?: string; error?: string }> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Get spot name
-    const spotDoc = await db.collection('spots').doc(spotId).get();
-    if (!spotDoc.exists) {
-      return { success: false, error: 'Spot not found' };
-    }
-
-    const spotName = spotDoc.data()?.name || 'Unknown Spot';
-
-    // Verify ownership
-    const businessSpot = await db
-      .collection('businessSpots')
-      .where('spotId', '==', spotId)
-      .where('ownerId', '==', ownerId)
-      .get();
-
-    if (businessSpot.empty) {
-      return { success: false, error: 'You do not own this spot' };
-    }
-
-    const now = Date.now();
-
-    const newPromotion: Omit<Promotion, 'id'> = {
-      ...promotion,
+    const result = await callFirebaseCallable<{ ok?: boolean; promotionId?: string }>('createPromotionSecure', {
       spotId,
-      spotName,
-      ownerId,
-      currentRedemptions: 0,
-      status: now >= promotion.startDate && now <= promotion.endDate ? 'active' : 'paused',
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const docRef = await db.collection('promotions').add(newPromotion);
+      promotion,
+    });
+    if (!result?.ok || !result.promotionId) {
+      return { success: false, error: 'Promotion service unavailable' };
+    }
 
     track('promotion_created', {
-      promotion_id: docRef.id,
+      promotion_id: result.promotionId,
       spot_id: spotId,
       type: promotion.type,
       featured: promotion.featured,
     });
 
-    return { success: true, promotionId: docRef.id };
+    return { success: true, promotionId: result.promotionId };
   } catch (error) {
     console.error('Failed to create promotion:', error);
-    return { success: false, error: 'Failed to create promotion' };
+    return { success: false, error: (error as any)?.message || 'Failed to create promotion' };
   }
 }
 
@@ -216,17 +208,37 @@ export async function getFeaturedPromotions(
       ...doc.data(),
     } as Promotion));
 
-    // Filter by boost expiry and location (simplified)
-    const filtered = promotions.filter((promo: any) => {
-      if (promo.boostExpiry && now > promo.boostExpiry) return false;
-      // TODO: Add geolocation filtering
-      return true;
+    const spotLocations = userLocation
+      ? await loadSpotLocationMap(db, promotions.map((promo: any) => promo.spotId))
+      : new Map<string, LatLng>();
+
+    const filtered = promotions
+      .map((promo: any) => {
+        if (promo.boostExpiry && now > promo.boostExpiry) return null;
+        if (!userLocation) {
+          return { promo, distanceKm: null as number | null };
+        }
+        const coords = spotLocations.get(String(promo.spotId || '')) || readEntityLatLng(promo);
+        if (!coords) return null;
+        const distanceKm = haversineKm(userLocation, coords);
+        if (distanceKm > radiusKm) return null;
+        return { promo, distanceKm };
+      })
+      .filter(
+        (entry: { promo: Promotion; distanceKm: number | null } | null): entry is { promo: Promotion; distanceKm: number | null } =>
+          entry !== null
+      );
+
+    filtered.sort((left: { promo: Promotion; distanceKm: number | null }, right: { promo: Promotion; distanceKm: number | null }) => {
+      if (left.distanceKm !== null && right.distanceKm !== null && left.distanceKm !== right.distanceKm) {
+        return left.distanceKm - right.distanceKm;
+      }
+      if (left.distanceKm !== null && right.distanceKm === null) return -1;
+      if (left.distanceKm === null && right.distanceKm !== null) return 1;
+      return (right.promo.createdAt || 0) - (left.promo.createdAt || 0);
     });
 
-    // Sort by creation date (newest first)
-    filtered.sort((a: any, b: any) => b.createdAt - a.createdAt);
-
-    return filtered.slice(0, 10);
+    return filtered.slice(0, 10).map((entry: { promo: Promotion; distanceKm: number | null }) => entry.promo);
   } catch (error) {
     console.error('Failed to get featured promotions:', error);
     return [];
@@ -404,62 +416,20 @@ export async function boostPromotion(
  * Respond to a check-in
  */
 export async function respondToCheckin(
-  ownerId: string,
+  _ownerId: string,
   spotId: string,
   checkinId: string,
   responseText: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const fb = ensureFirebase();
-    if (!fb) return { success: false, error: 'Firebase not initialized' };
-
-    const db = fb.firestore();
-
-    // Verify ownership
-    const businessSpot = await db
-      .collection('businessSpots')
-      .where('spotId', '==', spotId)
-      .where('ownerId', '==', ownerId)
-      .get();
-
-    if (businessSpot.empty) {
-      return { success: false, error: 'You do not own this spot' };
-    }
-
-    // Get check-in
-    const checkinDoc = await db.collection('checkins').doc(checkinId).get();
-    if (!checkinDoc.exists) {
-      return { success: false, error: 'Check-in not found' };
-    }
-
-    const checkin = checkinDoc.data();
-    if (!checkin) {
-      return { success: false, error: 'Check-in data not found' };
-    }
-
-    // Check if already responded
-    const existingResponse = await db
-      .collection('checkinResponses')
-      .where('checkinId', '==', checkinId)
-      .get();
-
-    if (!existingResponse.empty) {
-      return { success: false, error: 'Already responded to this check-in' };
-    }
-
-    // Create response
-    const response: Omit<CheckinResponse, 'id'> = {
+    const result = await callFirebaseCallable<{ ok?: boolean; responseId?: string }>('respondToCheckinSecure', {
       spotId,
-      ownerId,
       checkinId,
-      userId: checkin.userId,
-      userName: checkin.userName || 'User',
-      userCaption: checkin.caption || '',
       responseText,
-      respondedAt: Date.now(),
-    };
-
-    await db.collection('checkinResponses').add(response);
+    });
+    if (!result?.ok) {
+      return { success: false, error: 'Check-in response service unavailable' };
+    }
 
     track('checkin_responded', {
       spot_id: spotId,
@@ -469,7 +439,7 @@ export async function respondToCheckin(
     return { success: true };
   } catch (error) {
     console.error('Failed to respond to check-in:', error);
-    return { success: false, error: 'Failed to respond' };
+    return { success: false, error: (error as any)?.message || 'Failed to respond' };
   }
 }
 

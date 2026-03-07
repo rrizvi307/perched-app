@@ -31,20 +31,212 @@ jest.mock('expo-image-manipulator', () => ({
   },
 }));
 
-jest.mock('expo-file-system', () => ({
-  cacheDirectory: 'cache://',
-  getInfoAsync: jest.fn(),
-  makeDirectoryAsync: jest.fn(),
-  downloadAsync: jest.fn(),
-  readDirectoryAsync: jest.fn(),
-  deleteAsync: jest.fn(),
-}));
+jest.mock('expo-file-system', () => {
+  const ROOT_DIRS = new Set(['cache://', 'document://']);
+  const directories = new Set<string>(ROOT_DIRS);
+  const files = new Map<string, number>();
+
+  const createDirectoryMock = jest.fn();
+  const deleteFileMock = jest.fn();
+  const downloadFileMock = jest.fn();
+  const listDirectoryMock = jest.fn();
+  const createFileMock = jest.fn();
+  const writeFileMock = jest.fn();
+  const copyFileMock = jest.fn();
+
+  const toUri = (value: any) => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value?.uri === 'string') return value.uri;
+    return '';
+  };
+
+  const normalizeDirectoryUri = (uri: string) => {
+    if (!uri) return uri;
+    return uri.endsWith('/') && !uri.endsWith('://') ? uri.slice(0, -1) : uri;
+  };
+
+  const joinUri = (...parts: any[]) => {
+    let current = '';
+    for (const part of parts.map(toUri).filter(Boolean)) {
+      if (!current) {
+        current = part;
+        continue;
+      }
+      const next = part.replace(/^\/+/, '');
+      current = current.endsWith('/') ? `${current}${next}` : `${current}/${next}`;
+    }
+    return current;
+  };
+
+  const ensureParentDirectory = (uri: string) => {
+    const index = uri.lastIndexOf('/');
+    if (index <= 0) return;
+    const parent = normalizeDirectoryUri(uri.slice(0, index));
+    if (parent) directories.add(parent);
+  };
+
+  const installDownloadImplementation = (downloadMock: jest.Mock) => {
+    downloadMock.mockImplementation(async (url: string, destination: any, options?: any) => {
+      const file = destination instanceof File ? destination : new File(destination);
+      downloadFileMock(url, file.uri, options);
+      ensureParentDirectory(file.uri);
+      if (!files.has(file.uri)) files.set(file.uri, 0);
+      return file;
+    });
+  };
+
+  class Directory {
+    uri: string;
+
+    constructor(...uris: any[]) {
+      this.uri = normalizeDirectoryUri(joinUri(...uris));
+    }
+
+    get exists() {
+      return directories.has(this.uri);
+    }
+
+    create(options?: any) {
+      createDirectoryMock(this.uri, options);
+      directories.add(this.uri);
+    }
+
+    list() {
+      listDirectoryMock(this.uri);
+      const prefix = `${this.uri}/`;
+      return Array.from(files.keys())
+        .filter((uri) => uri.startsWith(prefix) && !uri.slice(prefix.length).includes('/'))
+        .map((uri) => new File(uri));
+    }
+  }
+
+  const downloadFileAsync = jest.fn();
+
+  class File {
+    static downloadFileAsync = downloadFileAsync;
+    uri: string;
+
+    constructor(...uris: any[]) {
+      this.uri = joinUri(...uris);
+    }
+
+    get name() {
+      return this.uri.split('/').pop() || '';
+    }
+
+    get exists() {
+      return files.has(this.uri);
+    }
+
+    get size() {
+      return files.get(this.uri) ?? 0;
+    }
+
+    info() {
+      return { exists: this.exists, size: this.size, uri: this.uri };
+    }
+
+    delete() {
+      deleteFileMock(this.uri);
+      files.delete(this.uri);
+    }
+
+    create(options?: any) {
+      createFileMock(this.uri, options);
+      ensureParentDirectory(this.uri);
+      if (!files.has(this.uri) || options?.overwrite) {
+        files.set(this.uri, files.get(this.uri) ?? 0);
+      }
+    }
+
+    write(content: any, options?: any) {
+      writeFileMock(this.uri, content, options);
+      ensureParentDirectory(this.uri);
+      const size = typeof content === 'string' ? content.length : content?.length ?? 0;
+      files.set(this.uri, size);
+    }
+
+    copy(destination: any) {
+      const target = destination instanceof File ? destination : new File(destination);
+      copyFileMock(this.uri, target.uri);
+      ensureParentDirectory(target.uri);
+      files.set(target.uri, files.get(this.uri) ?? 0);
+    }
+  }
+
+  const Paths = {
+    cache: { uri: 'cache://' },
+    document: { uri: 'document://' },
+  };
+
+  const reset = () => {
+    directories.clear();
+    ROOT_DIRS.forEach((uri) => directories.add(uri));
+    files.clear();
+    createDirectoryMock.mockReset();
+    deleteFileMock.mockReset();
+    downloadFileMock.mockReset();
+    listDirectoryMock.mockReset();
+    createFileMock.mockReset();
+    writeFileMock.mockReset();
+    copyFileMock.mockReset();
+    downloadFileAsync.mockReset();
+    installDownloadImplementation(downloadFileAsync);
+  };
+
+  const setDirExists = (uri: string, exists: boolean) => {
+    const normalized = normalizeDirectoryUri(uri);
+    if (exists) {
+      directories.add(normalized);
+    } else {
+      directories.delete(normalized);
+    }
+  };
+
+  const setFile = (uri: string, size = 0) => {
+    ensureParentDirectory(uri);
+    files.set(uri, size);
+  };
+
+  reset();
+
+  return {
+    Directory,
+    File,
+    Paths,
+    __mock: {
+      reset,
+      setDirExists,
+      setFile,
+      createDirectoryMock,
+      deleteFileMock,
+      downloadFileMock,
+      listDirectoryMock,
+      createFileMock,
+      writeFileMock,
+      copyFileMock,
+      downloadFileAsync,
+    },
+  };
+});
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
 }));
 
 type StorageMap = Map<string, string>;
+const fsMock = (FileSystem as any).__mock as {
+  reset: () => void;
+  setDirExists: (uri: string, exists: boolean) => void;
+  setFile: (uri: string, size?: number) => void;
+  createDirectoryMock: jest.Mock;
+  deleteFileMock: jest.Mock;
+  downloadFileMock: jest.Mock;
+  downloadFileAsync: jest.Mock;
+};
+const CACHE_DIR_URI = 'cache://images';
+const cacheFileUri = (name: string) => `${CACHE_DIR_URI}/${name}`;
 
 function installStorageMock(store: StorageMap) {
   (AsyncStorage.getItem as jest.Mock).mockImplementation(async (key: string) =>
@@ -83,12 +275,8 @@ describe('imageCDN', () => {
     jest.clearAllMocks();
     store = new Map<string, string>();
     installStorageMock(store);
-
-    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true, size: 0 });
-    (FileSystem.makeDirectoryAsync as jest.Mock).mockResolvedValue(undefined);
-    (FileSystem.downloadAsync as jest.Mock).mockImplementation(async (_url: string, path: string) => ({ uri: path }));
-    (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValue([]);
-    (FileSystem.deleteAsync as jest.Mock).mockResolvedValue(undefined);
+    fsMock.reset();
+    fsMock.setDirExists(CACHE_DIR_URI, true);
 
     (ImageManipulator.manipulateAsync as jest.Mock).mockResolvedValue({
       uri: 'file://optimized.jpg',
@@ -104,19 +292,24 @@ describe('imageCDN', () => {
 
   describe('initImageCache', () => {
     it('creates cache directory when missing', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false });
+      fsMock.setDirExists(CACHE_DIR_URI, false);
       await initImageCache();
-      expect(FileSystem.makeDirectoryAsync).toHaveBeenCalledWith('cache://images/', { intermediates: true });
+      expect(fsMock.createDirectoryMock).toHaveBeenCalledWith(CACHE_DIR_URI, {
+        idempotent: true,
+        intermediates: true,
+      });
     });
 
     it('does not create directory when already present', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: true });
       await initImageCache();
-      expect(FileSystem.makeDirectoryAsync).not.toHaveBeenCalled();
+      expect(fsMock.createDirectoryMock).not.toHaveBeenCalled();
     });
 
     it('handles initialization errors', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('fs fail'));
+      fsMock.setDirExists(CACHE_DIR_URI, false);
+      fsMock.createDirectoryMock.mockImplementationOnce(() => {
+        throw new Error('fs fail');
+      });
       await expect(initImageCache()).resolves.toBeUndefined();
     });
   });
@@ -217,12 +410,12 @@ describe('imageCDN', () => {
           abc: { uri: 'cache://images/abc', size: 123, timestamp: Date.now() },
         })
       );
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: true, size: 123 });
+      fsMock.setFile(cacheFileUri('abc'), 123);
 
       const uri = await cacheImage('https://img.test/a.jpg', 'abc');
 
       expect(uri).toBe('cache://images/abc');
-      expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+      expect(fsMock.downloadFileAsync).not.toHaveBeenCalled();
     });
 
     it('downloads and stores metadata when cache is stale', async () => {
@@ -232,78 +425,81 @@ describe('imageCDN', () => {
           stale: { uri: 'cache://images/stale', size: 10, timestamp: Date.now() - 8 * 24 * 60 * 60 * 1000 },
         })
       );
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: true, size: 10 });
+      fsMock.setFile(cacheFileUri('stale'), 10);
 
       const uri = await cacheImage('https://img.test/stale.jpg', 'stale');
 
       expect(uri).toBe('cache://images/stale');
-      expect(FileSystem.downloadAsync).toHaveBeenCalledWith('https://img.test/stale.jpg', 'cache://images/stale');
+      expect(fsMock.downloadFileMock).toHaveBeenCalledWith(
+        'https://img.test/stale.jpg',
+        'cache://images/stale',
+        { idempotent: true }
+      );
       const metadata = JSON.parse(store.get('@image_cache_metadata') || '{}');
       expect(metadata.stale).toBeDefined();
     });
 
     it('downloads image when cache file does not exist', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false, size: 0 });
-
       const uri = await cacheImage('https://img.test/new.jpg', 'new');
 
       expect(uri).toBe('cache://images/new');
-      expect(FileSystem.downloadAsync).toHaveBeenCalled();
+      expect(fsMock.downloadFileAsync).toHaveBeenCalled();
     });
 
     it('returns null when cacheImage fails', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('fs fail'));
+      fsMock.downloadFileAsync.mockRejectedValueOnce(new Error('fs fail'));
       await expect(cacheImage('https://img.test/err.jpg', 'err')).resolves.toBeNull();
     });
 
     it('getCachedImage returns cached path on success', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false, size: 0 });
       const result = await getCachedImage('https://img.test/a.jpg', 'medium');
       expect(result).toContain('cache://images/');
     });
 
     it('getCachedImage falls back to original URL on cache failure', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('fail'));
+      fsMock.downloadFileAsync.mockRejectedValueOnce(new Error('fail'));
       const result = await getCachedImage('https://img.test/fallback.jpg', 'small');
       expect(result).toBe('https://img.test/fallback.jpg');
     });
 
     it('preloads multiple images', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false, size: 0 });
       await preloadImages(['https://img.test/1.jpg', 'https://img.test/2.jpg']);
-      expect(FileSystem.downloadAsync).toHaveBeenCalledTimes(2);
+      expect(fsMock.downloadFileAsync).toHaveBeenCalledTimes(2);
     });
 
     it('preloadImages handles failures gracefully', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValue(new Error('fail'));
+      fsMock.downloadFileAsync.mockRejectedValue(new Error('fail'));
       await expect(preloadImages(['https://img.test/1.jpg'])).resolves.toBeUndefined();
     });
   });
 
   describe('cache cleanup and stats', () => {
     it('clearImageCache returns 0 if directory is missing', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false });
+      fsMock.setDirExists(CACHE_DIR_URI, false);
       await expect(clearImageCache()).resolves.toBe(0);
     });
 
     it('clearImageCache deletes files and clears metadata', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: true });
-      (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValueOnce(['a.jpg', 'b.jpg']);
+      fsMock.setFile(cacheFileUri('a.jpg'), 12);
+      fsMock.setFile(cacheFileUri('b.jpg'), 18);
 
       const deleted = await clearImageCache();
 
       expect(deleted).toBe(2);
-      expect(FileSystem.deleteAsync).toHaveBeenCalledWith('cache://images/a.jpg', { idempotent: true });
+      expect(fsMock.deleteFileMock).toHaveBeenCalledWith('cache://images/a.jpg');
       expect(AsyncStorage.removeItem).toHaveBeenCalledWith('@image_cache_metadata');
     });
 
     it('clearImageCache returns 0 on errors', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+      const existsSpy = jest.spyOn(FileSystem.Directory.prototype, 'exists', 'get').mockImplementationOnce(() => {
+        throw new Error('boom');
+      });
       await expect(clearImageCache()).resolves.toBe(0);
+      existsSpy.mockRestore();
     });
 
     it('cleanupImageCache returns 0 when cache dir missing', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false });
+      fsMock.setDirExists(CACHE_DIR_URI, false);
       await expect(cleanupImageCache()).resolves.toBe(0);
     });
 
@@ -315,15 +511,12 @@ describe('imageCDN', () => {
           'new.jpg': { uri: 'cache://images/new.jpg', size: 10, timestamp: Date.now() },
         })
       );
-      (FileSystem.getInfoAsync as jest.Mock)
-        .mockResolvedValueOnce({ exists: true }) // dir info
-        .mockResolvedValueOnce({ exists: true, size: 10 }) // old.jpg
-        .mockResolvedValueOnce({ exists: true, size: 10 }); // new.jpg
-      (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValueOnce(['old.jpg', 'new.jpg']);
+      fsMock.setFile(cacheFileUri('old.jpg'), 10);
+      fsMock.setFile(cacheFileUri('new.jpg'), 10);
 
       const deleted = await cleanupImageCache();
       expect(deleted).toBe(1);
-      expect(FileSystem.deleteAsync).toHaveBeenCalledWith('cache://images/old.jpg', { idempotent: true });
+      expect(fsMock.deleteFileMock).toHaveBeenCalledWith('cache://images/old.jpg');
     });
 
     it('cleanupImageCache removes oldest files when over size limit', async () => {
@@ -334,24 +527,24 @@ describe('imageCDN', () => {
           'b.jpg': { uri: 'cache://images/b.jpg', size: 70 * 1024 * 1024, timestamp: Date.now() - 1000 },
         })
       );
-      (FileSystem.getInfoAsync as jest.Mock)
-        .mockResolvedValueOnce({ exists: true }) // dir
-        .mockResolvedValueOnce({ exists: true, size: 70 * 1024 * 1024 }) // a
-        .mockResolvedValueOnce({ exists: true, size: 70 * 1024 * 1024 }); // b
-      (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValueOnce(['a.jpg', 'b.jpg']);
+      fsMock.setFile(cacheFileUri('a.jpg'), 70 * 1024 * 1024);
+      fsMock.setFile(cacheFileUri('b.jpg'), 70 * 1024 * 1024);
 
       const deleted = await cleanupImageCache();
       expect(deleted).toBe(1);
-      expect(FileSystem.deleteAsync).toHaveBeenCalledWith('cache://images/a.jpg', { idempotent: true });
+      expect(fsMock.deleteFileMock).toHaveBeenCalledWith('cache://images/a.jpg');
     });
 
     it('cleanupImageCache returns 0 on errors', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('fail'));
+      const existsSpy = jest.spyOn(FileSystem.Directory.prototype, 'exists', 'get').mockImplementationOnce(() => {
+        throw new Error('fail');
+      });
       await expect(cleanupImageCache()).resolves.toBe(0);
+      existsSpy.mockRestore();
     });
 
     it('getImageCacheStats returns zeroes when dir does not exist', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockResolvedValueOnce({ exists: false });
+      fsMock.setDirExists(CACHE_DIR_URI, false);
       await expect(getImageCacheStats()).resolves.toEqual({ fileCount: 0, totalSize: 0, oldestFile: 0 });
     });
 
@@ -363,11 +556,8 @@ describe('imageCDN', () => {
           'b.jpg': { uri: 'cache://images/b.jpg', size: 200, timestamp: 20 },
         })
       );
-      (FileSystem.getInfoAsync as jest.Mock)
-        .mockResolvedValueOnce({ exists: true })
-        .mockResolvedValueOnce({ exists: true, size: 100 })
-        .mockResolvedValueOnce({ exists: true, size: 200 });
-      (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValueOnce(['a.jpg', 'b.jpg']);
+      fsMock.setFile(cacheFileUri('a.jpg'), 100);
+      fsMock.setFile(cacheFileUri('b.jpg'), 200);
 
       const stats = await getImageCacheStats();
       expect(stats.fileCount).toBe(2);
@@ -376,8 +566,11 @@ describe('imageCDN', () => {
     });
 
     it('getImageCacheStats handles errors', async () => {
-      (FileSystem.getInfoAsync as jest.Mock).mockRejectedValueOnce(new Error('fail'));
+      const existsSpy = jest.spyOn(FileSystem.Directory.prototype, 'exists', 'get').mockImplementationOnce(() => {
+        throw new Error('fail');
+      });
       await expect(getImageCacheStats()).resolves.toEqual({ fileCount: 0, totalSize: 0, oldestFile: 0 });
+      existsSpy.mockRestore();
     });
   });
 

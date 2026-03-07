@@ -5,17 +5,29 @@ import { ensureFirebase } from './firebaseClient';
 import { createDeepLink } from './deepLinking';
 import Constants from 'expo-constants';
 
-const APP_NAME = 'Perched';
+export const APP_NAME = 'Perched';
 const extra = ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-const APP_STORE_URL = (extra.APP_STORE_URL as string) || 'https://apps.apple.com/app/perched/id6739514696';
-const PLAY_STORE_URL = (extra.PLAY_STORE_URL as string) || 'https://play.google.com/store/apps/details?id=com.perched.app';
-const WEB_URL = 'https://perched.app';
+export const APP_STORE_URL =
+  (extra.APP_STORE_URL as string) || 'https://apps.apple.com/app/perched/id6739514696';
+export const PLAY_STORE_URL =
+  (extra.PLAY_STORE_URL as string) || 'https://play.google.com/store/apps/details?id=com.perched.app';
+export const WEB_URL = 'https://perched.app';
 
 interface ShareOptions {
   title?: string;
   message: string;
   url?: string;
   context?: string;
+}
+
+export function getPrimaryAppUrl(platform: string = Platform.OS): string {
+  if (platform === 'ios') return APP_STORE_URL;
+  if (platform === 'android') return PLAY_STORE_URL;
+  return WEB_URL;
+}
+
+export function getInviteLandingUrl(referralCode: string): string {
+  return createDeepLink('invite', { referralCode: normalizeReferralCode(referralCode) });
 }
 
 /**
@@ -46,7 +58,7 @@ export function getInviteLink(referralCode: string): string {
   const appStoreId = '6739514696';
 
   // Build the deep link that will open in the app
-  const deepLink = encodeURIComponent(`${WEB_URL}/invite?ref=${referralCode}`);
+  const deepLink = encodeURIComponent(getInviteLandingUrl(referralCode));
 
   // Construct Firebase Dynamic Link
   // Note: For full functionality, configure in Firebase Console > Dynamic Links
@@ -345,8 +357,6 @@ export function generateStoryCardUrl(
   photoUrl?: string,
   userName?: string
 ): string {
-  // TODO: Implement with Cloud Function or Cloudinary
-  // For now, return placeholder
   const params = new URLSearchParams({
     spot: spotName,
     photo: photoUrl || '',

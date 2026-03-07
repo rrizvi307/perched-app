@@ -7,6 +7,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureFirebase } from './firebaseClient';
 import NetInfo from '@react-native-community/netinfo';
+import { devLog } from './logger';
 
 export type SyncStatus = 'pending' | 'syncing' | 'success' | 'failed';
 export type ConflictResolution = 'client_wins' | 'server_wins' | 'merge' | 'manual';
@@ -71,7 +72,7 @@ export async function initOfflineSync(): Promise<void> {
     // Initial sync
     await syncPendingOperations();
 
-    console.log('Offline sync initialized');
+    devLog('Offline sync initialized');
   } catch (error) {
     console.error('Failed to init offline sync:', error);
   }
@@ -425,7 +426,7 @@ async function recordConflict(
     conflicts.push(conflict);
     await AsyncStorage.setItem(CONFLICTS_KEY, JSON.stringify(conflicts));
 
-    console.log('Conflict recorded:', conflict.id);
+    devLog('Conflict recorded:', conflict.id);
   } catch (error) {
     console.error('Failed to record conflict:', error);
   }

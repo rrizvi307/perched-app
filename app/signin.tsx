@@ -135,7 +135,12 @@ export default function SignIn() {
           >
             <View style={styles.createBlock}>
               <Text style={{ color: muted, fontWeight: '600' }}>New here?</Text>
-              <Pressable onPress={() => router.push('/signup')} style={[styles.secondary, { borderColor: border }]}>
+              <Pressable
+                onPress={() => router.push('/signup')}
+                accessibilityRole="button"
+                accessibilityLabel="Create a new Perched account"
+                style={[styles.secondary, { borderColor: border }]}
+              >
                 <Text style={{ color: primary, fontWeight: '700' }}>Create account</Text>
               </Pressable>
             </View>
@@ -145,7 +150,12 @@ export default function SignIn() {
                 <Text style={{ color: accent, fontWeight: '600' }}>Demo mode — server auth not configured</Text>
                 <Text style={{ color: accent, marginTop: 6 }}>Create an account will store locally in your browser. Use the demo button to sign in quickly.</Text>
                 <View style={{ height: 8 }} />
-                <Pressable onPress={useDemoAccount} style={{ padding: 8, borderRadius: 8, backgroundColor: accent, alignItems: 'center', marginTop: 6 }}>
+                <Pressable
+                  onPress={useDemoAccount}
+                  accessibilityRole="button"
+                  accessibilityLabel="Use the Perched demo account"
+                  style={{ padding: 8, borderRadius: 8, backgroundColor: accent, alignItems: 'center', marginTop: 6 }}
+                >
                   <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Use demo account</Text>
                 </Pressable>
               </View>
@@ -158,6 +168,7 @@ export default function SignIn() {
                 placeholderTextColor={muted}
                 value={email}
                 onChangeText={setEmail}
+                accessibilityLabel="Email address"
                 style={[styles.input, { fontSize: 18, borderColor: border, backgroundColor: background, color }]}
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -184,6 +195,7 @@ export default function SignIn() {
                   placeholderTextColor={muted}
                   value={password}
                   onChangeText={setPassword}
+                  accessibilityLabel="Password"
                   style={[styles.input, styles.passwordInput, { fontSize: 18, borderColor: border, backgroundColor: background, color }]}
                   secureTextEntry={!showPassword}
                   returnKeyType="done"
@@ -194,19 +206,35 @@ export default function SignIn() {
                     if (e.nativeEvent.key === 'Enter') doSignIn();
                   }}
                 />
-                <Pressable onPress={() => setShowPassword((s) => !s)} style={[styles.passwordToggle, { borderColor: border }]}>
+                <Pressable
+                  onPress={() => setShowPassword((s) => !s)}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                  style={[styles.passwordToggle, { borderColor: border }]}
+                >
                   <Text style={{ color: primary, fontWeight: '600' }}>{showPassword ? 'Hide' : 'Show'}</Text>
                 </Pressable>
               </View>
             </View>
 
-            <Pressable onPress={() => router.push('/reset')} style={{ alignSelf: 'flex-start', marginTop: 6 }}>
+            <Pressable
+              onPress={() => router.push('/reset')}
+              accessibilityRole="button"
+              accessibilityLabel="Reset password"
+              style={{ alignSelf: 'flex-start', marginTop: 6 }}
+            >
               <Text style={{ color: primary, fontWeight: '600' }}>Forgot password?</Text>
             </Pressable>
 
             {error ? <Body style={{ color: danger, marginTop: 8 }}>{error}</Body> : null}
 
-            <Pressable onPress={doSignIn} style={[styles.primary, { backgroundColor: primary }, loading ? { opacity: 0.6 } : undefined]} disabled={loading}>
+            <Pressable
+              onPress={doSignIn}
+              accessibilityRole="button"
+              accessibilityLabel={loading ? 'Signing in' : 'Sign in'}
+              style={[styles.primary, { backgroundColor: primary }, loading ? { opacity: 0.6 } : undefined]}
+              disabled={loading}
+            >
               <Text style={[styles.primaryText, { color: '#FFFFFF' }]}>{loading ? 'Signing in...' : 'Sign in'}</Text>
             </Pressable>
             <View style={{ height: 10 }} />
