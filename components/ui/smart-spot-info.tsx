@@ -2,7 +2,7 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import type { BestForCategory, HoursStatus, SmartSpotData, VibeTag } from '@/services/smartDataService';
 import { withAlpha } from '@/utils/colors';
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 type SmartSpotInfoProps = {
@@ -38,7 +38,7 @@ const VIBE_COLORS: Record<VibeTag, string> = {
   lively: '#F97316',
 };
 
-function CoffeeRating({ rating }: { rating: number }) {
+const CoffeeRating = memo(function CoffeeRating({ rating }: { rating: number }) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
 
@@ -63,9 +63,9 @@ function CoffeeRating({ rating }: { rating: number }) {
       <Text style={[styles.ratingValue, { color: muted }]}>{rating.toFixed(1)}</Text>
     </View>
   );
-}
+});
 
-function HoursStatusBadge({ hours }: { hours: HoursStatus }) {
+const HoursStatusBadge = memo(function HoursStatusBadge({ hours }: { hours: HoursStatus }) {
   if (!hours) return null;
 
   const bgColor = hours.isOpen
@@ -92,9 +92,9 @@ function HoursStatusBadge({ hours }: { hours: HoursStatus }) {
       <Text style={[styles.hoursText, { color: textColor }]}>{statusText}</Text>
     </View>
   );
-}
+});
 
-function ExternalRatings({ smartData }: { smartData: SmartSpotData }) {
+const ExternalRatings = memo(function ExternalRatings({ smartData }: { smartData: SmartSpotData }) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
 
@@ -131,9 +131,9 @@ function ExternalRatings({ smartData }: { smartData: SmartSpotData }) {
       )}
     </View>
   );
-}
+});
 
-function BestForSection({ bestFor, compact }: { bestFor: BestForCategory[]; compact?: boolean }) {
+const BestForSection = memo(function BestForSection({ bestFor, compact }: { bestFor: BestForCategory[]; compact?: boolean }) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
@@ -162,9 +162,9 @@ function BestForSection({ bestFor, compact }: { bestFor: BestForCategory[]; comp
       </View>
     </View>
   );
-}
+});
 
-function VibesSection({ vibes, compact }: { vibes: VibeTag[]; compact?: boolean }) {
+const VibesSection = memo(function VibesSection({ vibes, compact }: { vibes: VibeTag[]; compact?: boolean }) {
   const text = useThemeColor({}, 'text');
 
   if (!vibes?.length) return null;
@@ -188,9 +188,9 @@ function VibesSection({ vibes, compact }: { vibes: VibeTag[]; compact?: boolean 
       </View>
     </View>
   );
-}
+});
 
-function FeaturesSection({ smartData }: { smartData: SmartSpotData }) {
+const FeaturesSection = memo(function FeaturesSection({ smartData }: { smartData: SmartSpotData }) {
   const muted = useThemeColor({}, 'muted');
 
   const features: { icon: string; label: string }[] = [];
@@ -214,9 +214,9 @@ function FeaturesSection({ smartData }: { smartData: SmartSpotData }) {
       ))}
     </View>
   );
-}
+});
 
-function BusynessPrediction({ smartData }: { smartData: SmartSpotData }) {
+const BusynessPrediction = memo(function BusynessPrediction({ smartData }: { smartData: SmartSpotData }) {
   const text = useThemeColor({}, 'text');
 
   if (!smartData.predictedBusyness && !smartData.busyPrediction) return null;
@@ -242,9 +242,9 @@ function BusynessPrediction({ smartData }: { smartData: SmartSpotData }) {
       </View>
     </View>
   );
-}
+});
 
-export default function SmartSpotInfo({ smartData, compact = false }: SmartSpotInfoProps) {
+const SmartSpotInfo = memo(function SmartSpotInfo({ smartData, compact = false }: SmartSpotInfoProps) {
   return (
     <View style={styles.container}>
       {/* Hours status */}
@@ -269,10 +269,12 @@ export default function SmartSpotInfo({ smartData, compact = false }: SmartSpotI
       {!compact && <FeaturesSection smartData={smartData} />}
     </View>
   );
-}
+});
+
+export default SmartSpotInfo;
 
 // Compact version for list items
-export function SmartSpotBadges({ smartData }: { smartData: SmartSpotData }) {
+export const SmartSpotBadges = memo(function SmartSpotBadges({ smartData }: { smartData: SmartSpotData }) {
   const muted = useThemeColor({}, 'muted');
 
   return (
@@ -308,7 +310,7 @@ export function SmartSpotBadges({ smartData }: { smartData: SmartSpotData }) {
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
