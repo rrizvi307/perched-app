@@ -1,8 +1,16 @@
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Badge, UserGamificationProfile } from '@/services/gamificationService';
 import { withAlpha } from '@/utils/colors';
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+// Badge tier colors - static, outside component
+const TIER_COLORS = {
+  bronze: '#CD7F32',
+  silver: '#C0C0C0',
+  gold: '#FFD700',
+  platinum: '#E5E4E2',
+} as const;
 
 // ============ STREAK DISPLAY ============
 
@@ -12,7 +20,7 @@ type StreakDisplayProps = {
   compact?: boolean;
 };
 
-export function StreakDisplay({ currentStreak, longestStreak, compact }: StreakDisplayProps) {
+export const StreakDisplay = memo(function StreakDisplay({ currentStreak, longestStreak, compact }: StreakDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
 
@@ -42,7 +50,7 @@ export function StreakDisplay({ currentStreak, longestStreak, compact }: StreakD
       )}
     </View>
   );
-}
+});
 
 // ============ LEVEL DISPLAY ============
 
@@ -53,7 +61,7 @@ type LevelDisplayProps = {
   compact?: boolean;
 };
 
-export function LevelDisplay({ level, xp, xpToNextLevel, compact }: LevelDisplayProps) {
+export const LevelDisplay = memo(function LevelDisplay({ level, xp, xpToNextLevel, compact }: LevelDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
@@ -92,7 +100,7 @@ export function LevelDisplay({ level, xp, xpToNextLevel, compact }: LevelDisplay
       </View>
     </View>
   );
-}
+});
 
 // ============ BADGE DISPLAY ============
 
@@ -103,14 +111,7 @@ type BadgeDisplayProps = {
   onPress?: () => void;
 };
 
-const TIER_COLORS = {
-  bronze: '#CD7F32',
-  silver: '#C0C0C0',
-  gold: '#FFD700',
-  platinum: '#E5E4E2',
-};
-
-export function BadgeDisplay({ badge, size = 'medium', showProgress, onPress }: BadgeDisplayProps) {
+export const BadgeDisplay = memo(function BadgeDisplay({ badge, size = 'medium', showProgress, onPress }: BadgeDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
@@ -155,7 +156,7 @@ export function BadgeDisplay({ badge, size = 'medium', showProgress, onPress }: 
       )}
     </Pressable>
   );
-}
+});
 
 // ============ BADGES ROW ============
 
@@ -166,12 +167,12 @@ type BadgesRowProps = {
   onViewAll?: () => void;
 };
 
-export function BadgesRow({ badges, title, showAll, onViewAll }: BadgesRowProps) {
+export const BadgesRow = memo(function BadgesRow({ badges, title, showAll, onViewAll }: BadgesRowProps) {
   const text = useThemeColor({}, 'text');
   const primary = useThemeColor({}, 'primary');
 
-  const displayBadges = showAll ? badges : badges.slice(0, 6);
-  const unlockedCount = badges.filter(b => b.unlockedAt).length;
+  const displayBadges = useMemo(() => showAll ? badges : badges.slice(0, 6), [badges, showAll]);
+  const unlockedCount = useMemo(() => badges.filter(b => b.unlockedAt).length, [badges]);
 
   return (
     <View style={styles.badgesSection}>
@@ -197,7 +198,7 @@ export function BadgesRow({ badges, title, showAll, onViewAll }: BadgesRowProps)
       </ScrollView>
     </View>
   );
-}
+});
 
 // ============ XP EARNED TOAST ============
 
@@ -206,7 +207,7 @@ type XPEarnedProps = {
   reason?: string;
 };
 
-export function XPEarned({ amount, reason }: XPEarnedProps) {
+export const XPEarned = memo(function XPEarned({ amount, reason }: XPEarnedProps) {
   const primary = useThemeColor({}, 'primary');
 
   return (
@@ -215,7 +216,7 @@ export function XPEarned({ amount, reason }: XPEarnedProps) {
       {reason && <Text style={styles.xpToastReason}>{reason}</Text>}
     </View>
   );
-}
+});
 
 // ============ BADGE UNLOCKED MODAL ============
 
@@ -224,7 +225,7 @@ type BadgeUnlockedProps = {
   onDismiss: () => void;
 };
 
-export function BadgeUnlocked({ badge, onDismiss }: BadgeUnlockedProps) {
+export const BadgeUnlocked = memo(function BadgeUnlocked({ badge, onDismiss }: BadgeUnlockedProps) {
   const text = useThemeColor({}, 'text');
   const card = useThemeColor({}, 'card');
   const tierColor = TIER_COLORS[badge.tier];
@@ -250,7 +251,7 @@ export function BadgeUnlocked({ badge, onDismiss }: BadgeUnlockedProps) {
       </View>
     </Pressable>
   );
-}
+});
 
 // ============ PROFILE STATS ============
 
@@ -258,17 +259,17 @@ type ProfileStatsProps = {
   profile: UserGamificationProfile;
 };
 
-export function ProfileStats({ profile }: ProfileStatsProps) {
+export const ProfileStats = memo(function ProfileStats({ profile }: ProfileStatsProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
 
-  const stats = [
+  const stats = useMemo(() => [
     { label: 'Check-ins', value: profile.totalCheckIns, emoji: '📍' },
     { label: 'Spots Visited', value: profile.uniqueSpotsVisited, emoji: '🗺️' },
     { label: 'Reviews', value: profile.reviewsWritten, emoji: '✍️' },
     { label: 'Badges', value: profile.badges.length, emoji: '🏅' },
-  ];
+  ], [profile.totalCheckIns, profile.uniqueSpotsVisited, profile.reviewsWritten, profile.badges.length]);
 
   return (
     <View style={styles.statsGrid}>
@@ -281,7 +282,7 @@ export function ProfileStats({ profile }: ProfileStatsProps) {
       ))}
     </View>
   );
-}
+});
 
 // ============ LEADERBOARD ENTRY ============
 
@@ -292,7 +293,7 @@ type LeaderboardEntryProps = {
   isCurrentUser?: boolean;
 };
 
-export function LeaderboardEntryRow({ rank, userName, score, isCurrentUser }: LeaderboardEntryProps) {
+export const LeaderboardEntryRow = memo(function LeaderboardEntryRow({ rank, userName, score, isCurrentUser }: LeaderboardEntryProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
@@ -320,7 +321,7 @@ export function LeaderboardEntryRow({ rank, userName, score, isCurrentUser }: Le
       </Text>
     </View>
   );
-}
+});
 
 // ============ STYLES ============
 
