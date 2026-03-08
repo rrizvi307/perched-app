@@ -23,7 +23,7 @@ import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
 
@@ -73,7 +73,7 @@ function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems 
 		.slice(0, maxItems);
 }
 
-function FeedPhoto({
+const FeedPhoto = memo(function FeedPhoto({
 	uri,
 	background,
 	muted,
@@ -85,6 +85,8 @@ function FeedPhoto({
 	pending?: boolean;
 }) {
 	const [failed, setFailed] = useState(false);
+	const handleError = useCallback(() => setFailed(true), []);
+
 	if (!uri || failed) {
 		return (
 			<View style={[styles.cardImage, { backgroundColor: background, alignItems: 'center', justifyContent: 'center' }]}>
@@ -97,10 +99,10 @@ function FeedPhoto({
 			source={uri}
 			contentFit="cover"
 			style={[styles.cardImage, { backgroundColor: background }]}
-			onError={() => setFailed(true)}
+			onError={handleError}
 		/>
 	);
-}
+});
 
 	export default function FeedScreen() {
 		const spotQuery = (() => {
