@@ -1106,6 +1106,8 @@ export async function declineFriendRequest(requestId: string) {
     return;
   }
   const db = fb.firestore();
+  // Update status to 'declined' before deletion so onDelete trigger knows not to send "accepted" notification
+  await db.collection('friendRequests').doc(requestId).update({ status: 'declined' });
   await db.collection('friendRequests').doc(requestId).delete();
 }
 

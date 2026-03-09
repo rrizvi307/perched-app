@@ -199,10 +199,7 @@ export default function SignUp() {
           handle: normalizedHandle,
           phone: normalizedPhone,
         });
-        // Track referral if user came from a referral link
-        if (referralCode) {
-          void trackReferralSignup(uid, referralCode);
-        }
+        // Referral tracking is handled by useEffect when user.id is set
         await refreshUser?.();
       } catch (e: any) {
         devLog('phone register error', e);
