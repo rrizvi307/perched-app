@@ -74,6 +74,14 @@ export const processReferral = functions.firestore
         return null;
       }
 
+      // Reject self-referrals (user can't refer themselves)
+      const { newUserId } = data;
+      if (referrerId === newUserId) {
+        console.log(`Self-referral rejected: ${newUserId} tried to use their own code`);
+        await snap.ref.update({ status: 'self_referral' });
+        return null;
+      }
+
       // Credit the referrer with 1 week of premium (atomic + idempotent transaction)
       const PREMIUM_WEEKS_PER_REFERRAL = 1;
       const premiumDays = PREMIUM_WEEKS_PER_REFERRAL * 7;

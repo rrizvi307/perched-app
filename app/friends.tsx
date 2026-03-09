@@ -17,6 +17,7 @@ import { isDemoMode } from '@/services/demoMode';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getIncomingFriendRequests,
+  getOutgoingFriendRequests,
   acceptFriendRequest,
   declineFriendRequest,
   sendFriendRequest,
@@ -88,8 +89,9 @@ export default function FriendsScreen() {
         }, 800);
       } else {
         // Load real friend requests from Firebase
-        const [incomingRequests, currentFriends] = await Promise.all([
+        const [incomingRequests, outgoingRequests, currentFriends] = await Promise.all([
           getIncomingFriendRequests(user.id),
+          getOutgoingFriendRequests(user.id),
           getUserFriends(user.id),
         ]);
 
@@ -122,7 +124,9 @@ export default function FriendsScreen() {
         if (campus) {
           const campusUsers = await getUsersByCampus(campus, 20);
           const friendSet = new Set(currentFriends);
-          const pendingSet = new Set(fromUserIds);
+          // Exclude both incoming request senders and outgoing request targets
+          const outgoingTargetIds = outgoingRequests.map((r: any) => r.toId);
+          const pendingSet = new Set([...fromUserIds, ...outgoingTargetIds]);
 
           const suggestionUsers = campusUsers.filter(
             (u: any) => u.id !== user.id && !friendSet.has(u.id) && !pendingSet.has(u.id)
