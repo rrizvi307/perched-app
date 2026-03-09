@@ -7,6 +7,7 @@ import { haversineDistance } from '@/utils/geo';
 
 const NOTIF_PREFS_KEY = '@perched_notification_prefs';
 const LAST_NOTIF_KEY = '@perched_last_notification';
+const STREAK_REMINDER_ID_KEY = '@perched_streak_reminder_id';
 
 export interface NotificationPreferences {
   enabled: boolean;
@@ -118,8 +119,11 @@ export async function scheduleStreakReminder(): Promise<void> {
   const stats = await getUserStats();
   if (stats.streakDays === 0) return; // No streak to save
 
-  // Cancel existing reminders
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Cancel only the previous streak reminder (not all notifications)
+  const previousId = await AsyncStorage.getItem(STREAK_REMINDER_ID_KEY);
+  if (previousId) {
+    await Notifications.cancelScheduledNotificationAsync(previousId);
+  }
 
   // Schedule for 8pm today if user hasn't checked in
   const now = new Date();
@@ -131,7 +135,7 @@ export async function scheduleStreakReminder(): Promise<void> {
     reminderTime.setDate(reminderTime.getDate() + 1);
   }
 
-  await Notifications.scheduleNotificationAsync({
+  const notificationId = await Notifications.scheduleNotificationAsync({
     content: {
       title: `🔥 ${stats.streakDays} day streak!`,
       body: "Don't break your streak! Check in before midnight.",
@@ -139,6 +143,9 @@ export async function scheduleStreakReminder(): Promise<void> {
     },
     trigger: buildDateTrigger(reminderTime),
   });
+
+  // Store the ID so we can cancel only this notification later
+  await AsyncStorage.setItem(STREAK_REMINDER_ID_KEY, notificationId);
 
   track('notification_scheduled', {
     type: 'streak_reminder',

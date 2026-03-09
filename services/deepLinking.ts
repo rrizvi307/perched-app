@@ -100,11 +100,26 @@ export function parseDeepLink(url: string): {
 
     if (hostname === 'profile' || path?.startsWith('/profile')) {
       route = 'profile';
-      const userId = path?.split('/profile/')[1] || getParam(queryParams?.userId);
+      // For scheme URLs like perched://profile/user123, path is /user123
+      // For http URLs like https://perched.app/profile/user123, need to split
+      let userId: string | undefined;
+      if (hostname === 'profile' && path && path !== '/') {
+        userId = path.replace(/^\//, ''); // Remove leading slash
+      } else {
+        userId = path?.split('/profile/')[1];
+      }
+      userId = userId || getParam(queryParams?.userId);
       if (userId) params.userId = userId;
     } else if (hostname === 'checkin' || path?.startsWith('/checkin') || path?.startsWith('/c/')) {
       route = 'checkin';
-      const checkinId = path?.split('/checkin/')[1] || path?.split('/c/')[1] || getParam(queryParams?.checkinId);
+      // For scheme URLs like perched://checkin/abc, path is /abc
+      let checkinId: string | undefined;
+      if (hostname === 'checkin' && path && path !== '/') {
+        checkinId = path.replace(/^\//, '');
+      } else {
+        checkinId = path?.split('/checkin/')[1] || path?.split('/c/')[1];
+      }
+      checkinId = checkinId || getParam(queryParams?.checkinId);
       if (checkinId) params.checkinId = checkinId;
     } else if (hostname === 'spot' || path?.startsWith('/spot') || path?.startsWith('/s/')) {
       route = 'spot';
@@ -157,7 +172,7 @@ export function handleDeepLink(url: string) {
     switch (route) {
       case 'profile':
         if (params.userId) {
-          router.push(`/profile?userId=${params.userId}`);
+          router.push(`/profile-view?uid=${params.userId}`);
         }
         break;
 
