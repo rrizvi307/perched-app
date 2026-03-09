@@ -18,7 +18,7 @@ export async function getDetectionMetrics(limit = 300): Promise<DetectionMetrics
   try {
     const db = fb.firestore();
     const snap = await db
-      .collection('event_logs')
+      .collection('eventLogs')
       .where('eventName', '==', 'place_detected')
       .orderBy('eventTime', 'desc')
       .limit(limit)
@@ -65,7 +65,7 @@ export async function getDetectionLogs(limit = 300) {
   try {
     const db = fb.firestore();
     const snap = await db
-      .collection('event_logs')
+      .collection('eventLogs')
       .where('eventName', '==', 'place_detected')
       .orderBy('eventTime', 'desc')
       .limit(limit)

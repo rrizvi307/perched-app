@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
-import { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator } from 'react-native';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
@@ -11,9 +11,11 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
 import {
   findUserByEmail,
   findUserByHandle,
+  searchUsers,
   sendFriendRequest,
   getUsersByCampus,
   getUserFriends,
@@ -21,6 +23,9 @@ import {
 } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { devLog } from '@/services/logger';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 
 interface UserResult {
   id: string;
@@ -37,6 +42,7 @@ interface UserResult {
  */
 export default function FindFriendsScreen() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -45,6 +51,8 @@ export default function FindFriendsScreen() {
   const [campusSuggestions, setCampusSuggestions] = useState<UserResult[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+  const firstDataMarkedRef = useRef(false);
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -53,9 +61,12 @@ export default function FindFriendsScreen() {
   const card = useThemeColor({}, 'card');
   const success = useThemeColor({}, 'success');
 
-  const loadCampusSuggestions = async () => {
+  const loadCampusSuggestions = useCallback(async () => {
+    const markId = startPerfMark('find_friends_load_suggestions');
+    let ok = true;
     if (!user?.id) {
       setLoadingSuggestions(false);
+      void endPerfMark(markId, true);
       return;
     }
 
@@ -63,6 +74,7 @@ export default function FindFriendsScreen() {
       const campus = user.campus || user.campusOrCity;
       if (!campus) {
         setLoadingSuggestions(false);
+        void endPerfMark(markId, true);
         return;
       }
 
@@ -89,43 +101,79 @@ export default function FindFriendsScreen() {
 
       setCampusSuggestions(suggestions);
     } catch (error) {
-      console.error('Failed to load campus suggestions:', error);
+      ok = false;
+      devLog('Failed to load campus suggestions:', error);
     } finally {
       setLoadingSuggestions(false);
+      void endPerfMark(markId, ok);
     }
-  };
-
-  // Load campus suggestions on mount and when campus fields change
-  useEffect(() => {
-    loadCampusSuggestions();
   }, [user?.id, user?.campus, user?.campusOrCity]);
+
+  useEffect(() => {
+    const markId = startPerfMark('screen_find_friends_mount');
+    let active = true;
+    void trackScreenLoad('find_friends').then((stop) => {
+      if (active) {
+        screenLoadStopRef.current = stop;
+      } else {
+        void stop();
+      }
+    });
+    void markPerfEvent('screen_find_friends_mounted');
+    return () => {
+      active = false;
+      void endPerfMark(markId, true);
+      const stop = screenLoadStopRef.current;
+      screenLoadStopRef.current = null;
+      if (stop) void stop();
+    };
+  }, []);
+
+  // Load campus suggestions on mount
+  useEffect(() => {
+    void loadCampusSuggestions();
+  }, [loadCampusSuggestions]);
+
+  useEffect(() => {
+    if (loadingSuggestions || firstDataMarkedRef.current) return;
+    firstDataMarkedRef.current = true;
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+    void markPerfEvent('find_friends_first_data_ready', { suggestions: campusSuggestions.length });
+  }, [loadingSuggestions, campusSuggestions.length]);
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !user?.id) return;
 
     setSearching(true);
     setHasSearched(true);
+    const markId = startPerfMark('find_friends_search');
+    let ok = true;
 
     try {
       const query = searchQuery.trim();
-      let foundUser: any = null;
+      const foundUsers: any[] = [];
 
-      // Search by handle if starts with @ or doesn't look like email
-      if (query.startsWith('@') || !query.includes('@')) {
-        foundUser = await findUserByHandle(query.replace(/^@/, ''));
+      // 1. Prefix search by name and handle (like Instagram)
+      const prefixResults = await searchUsers(query, 10);
+      for (const u of prefixResults) {
+        if (u.id !== user.id) foundUsers.push(u);
       }
 
-      // If not found by handle and looks like email, search by email
-      if (!foundUser && query.includes('@')) {
-        foundUser = await findUserByEmail(query);
+      // 2. If query looks like an email and prefix search found nothing, try exact email match
+      if (foundUsers.length === 0 && query.includes('@') && !query.startsWith('@')) {
+        const byEmail = await findUserByEmail(query);
+        if (byEmail && byEmail.id !== user.id) foundUsers.push(byEmail);
       }
 
-      // If still not found and didn't start with @, try handle search
-      if (!foundUser && !query.startsWith('@') && !query.includes('@')) {
-        foundUser = await findUserByHandle(query);
+      // 3. If still nothing, try exact handle match as fallback
+      if (foundUsers.length === 0) {
+        const byHandle = await findUserByHandle(query.replace(/^@/, ''));
+        if (byHandle && byHandle.id !== user.id) foundUsers.push(byHandle);
       }
 
-      if (foundUser && foundUser.id !== user.id) {
+      if (foundUsers.length > 0) {
         const [currentFriends, outgoingRequests] = await Promise.all([
           getUserFriends(user.id),
           getOutgoingFriendRequests(user.id),
@@ -134,27 +182,52 @@ export default function FindFriendsScreen() {
         const friendSet = new Set(currentFriends);
         const pendingSet = new Set(outgoingRequests.map((r: any) => r.toId));
 
-        setSearchResults([{
-          id: foundUser.id,
-          name: foundUser.name || 'Unknown',
-          handle: foundUser.handle,
-          photoUrl: foundUser.photoUrl,
-          campus: foundUser.campus || foundUser.campusOrCity,
-          isFriend: friendSet.has(foundUser.id),
-          isPending: pendingSet.has(foundUser.id),
-        }]);
+        // Deduplicate by id
+        const seen = new Set<string>();
+        const results: UserResult[] = [];
+        for (const u of foundUsers) {
+          if (seen.has(u.id)) continue;
+          seen.add(u.id);
+          results.push({
+            id: u.id,
+            name: u.name || 'Unknown',
+            handle: u.handle,
+            photoUrl: u.photoUrl,
+            campus: u.campus || u.campusOrCity,
+            isFriend: friendSet.has(u.id),
+            isPending: pendingSet.has(u.id),
+          });
+        }
+        setSearchResults(results);
       } else {
         setSearchResults([]);
       }
 
-      void logEvent('friend_search', user.id, { query: query.includes('@') ? 'email' : 'handle' });
+      void logEvent('friend_search', user.id, { query: query.includes('@') ? 'email' : 'name_or_handle' });
     } catch (error) {
-      console.error('Search failed:', error);
+      ok = false;
+      devLog('Search failed:', error);
       setSearchResults([]);
     } finally {
       setSearching(false);
+      void endPerfMark(markId, ok, { queryLength: searchQuery.trim().length });
     }
   }, [searchQuery, user?.id]);
+
+  // Debounced auto-search as user types (300ms delay)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      if (!q) { setSearchResults([]); setHasSearched(false); }
+      return;
+    }
+    debounceRef.current = setTimeout(() => {
+      void handleSearch();
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [searchQuery, handleSearch]);
 
   const handleSendRequest = async (targetUser: UserResult) => {
     if (!user?.id || targetUser.isFriend || targetUser.isPending) return;
@@ -174,8 +247,8 @@ export default function FindFriendsScreen() {
 
       void logEvent('friend_request_sent', user.id, { toUserId: targetUser.id, source: 'find_friends' });
     } catch (error) {
-      console.error('Failed to send friend request:', error);
-      Alert.alert('Error', 'Failed to send friend request. Please try again.');
+      devLog('Failed to send friend request:', error);
+      showToast('Failed to send friend request. Please try again.', 'error');
     } finally {
       setSendingTo(null);
     }
@@ -188,7 +261,7 @@ export default function FindFriendsScreen() {
       animated
       delay={index * 50}
       pressable
-      onPress={() => router.push(`/profile-view?userId=${userResult.id}`)}
+      onPress={() => router.push(`/profile-view?uid=${userResult.id}`)}
       style={styles.userCard}
     >
       <View style={styles.userContent}>
@@ -270,8 +343,6 @@ export default function FindFriendsScreen() {
     <ThemedView style={{ flex: 1 }}>
       <PolishedHeader
         title="Find Friends"
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
       />
 
       {/* Search Bar */}
@@ -280,7 +351,7 @@ export default function FindFriendsScreen() {
           <IconSymbol name="magnifyingglass" size={18} color={muted} />
           <TextInput
             style={[styles.searchInput, { color: text }]}
-            placeholder="Search by @handle or email"
+            placeholder="Search by name, @handle, or email"
             placeholderTextColor={muted}
             value={searchQuery}
             onChangeText={setSearchQuery}

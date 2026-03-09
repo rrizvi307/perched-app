@@ -1,32 +1,46 @@
 import Constants from 'expo-constants';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect, useRef } from 'react';
 import { AppState, InteractionManager, Platform } from 'react-native';
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
-import { ThemePreferenceProvider, useThemePreference } from '@/contexts/ThemePreferenceContext';
+import { ThemePreferenceProvider } from '@/contexts/ThemePreferenceContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initErrorReporting } from '@/services/errorReporting';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import { ToastProvider, useToast } from '@/contexts/ToastContext';
 import { Colors } from '@/constants/theme';
 import { ensureDemoModeReady, isDemoMode } from '@/services/demoMode';
+import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
-import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
-import { savePushToken } from '@/services/firebaseClient';
+import { initFirebaseAppCheck, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
+import { learnUserPreferences } from '@/services/recommendations';
+import { addNotificationResponseListener } from '@/services/smartNotifications';
+import { AppHeader } from '@/components/ui/app-header';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
 };
 
+const APP_LAUNCH_MARK_ID = startPerfMark('app_launch_total');
+
 export default function RootLayout() {
-  initErrorReporting();
-  initAnalytics();
+  useEffect(() => {
+    const initMarkId = startPerfMark('app_init_services');
+    try {
+      initErrorReporting();
+      initAnalytics();
+      void initFirebaseAppCheck();
+    } finally {
+      void endPerfMark(initMarkId, true);
+    }
+  }, []);
 
   useEffect(() => {
     // Initialize deep linking
@@ -50,10 +64,9 @@ export default function RootLayout() {
 function InnerApp() {
   const { user } = useAuth();
   const colorScheme = useColorScheme();
-  const { preference } = useThemePreference();
-  const mapsKey = (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY;
   const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
   const appState = useRef(AppState.currentState);
+  const interactiveMarked = useRef(false);
   const { showToast } = useToast();
   const lightNavTheme = {
     ...DefaultTheme,
@@ -80,15 +93,71 @@ function InnerApp() {
     },
   };
 
-  if (mapsKey && !(global as any).GOOGLE_MAPS_API_KEY) {
-    (global as any).GOOGLE_MAPS_API_KEY = mapsKey;
-  }
   if (firebaseConfig && !(global as any).FIREBASE_CONFIG) {
     (global as any).FIREBASE_CONFIG = firebaseConfig;
   }
 
   useEffect(() => {
-    void ensureDemoModeReady(user?.id);
+    if (!user?.id || isDemoMode()) return;
+    void refreshFirebaseAppCheckToken(true);
+  }, [user?.id]);
+
+  useEffect(() => {
+    let canceled = false;
+    if (Platform.OS === 'web') {
+      const timer = setTimeout(() => {
+        if (!canceled) {
+          void ensureDemoModeReady(user?.id);
+        }
+      }, 200);
+      return () => {
+        canceled = true;
+        clearTimeout(timer);
+      };
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (!canceled) {
+        void ensureDemoModeReady(user?.id);
+      }
+    });
+    return () => {
+      canceled = true;
+      task.cancel();
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (isDemoMode()) return;
+    void cleanupDemoDataForRealUser(user.id);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (interactiveMarked.current) return;
+    const markInteractive = () => {
+      if (interactiveMarked.current) return;
+      interactiveMarked.current = true;
+      void endPerfMark(APP_LAUNCH_MARK_ID, true);
+      void markPerfEvent('app_launch_interactive');
+    };
+
+    if (Platform.OS === 'web') {
+      const id = requestAnimationFrame(markInteractive);
+      return () => cancelAnimationFrame(id);
+    }
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      requestAnimationFrame(markInteractive);
+    });
+    return () => task.cancel();
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id || isDemoMode()) return;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void learnUserPreferences(user.id);
+    });
+    return () => task.cancel();
   }, [user?.id]);
 
   useEffect(() => {
@@ -132,54 +201,39 @@ function InnerApp() {
   }, [colorScheme]);
 
   useEffect(() => {
-    if (!user || isDemoMode()) return;
+    if (!user?.id || isDemoMode()) return;
     const runSync = async () => {
+      const markId = startPerfMark('app_pending_sync');
       try {
         const res = await syncPendingCheckins(5);
         if (res.synced > 0) {
           showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
         }
         await syncPendingProfileUpdates(5);
-      } catch {}
-    };
-
-    // Initialize push notifications
-    const setupNotifications = async () => {
-      try {
-        const token = await initPushNotifications();
-        if (token && user?.id) {
-          // Save token to Firebase for Cloud Function notifications
-          await savePushToken(user.id, token);
-        }
-        // Schedule weekly recap
-        await scheduleWeeklyRecap();
+        void endPerfMark(markId, true);
       } catch (error) {
-        console.error('Failed to setup notifications:', error);
+        void endPerfMark(markId, false, { error: String(error) });
       }
     };
 
     const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(() => {
       void runSync();
-      void setupNotifications();
     });
 
     if (Platform.OS === 'web') {
       void runSync();
-      // Skip notifications on web
     } else {
-      // Also set up notification response handler
       const notificationSubscription = addNotificationResponseListener((response) => {
-        // Handle notification tap - navigate based on type
         const notifType = response.notification.request.content.data?.type;
         if (notifType === 'achievement') {
-          // Navigate to achievements screen when implemented
-          // router.push('/achievements');
+          router.push('/achievements');
         }
       });
 
       const sub = AppState.addEventListener('change', async (next) => {
         if (appState.current.match(/inactive|background/) && next === 'active') {
           try {
+            await refreshFirebaseAppCheckToken();
             const res = await syncPendingCheckins(5);
             if (res.synced > 0) {
               showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
@@ -195,35 +249,42 @@ function InnerApp() {
         notificationSubscription.remove();
       };
     }
-  }, [showToast, user]);
+  }, [showToast, user?.id]);
 
   return (
-    <ThemeProvider key={`${colorScheme}-${preference}`} value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
+    <ThemeProvider value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
       <Stack
-	        screenOptions={{
-	          headerShown: false,
-	          gestureEnabled: true,
-	          fullScreenGestureEnabled: true,
-	          gestureResponseDistance: { start: 70 },
-	        }}
-	      >
+        screenOptions={{
+          headerShown: true,
+          header: (props) => <AppHeader {...props} />,
+          gestureEnabled: true,
+          fullScreenGestureEnabled: true,
+          gestureResponseDistance: { start: 70 },
+        }}
+      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="signin" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="signup" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="checkin" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="signin" options={{ title: 'Perched' }} />
+        <Stack.Screen name="signup" options={{ title: 'Create Account' }} />
+        <Stack.Screen name="onboarding" options={{ title: 'Welcome' }} />
+        <Stack.Screen name="checkin" options={{ title: 'Check In', presentation: 'modal' }} />
+        <Stack.Screen name="spot" options={{ title: 'Spot' }} />
+        <Stack.Screen name="story-card" options={{ title: 'Story Card' }} />
+        <Stack.Screen name="story-card.web" options={{ title: 'Story Card' }} />
         <Stack.Screen
           name="settings"
-	          options={{
-	            headerShown: false,
-	            gestureEnabled: true,
-	            fullScreenGestureEnabled: true,
-	            gestureResponseDistance: { start: 70 },
-	          }}
-	        />
-        <Stack.Screen name="verify" options={{ headerShown: false, gestureEnabled: false }} />
-        <Stack.Screen name="upgrade" options={{ headerShown: false }} />
-        <Stack.Screen name="achievements" options={{ headerShown: false }} />
+          options={{
+            title: 'Settings',
+            gestureEnabled: true,
+            fullScreenGestureEnabled: true,
+            gestureResponseDistance: { start: 70 },
+          }}
+        />
+        <Stack.Screen name="verify" options={{ title: 'Verify Account' }} />
+        <Stack.Screen name="upgrade" options={{ title: 'Account' }} />
+        <Stack.Screen name="premium-upgrade" options={{ title: 'Upgrade' }} />
+        <Stack.Screen name="achievements" options={{ title: 'Achievements' }} />
+        <Stack.Screen name="admin-observability" options={{ title: 'Observability' }} />
+        <Stack.Screen name="admin-reports" options={{ title: 'Reports' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />

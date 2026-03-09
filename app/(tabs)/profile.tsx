@@ -2,6 +2,7 @@ import ProfilePicture from '@/components/profile-picture';
 import PermissionSheet from '@/components/ui/permission-sheet';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H2, Label } from '@/components/ui/typography';
 import { StreakBadge } from '@/components/ui/streak-badge';
@@ -9,12 +10,15 @@ import { PolishedCard } from '@/components/ui/polished-card';
 import MetricsImpactCard from '@/components/ui/metrics-impact-card';
 import { PolishedLargeHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
+import { PremiumBadge } from '@/components/ui/premium-badge';
+import { usePremium } from '@/hooks/use-premium';
 import { getLocationOptions } from '@/constants/locations';
 import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import { getForegroundLocationIfPermitted } from '@/services/location';
 import StatusBanner from '@/components/ui/status-banner';
 import { useToast } from '@/contexts/ToastContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { isPremiumPurchasesEnabled } from '@/services/premium';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
@@ -22,17 +26,19 @@ import { gapStyle } from '@/utils/layout';
 import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, declineFriendRequest, findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, sendFriendRequest, setCloseFriendRemote, unfollowUserRemote, updateUserRemote } from '@/services/firebaseClient';
+import { findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, updateUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { getUserStats } from '@/services/gamification';
-import { getCheckins, getPermissionPrimerSeen, getSavedSpots, seedDemoNetwork, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
-import { isCheckinExpired, toMillis } from '@/services/checkinUtils';
-import { isPhoneLike, normalizePhone } from '@/utils/phone';
+import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
+import { toMillis } from '@/services/checkinUtils';
+import { normalizePhone } from '@/utils/phone';
+import { openExternalLink } from '@/services/externalLinks';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { Button, Platform, Pressable, RefreshControl, SectionList, Share, StyleSheet, Text, TextInput, View, useColorScheme } from 'react-native';
-import * as ExpoLinking from 'expo-linking';
+import { Button, Platform, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View, useColorScheme } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
 
 type CheckinRow = { key: string; items: any[] };
@@ -54,6 +60,8 @@ function toRows(items: any[], columns = 2): CheckinRow[] {
 export default function ProfileScreen() {
   const { user, updateProfile } = useAuth();
   const { preference } = useThemePreference();
+  const { isPremium } = usePremium();
+  const premiumPurchasesEnabled = isPremiumPurchasesEnabled();
   const systemScheme = useColorScheme();
   const textColor = useThemeColor({}, 'text');
   const borderColor = useThemeColor({}, 'border');
@@ -66,28 +74,27 @@ export default function ProfileScreen() {
   const separator = withAlpha(textColor, 0.08);
   const [checkins, setCheckins] = useState<any[]>([]);
   const router = useRouter();
-  const [friendIds, setFriendIds] = useState<string[]>([]);
-  const [friends, setFriends] = useState<any[]>([]);
-  const [closeFriendIds, setCloseFriendIds] = useState<string[]>([]);
-  const [recentByUser, setRecentByUser] = useState<Record<string, number>>({});
-  const [activeSuggestions, setActiveSuggestions] = useState<any[]>([]);
-  const [incomingRequests, setIncomingRequests] = useState<any[]>([]);
-  const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
-  const [requestUsers, setRequestUsers] = useState<Record<string, any>>({});
-  const [searchEmail, setSearchEmail] = useState('');
-  const [searchResult, setSearchResult] = useState<any | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [suggestedFriends, setSuggestedFriends] = useState<any[]>([]);
+  const [, setFriendIds] = useState<string[]>([]);
+  const [, setFriends] = useState<any[]>([]);
+  const [, setCloseFriendIds] = useState<string[]>([]);
+  const [, setRecentByUser] = useState<Record<string, number>>({});
+  const [, setActiveSuggestions] = useState<any[]>([]);
+  const [, setIncomingRequests] = useState<any[]>([]);
+  const [, setOutgoingRequests] = useState<any[]>([]);
+  const [, setRequestUsers] = useState<Record<string, any>>({});
+  const [, setSuggestedFriends] = useState<any[]>([]);
   const [cityDraft, setCityDraft] = useState(user?.city || '');
   const [campusDraft, setCampusDraft] = useState(user?.campus || '');
   const [cityQuery, setCityQuery] = useState('');
   const [cityTouched, setCityTouched] = useState(false);
   const [cityResults, setCityResults] = useState<string[]>([]);
   const [cityLoading, setCityLoading] = useState(false);
+  const [cityDropdownOpen, setCityDropdownOpen] = useState(false);
   const [campusQuery, setCampusQuery] = useState('');
   const [campusTouched, setCampusTouched] = useState(false);
   const [campusResults, setCampusResults] = useState<string[]>([]);
   const [campusLoading, setCampusLoading] = useState(false);
+  const [campusDropdownOpen, setCampusDropdownOpen] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState(user?.phone || '');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(user?.name || '');
@@ -96,8 +103,8 @@ export default function ProfileScreen() {
   const [geoBias, setGeoBias] = useState<{ lat: number; lng: number } | null>(null);
   const [editingHandle, setEditingHandle] = useState(false);
   const [handleDraft, setHandleDraft] = useState(user?.handle || '');
-  const [contactMatches, setContactMatches] = useState<any[]>([]);
-  const [contactError, setContactError] = useState<string | null>(null);
+  const [, setContactMatches] = useState<any[]>([]);
+  const [, setContactError] = useState<string | null>(null);
   const [savedSpots, setSavedSpots] = useState<any[]>([]);
   const [showContactsPrimer, setShowContactsPrimer] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -105,6 +112,8 @@ export default function ProfileScreen() {
   const { showToast } = useToast();
   const wasOfflineRef = useRef(false);
   const [userStats, setUserStats] = useState<{ streakDays: number; totalCheckins: number; uniqueSpots: number } | null>(null);
+  const [showStreakCelebration, setShowStreakCelebration] = useState(false);
+  const prevStreakRef = useRef(0);
   const fbAvailable = isFirebaseConfigured();
   const storyMode = preference === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : preference;
   const profileCompletion = useMemo(() => {
@@ -117,32 +126,17 @@ export default function ProfileScreen() {
     const pct = Math.round(((total - missing.length) / total) * 100);
     return { pct, missing };
   }, [user]);
-  const requestUserMap = useMemo(() => ({ ...requestUsers }), [requestUsers]);
   const historySections = useMemo(() => {
+    // Posts no longer expire; keep a single newest-first history section.
     const sorted = (checkins || []).slice().sort((a: any, b: any) => createdAtMs(b) - createdAtMs(a));
-    const now = Date.now();
-    const live = sorted.filter((c: any) => !isCheckinExpired(c, now));
-    const expired = sorted.filter((c: any) => isCheckinExpired(c, now));
-    return [
-      { key: 'live', title: 'Live', data: toRows(live, 2) },
-      { key: 'expired', title: 'Expired', data: toRows(expired, 2) },
-    ].filter((s) => s.data.length);
+    return [{ key: 'all', title: 'All posts', data: toRows(sorted, 2) }].filter((s) => s.data.length);
   }, [checkins]);
 
   const loadCheckins = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (isDemoMode()) {
-        try {
-          await seedDemoNetwork(user?.id);
-        } catch {}
-        const local = await getCheckins();
-        const mine = local.filter((c: any) => c.userId === user?.id);
-        setCheckins(mine);
-        setStatus(null);
-        return;
-      }
       const remoteRes = await getCheckinsForUserRemote(user?.id || '', 180);
+      const remoteFallback = (remoteRes as any)?.source === 'fallback';
       const remote = Array.isArray(remoteRes) ? remoteRes : (remoteRes && (remoteRes.items ?? [])) as any[];
       const mineRemote = remote.filter((c: any) => c.userId === user?.id);
       const local = await getCheckins();
@@ -152,16 +146,40 @@ export default function ProfileScreen() {
       const merged = [...mineRemote, ...mineLocal.filter((c: any) => !remoteKeys.has(keyOf(c)))];
       // Keep full history in Profile; Feed/Explore handle "live now" filtering separately.
       setCheckins(merged);
-      setStatus(null);
-      if (wasOfflineRef.current) {
+      setStatus(remoteFallback
+        ? {
+            message: merged.length
+              ? 'Live profile updates are unavailable. Showing your saved check-ins.'
+              : 'Unable to load profile history right now. Pull to retry.',
+            tone: 'warning',
+          }
+        : null);
+      try {
+        const refreshedStats = await getUserStats();
+        setUserStats(refreshedStats);
+      } catch {}
+      if (!remoteFallback && wasOfflineRef.current) {
         showToast('Back online. Profile updated.', 'success');
         wasOfflineRef.current = false;
       }
+      if (remoteFallback) {
+        wasOfflineRef.current = true;
+      }
     } catch {
+      if (isDemoMode()) {
+        setCheckins([]);
+        setStatus({ message: 'Demo mode uses cloud data only. Connect to refresh.', tone: 'warning' });
+        wasOfflineRef.current = true;
+        return;
+      }
       const local = await getCheckins();
       const mine = local.filter((c: any) => c.id?.startsWith(user?.id || 'local-') || c.userId === user?.id);
       setCheckins(mine);
       setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
+      try {
+        const refreshedStats = await getUserStats();
+        setUserStats(refreshedStats);
+      } catch {}
       wasOfflineRef.current = true;
     } finally {
       setRefreshing(false);
@@ -248,6 +266,17 @@ export default function ProfileScreen() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const milestones = [7, 14, 30, 50, 100];
+    const current = userStats?.streakDays || 0;
+    if (current > prevStreakRef.current && milestones.includes(current)) {
+      setShowStreakCelebration(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setTimeout(() => setShowStreakCelebration(false), 2500);
+    }
+    prevStreakRef.current = current;
+  }, [userStats?.streakDays]);
 
   useEffect(() => {
     if (user?.handle) setHandleDraft(user.handle);
@@ -642,50 +671,9 @@ export default function ProfileScreen() {
     }
   }
 
-  async function handleSearch() {
-    if (!searchEmail.trim()) return;
-    setSearching(true);
-    try {
-      const trimmed = searchEmail.trim();
-      const res = trimmed.startsWith('@')
-        ? await findUserByHandle(trimmed)
-        : isPhoneLike(trimmed)
-          ? await findUserByPhone(trimmed)
-          : await findUserByEmail(trimmed);
-      setSearchResult(res);
-    } catch {
-      setSearchResult(null);
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  async function sendRequest(targetId: string) {
-    if (!user) return;
-    await sendFriendRequest(user.id, targetId);
-    await refreshFriends();
-  }
-
-  async function acceptRequest(request: any) {
-    if (!user) return;
-    await acceptFriendRequest(request.id, request.fromId, request.toId);
-    await refreshFriends();
-  }
-
-  async function declineRequest(request: any) {
-    await declineFriendRequest(request.id);
-    await refreshFriends();
-  }
-
-  async function removeFriend(targetId: string) {
-    if (!user) return;
-    await unfollowUserRemote(user.id, targetId);
-    await refreshFriends();
-  }
-
-
   async function loadContacts() {
     setContactError(null);
+    const startedAt = Date.now();
     try {
       const seen = await getPermissionPrimerSeen('contacts');
       if (!seen) {
@@ -696,15 +684,24 @@ export default function ProfileScreen() {
       const Contacts = req('expo-contacts');
       if (!Contacts?.requestPermissionsAsync) {
         setContactError('Contacts unavailable on this build.');
+        devLog('contacts_sync_unavailable', { platform: Platform.OS });
         return;
       }
-      const { status } = await Contacts.requestPermissionsAsync();
+      const currentPerm = Contacts.getPermissionsAsync ? await Contacts.getPermissionsAsync().catch(() => null) : null;
+      const { status, canAskAgain } = await Contacts.requestPermissionsAsync();
+      devLog('contacts_sync_permission', {
+        platform: Platform.OS,
+        initialStatus: currentPerm?.status || null,
+        status,
+        canAskAgain: canAskAgain ?? null,
+      });
       if (status !== 'granted') {
-        setContactError('Contacts permission denied');
+        setContactError(canAskAgain === false ? 'Contacts permission denied. Enable it from Settings.' : 'Contacts permission denied.');
         return;
       }
       const fields = [Contacts.Fields.Emails];
       if (Contacts.Fields.PhoneNumbers) fields.push(Contacts.Fields.PhoneNumbers);
+      const fetchStartedAt = Date.now();
       const { data } = await Contacts.getContactsAsync({ fields });
       const emails = (data || [])
         .flatMap((c: any) => (c.emails || []).map((e: any) => e.email))
@@ -724,19 +721,25 @@ export default function ProfileScreen() {
         if (match && !matchesMap.has(match.id)) matchesMap.set(match.id, match);
       });
       setContactMatches(Array.from(matchesMap.values()).slice(0, 8));
+      devLog('contacts_sync_complete', {
+        platform: Platform.OS,
+        totalContacts: Array.isArray(data) ? data.length : 0,
+        uniqueEmails: uniqueEmails.length,
+        uniquePhones: uniquePhones.length,
+        matches: matchesMap.size,
+        fetchDurationMs: Date.now() - fetchStartedAt,
+        totalDurationMs: Date.now() - startedAt,
+      });
+      if (!matchesMap.size) {
+        setContactError('No matches found in contacts yet.');
+      }
     } catch {
-      setContactError('Unable to load contacts');
+      devLog('contacts_sync_failed', {
+        platform: Platform.OS,
+        totalDurationMs: Date.now() - startedAt,
+      });
+      setContactError('Unable to load contacts right now. Try again in a moment.');
     }
-  }
-
-  async function inviteFriends() {
-    try {
-      const message = user?.handle
-        ? `Join me on Perched — @${user.handle}\nDownload: https://perched.app`
-        : 'Join me on Perched.\nDownload: https://perched.app';
-      await Share.share({ message });
-      await logEvent('invite_shared', user?.id);
-    } catch {}
   }
 
   return (
@@ -783,8 +786,6 @@ export default function ProfileScreen() {
             <PolishedLargeHeader
               title={user?.name || 'Profile'}
               subtitle={user?.handle ? `@${user.handle}` : 'Add a username'}
-              rightIcon="gearshape.fill"
-              onRightPress={() => router.push('/settings')}
             />
             {status ? (
               <StatusBanner
@@ -802,9 +803,12 @@ export default function ProfileScreen() {
             <View style={[{ flexDirection: 'row', alignItems: 'center' }, gapStyle(12)]}>
               <ProfilePicture size={84} />
               <View style={{ flex: 1 }}>
-                <Body style={{ color: textColor, marginBottom: 4 }}>
-                  {user ? `${user.name || 'Your profile'}` : 'Not signed in'}
-                </Body>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <Body style={{ color: textColor }}>
+                    {user ? `${user.name || 'Your profile'}` : 'Not signed in'}
+                  </Body>
+                  {isPremium && <PremiumBadge size="small" />}
+                </View>
                 <Text style={{ color: muted, fontSize: 13 }}>
                   {user?.handle ? `@${user.handle}` : 'Add a username'}
                 </Text>
@@ -840,12 +844,26 @@ export default function ProfileScreen() {
                 >
                   View Achievements
                 </PremiumButton>
+                {premiumPurchasesEnabled || isPremium ? (
+                  <PremiumButton
+                    onPress={() => router.push('/subscription' as any)}
+                    variant={isPremium ? 'ghost' : 'primary'}
+                    size="medium"
+                    icon={isPremium ? 'sparkles' : 'star.fill'}
+                    fullWidth
+                    style={{ marginTop: 8 }}
+                  >
+                    {isPremium ? 'Manage Premium' : 'Upgrade to Premium'}
+                  </PremiumButton>
+                ) : null}
               </>
             )}
             <MetricsImpactCard />
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
                 onPress={() => router.push('/verify')}
+                accessibilityRole="button"
+                accessibilityLabel="Verify your email"
                 style={[styles.banner, { borderColor, backgroundColor: withAlpha(danger, 0.12) }]}
               >
                 <Text style={{ color: danger, fontWeight: '600' }}>Email not verified — tap to resend</Text>
@@ -881,20 +899,25 @@ export default function ProfileScreen() {
                       onChangeText={(text) => {
                         setCityTouched(true);
                         setCityQuery(text);
+                        setCityDropdownOpen(true);
                       }}
+                      onFocus={() => { if (cityQuery.trim()) setCityDropdownOpen(true); }}
                       style={[styles.input, { borderColor, backgroundColor: cardBg, color: textColor }]}
                     />
                     {detectingCity && !cityDraft ? <Text style={{ color: muted, marginBottom: 8 }}>Detecting your city...</Text> : null}
                     {cityLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-                    {cityQuery.trim().length ? (
+                    {cityDropdownOpen && cityQuery.trim().length ? (
                       <View style={[styles.suggestionList, { borderColor, backgroundColor: cardBg }]}>
                         {(cityResults.length ? cityResults : getLocationOptions('city', cityQuery).slice(0, 8)).map((option) => (
                           <Pressable
                             key={option}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Select city ${option}`}
                             onPress={() => {
                               setCityDraft(option);
                               setCityQuery(option);
                               setCityTouched(true);
+                              setCityDropdownOpen(false);
                             }}
                             style={({ pressed }) => [
                               styles.locationRow,
@@ -922,6 +945,8 @@ export default function ProfileScreen() {
                           setCityDraft(detected);
                           setCityQuery(detected);
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Use current city"
                         style={[styles.inlineButton, { borderColor }]}
                       >
                         <Text style={{ color: primary, fontWeight: '600' }}>Use current city</Text>
@@ -936,19 +961,24 @@ export default function ProfileScreen() {
                       onChangeText={(text) => {
                         setCampusTouched(true);
                         setCampusQuery(text);
+                        setCampusDropdownOpen(true);
                       }}
+                      onFocus={() => { if (campusQuery.trim()) setCampusDropdownOpen(true); }}
                       style={[styles.input, { borderColor, backgroundColor: cardBg, color: textColor }]}
                     />
                     {campusLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-                    {campusQuery.trim().length ? (
+                    {campusDropdownOpen && campusQuery.trim().length ? (
                       <View style={[styles.suggestionList, { borderColor, backgroundColor: cardBg }]}>
                         {(campusResults.length ? campusResults : getLocationOptions('campus', campusQuery).slice(0, 8)).map((option) => (
                           <Pressable
                             key={option}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Select campus ${option}`}
                             onPress={() => {
                               setCampusDraft(option);
                               setCampusQuery(option);
                               setCampusTouched(true);
+                              setCampusDropdownOpen(false);
                             }}
                             style={({ pressed }) => [
                               styles.locationRow,
@@ -980,6 +1010,8 @@ export default function ProfileScreen() {
                     <View style={{ flexDirection: 'row' }}>
                   <Pressable
                     onPress={saveNameAndCampus}
+                    accessibilityRole="button"
+                    accessibilityLabel={savingName ? 'Saving profile' : 'Save profile'}
                     style={[styles.inlineButton, { backgroundColor: primary }, nameSaveDisabled ? { opacity: 0.5 } : null]}
                     disabled={nameSaveDisabled}
                   >
@@ -1004,6 +1036,8 @@ export default function ProfileScreen() {
                           setCampusQuery(user.campus || '');
                           setPhoneDraft(user.phone || '');
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Cancel profile changes"
                         style={[styles.inlineButton, { borderColor }]}
                       >
                         <Text style={{ color: textColor }}>Cancel</Text>
@@ -1012,7 +1046,12 @@ export default function ProfileScreen() {
                   </View>
                 ) : (
                   <View style={[{ flexDirection: 'row', alignItems: 'center' }, gapStyle(12)]}>
-                    <Pressable onPress={() => setEditingName(true)} style={styles.linkButton}>
+                    <Pressable
+                      onPress={() => setEditingName(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit profile"
+                      style={styles.linkButton}
+                    >
                       <Text style={{ color: primary, fontWeight: '600' }}>Edit profile</Text>
                     </Pressable>
                   </View>
@@ -1045,6 +1084,8 @@ export default function ProfileScreen() {
                       <View style={{ height: 6 }} />
                       <Pressable
                         onPress={saveHandle}
+                        accessibilityRole="button"
+                        accessibilityLabel={savingHandle ? 'Saving handle' : 'Save handle'}
                         style={[styles.inlineButton, { backgroundColor: primary }, handleSaveDisabled ? { opacity: 0.5 } : null]}
                         disabled={handleSaveDisabled}
                       >
@@ -1052,7 +1093,12 @@ export default function ProfileScreen() {
                       </Pressable>
                     </View>
                   ) : (
-                    <Pressable onPress={() => setEditingHandle(true)} style={styles.linkButton}>
+                    <Pressable
+                      onPress={() => setEditingHandle(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel={user?.handle ? 'Edit handle' : 'Add handle'}
+                      style={styles.linkButton}
+                    >
                       <Text style={{ color: primary, fontWeight: '600' }}>{user?.handle ? 'Edit @handle' : 'Add @handle'}</Text>
                     </Pressable>
                   )}
@@ -1096,6 +1142,8 @@ export default function ProfileScreen() {
                   {savedSpots.map((s: any) => (
                     <Pressable
                       key={s.key}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open saved spot ${s.name}`}
                       onPress={() => {
                         try {
                           router.push(`/spot?placeId=${encodeURIComponent(s.placeId || '')}&name=${encodeURIComponent(s.name || '')}`);
@@ -1112,276 +1160,17 @@ export default function ProfileScreen() {
                 <View style={{ marginTop: 16 }}>
                   <H2 style={{ color: textColor }}>Saved spots</H2>
                   <Text style={{ color: muted, marginTop: 6 }}>Save your favorite places to find them fast.</Text>
-                  <Pressable onPress={() => router.push('/(tabs)/explore')} style={[styles.inlineButton, { borderColor, marginTop: 12 }]}>
+                  <Pressable
+                    onPress={() => router.push('/(tabs)/explore')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Explore spots"
+                    style={[styles.inlineButton, { borderColor, marginTop: 12 }]}
+                  >
                     <Text style={{ color: primary, fontWeight: '600' }}>Explore spots</Text>
                   </Pressable>
                 </View>
               )}
             </PolishedCard>
-
-            <View style={{ height: 20 }} />
-            <H2 style={{ color: textColor }}>Friends</H2>
-            <View style={[styles.friendCard, { backgroundColor: cardBg, borderColor }]}>
-              {!fbAvailable ? (
-                <Text style={{ color: muted, marginBottom: 8 }}>
-                  Demo mode: try adding @mayap or @jonstudy to test friends.
-                </Text>
-              ) : null}
-              <View style={styles.friendActions}>
-                <Pressable onPress={loadContacts} style={[styles.friendChip, { borderColor }]}>
-                  <Text style={{ color: muted }}>Sync contacts</Text>
-                </Pressable>
-                <Pressable onPress={inviteFriends} style={[styles.friendChip, { backgroundColor: primary }]}>
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Invite</Text>
-                </Pressable>
-              </View>
-              <Text style={{ color: muted, marginTop: 6 }}>
-                Sync contacts to match phone numbers, or search by email/@handle below.
-              </Text>
-              {contactError ? <Text style={{ color: muted, marginTop: 6 }}>{contactError}</Text> : null}
-              {contactMatches.length ? (
-                <View style={{ marginTop: 10 }}>
-                  <Text style={{ color: muted, marginBottom: 6 }}>From your contacts</Text>
-                  {contactMatches.map((c) => (
-                    <Pressable
-                      key={`contact-${c.id}`}
-                      style={({ pressed }) => [
-                        styles.friendRow,
-                        { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                      ]}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: textColor, fontWeight: '700' }}>{c.name || 'Contact'}</Text>
-                        <Text style={{ color: muted }}>{c.handle ? `@${c.handle}` : c.email || c.phone || '—'}</Text>
-                      </View>
-                      <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={() => sendRequest(c.id)}>
-                        <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
-                      </Pressable>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : null}
-              <Text style={{ color: muted, marginBottom: 8 }}>Find friends by email, phone, or @handle</Text>
-              <View style={styles.searchRow}>
-                <TextInput
-                  value={searchEmail}
-                  onChangeText={setSearchEmail}
-                  placeholder="Email, phone, or @handle"
-                  placeholderTextColor={muted}
-                  autoCapitalize="none"
-                  style={[styles.searchInput, { borderColor, backgroundColor: cardBg, color: textColor }]}
-                />
-                <Pressable onPress={handleSearch} style={[styles.searchButton, { backgroundColor: primary }]} disabled={searching}>
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>{searching ? '...' : 'Search'}</Text>
-                </Pressable>
-              </View>
-              {searchResult ? (
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.friendRow,
-                    { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: textColor, fontWeight: '700' }}>{searchResult.name || 'Unnamed'}</Text>
-                    <Text style={{ color: muted }}>
-                      {searchResult.handle ? `@${searchResult.handle}` : searchResult.email || searchResult.phone || 'No email'}
-                    </Text>
-                  </View>
-                  {user && searchResult.id === user.id ? (
-                    <Text style={{ color: muted }}>You</Text>
-                  ) : friendIds.includes(searchResult.id) ? (
-                    <Pressable style={[styles.friendChip, { backgroundColor: cardBg, borderColor }]} disabled>
-                      <Text style={{ color: textColor, fontWeight: '600' }}>Friends</Text>
-                    </Pressable>
-                  ) : outgoingRequests.find((r) => r.toId === searchResult.id) ? (
-                    <Pressable
-                      style={[styles.friendChip, { backgroundColor: cardBg, borderColor }]}
-                      onPress={async () => {
-                        const req = outgoingRequests.find((r) => r.toId === searchResult.id);
-                        if (req) await declineRequest(req);
-                      }}
-                    >
-                      <Text style={{ color: muted }}>Requested</Text>
-                    </Pressable>
-                  ) : incomingRequests.find((r) => r.fromId === searchResult.id) ? (
-                    <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={async () => {
-                      const req = incomingRequests.find((r) => r.fromId === searchResult.id);
-                      if (req) await acceptRequest(req);
-                    }}>
-                      <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Accept</Text>
-                    </Pressable>
-                  ) : (
-                    <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={() => sendRequest(searchResult.id)}>
-                      <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
-                    </Pressable>
-                  )}
-                </Pressable>
-              ) : null}
-
-              {incomingRequests.length ? (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={{ color: muted, marginBottom: 6 }}>Requests</Text>
-                  {incomingRequests.map((req) => {
-                    const reqUser = requestUserMap[req.fromId];
-                    return (
-                      <Pressable
-                        key={req.id}
-                        style={({ pressed }) => [
-                          styles.friendRow,
-                          { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                        ]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: textColor, fontWeight: '700' }}>{reqUser?.name || 'New friend'}</Text>
-                          <Text style={{ color: muted }}>{reqUser?.email || 'Tap to accept'}</Text>
-                        </View>
-                        <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={() => acceptRequest(req)}>
-                          <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Accept</Text>
-                        </Pressable>
-                        <Pressable style={[styles.friendChip, { borderColor }]} onPress={() => declineRequest(req)}>
-                          <Text style={{ color: muted }}>Decline</Text>
-                        </Pressable>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ) : null}
-
-              {outgoingRequests.length ? (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={{ color: muted, marginBottom: 6 }}>Pending</Text>
-                  {outgoingRequests.map((req) => {
-                    const reqUser = requestUserMap[req.toId];
-                    return (
-                      <Pressable
-                        key={req.id}
-                        style={({ pressed }) => [
-                          styles.friendRow,
-                          { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                        ]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: textColor, fontWeight: '700' }}>{reqUser?.name || 'Pending friend'}</Text>
-                          <Text style={{ color: muted }}>{reqUser?.handle ? `@${reqUser.handle}` : reqUser?.email || 'Requested'}</Text>
-                        </View>
-                        <Pressable style={[styles.friendChip, { borderColor }]} onPress={() => declineRequest(req)}>
-                          <Text style={{ color: muted }}>Cancel</Text>
-                        </Pressable>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ) : null}
-
-              {friends.length ? (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={{ color: muted, marginBottom: 6 }}>Your friends</Text>
-                  {friends.map((f) => (
-                    <Pressable
-                      key={f.id}
-                      style={({ pressed }) => [
-                        styles.friendRow,
-                        { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                      ]}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: textColor, fontWeight: '700' }}>{f.name || 'Friend'}</Text>
-                        <Text style={{ color: muted }}>
-                          {f.handle ? `@${f.handle}` : f.email || f.campus || f.city || f.campusOrCity || '—'}
-                          {recentByUser[f.id] ? ' · Active' : ''}
-                        </Text>
-                      </View>
-                      <Pressable
-                        style={[
-                          styles.friendChip,
-                          {
-                            backgroundColor: closeFriendIds.includes(f.id) ? primary : 'transparent',
-                            borderColor,
-                          },
-                        ]}
-                        onPress={async () => {
-                          if (!user) return;
-                          const isClose = closeFriendIds.includes(f.id);
-                          try {
-                            await setCloseFriendRemote(user.id, f.id, !isClose);
-                            await refreshFriends();
-                          } catch {}
-                        }}
-                      >
-                        <Text style={{ color: closeFriendIds.includes(f.id) ? '#FFFFFF' : muted, fontWeight: '700' }}>
-                          Close
-                        </Text>
-                      </Pressable>
-                      <Pressable style={[styles.friendChip, { borderColor }]} onPress={() => removeFriend(f.id)}>
-                        <Text style={{ color: muted }}>Remove</Text>
-                      </Pressable>
-                    </Pressable>
-                  ))}
-                </View>
-              ) : (
-                <Text style={{ color: muted, marginTop: 10 }}>No friends yet. Add someone to see their check-ins.</Text>
-              )}
-            </View>
-
-            {activeSuggestions.length ? (
-              <View style={{ marginTop: 16 }}>
-                <Text style={{ color: muted, marginBottom: 6 }}>Active near you</Text>
-                {activeSuggestions.map((s) => (
-                  <Pressable
-                    key={`active-${s.id}`}
-                    style={({ pressed }) => [
-                      styles.friendRow,
-                      { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                    ]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: textColor, fontWeight: '700' }}>{s.name || 'Student'}</Text>
-                      <Text style={{ color: muted }}>
-                        {s.handle ? `@${s.handle}` : s.email || s.campus || s.city || s.campusOrCity || '—'}
-                        {recentByUser[s.id] ? ' · Active' : ''}
-                      </Text>
-                    </View>
-                    <View style={[styles.friendChip, { borderColor }]}>
-                      <Text style={{ color: muted }}>{(recentByUser[s.id] || 0) > 0 ? 'Active now' : 'Recently'}</Text>
-                    </View>
-                    <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={() => sendRequest(s.id)}>
-                      <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
-                    </Pressable>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-
-            {suggestedFriends.length ? (
-              <View style={{ marginTop: 16 }}>
-                <Text style={{ color: muted, marginBottom: 6 }}>Suggested from your campus</Text>
-                {suggestedFriends.map((s) => (
-                  <Pressable
-                    key={s.id}
-                    style={({ pressed }) => [
-                      styles.friendRow,
-                      { borderColor, backgroundColor: pressed ? highlight : 'transparent' },
-                    ]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: textColor, fontWeight: '700' }}>{s.name || 'Student'}</Text>
-                      <Text style={{ color: muted }}>
-                        {s.handle ? `@${s.handle}` : s.email || s.campus || s.city || s.campusOrCity || '—'}
-                      </Text>
-                    </View>
-                    {(recentByUser[s.id] || 0) > 0 ? (
-                      <View style={[styles.friendChip, { borderColor }]}>
-                        <Text style={{ color: muted }}>Active now</Text>
-                      </View>
-                    ) : null}
-                    <Pressable style={[styles.friendChip, { backgroundColor: primary }]} onPress={() => sendRequest(s.id)}>
-                      <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
-                    </Pressable>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
 
             <View style={{ height: 12 }} />
             <View style={[styles.softDivider, { backgroundColor: separator }]} />
@@ -1413,6 +1202,8 @@ export default function ProfileScreen() {
                     alert('Unable to build story card');
                   }
                 }}
+                accessibilityRole="button"
+                accessibilityLabel="Create story card"
                 style={[styles.storyButton, { backgroundColor: primary }]}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Create story card</Text>
@@ -1436,7 +1227,9 @@ export default function ProfileScreen() {
           <View style={{ marginTop: 18, marginBottom: 40, alignItems: 'center' }}>
             <View style={styles.socialRow}>
               <Pressable
-                onPress={() => ExpoLinking.openURL('https://instagram.com/perchedapp')}
+                onPress={() => {
+                  void openExternalLink('https://instagram.com/perchedapp');
+                }}
                 accessibilityLabel="Perched on Instagram"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1446,7 +1239,9 @@ export default function ProfileScreen() {
                 <FontAwesome5 name="instagram" size={18} color={textColor} />
               </Pressable>
               <Pressable
-                onPress={() => ExpoLinking.openURL('https://tiktok.com/@perchedapp')}
+                onPress={() => {
+                  void openExternalLink('https://tiktok.com/@perchedapp');
+                }}
                 accessibilityLabel="Perched on TikTok"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1456,7 +1251,9 @@ export default function ProfileScreen() {
                 <FontAwesome5 name="tiktok" size={18} color={textColor} />
               </Pressable>
               <Pressable
-                onPress={() => ExpoLinking.openURL('mailto:perchedappteam@gmail.com')}
+                onPress={() => {
+                  void openExternalLink('mailto:perchedappteam@gmail.com');
+                }}
                 accessibilityLabel="Email Perched"
                 style={({ pressed }) => [
                   styles.socialButton,
@@ -1478,6 +1275,8 @@ export default function ProfileScreen() {
               return (
                 <Pressable
                   key={it.id || it.clientId || `${row.key}-${idx}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open post from ${it.spotName || it.spot || 'saved check-in'}`}
                   onPress={() => {
                     if (!focus) return;
                     router.push(`/my-posts?focus=${encodeURIComponent(focus)}${sectionKey ? `&section=${encodeURIComponent(sectionKey)}` : ''}` as any);
@@ -1485,7 +1284,7 @@ export default function ProfileScreen() {
                   style={({ pressed }) => [{ flex: 1, margin: 6, opacity: pressed ? 0.88 : 1 }]}
                 >
                   <SpotImage
-                    source={{ uri: it.photoUrl || it.photoURL || it.imageUrl || it.imageURL || it.image }}
+                    source={{ uri: resolvePhotoUri(it) || '' }}
                     style={[styles.gridImage, { borderColor }]}
                   />
                 </Pressable>
@@ -1494,6 +1293,7 @@ export default function ProfileScreen() {
           </View>
         )}
       />
+      <CelebrationOverlay visible={showStreakCelebration} />
     </ThemedView>
   );
 }

@@ -5,8 +5,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { devLog } from '@/services/logger';
 import { Button } from '@/components/button';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
 export default function Verify() {
@@ -19,6 +19,22 @@ export default function Verify() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const appState = useRef(AppState.currentState);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (appState.current.match(/inactive|background/) && nextState === 'active') {
+        void (async () => {
+          const ok = await refreshUser();
+          if (ok) router.replace('/(tabs)/feed');
+        })();
+      }
+      appState.current = nextState;
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [refreshUser, router]);
 
   async function doResend() {
     if (!resendVerification) return;

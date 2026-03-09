@@ -96,8 +96,20 @@ export type ExternalSpotData = {
 
 // ============ API CONFIGURATION ============
 
+function isClientProviderCallsEnabled(): boolean {
+  const raw =
+    (process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    (process.env.ENABLE_CLIENT_PROVIDER_CALLS as string) ||
+    '';
+  const enabled = ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
+  return !!__DEV__ && enabled;
+}
+
 // Get API keys from Expo Constants (set via app.config.js / environment)
 function getApiKey(key: string): string {
+  // Security hardening: do not allow provider keys from client runtime in production builds.
+  if (!isClientProviderCallsEnabled()) return '';
+
   // Try Expo config extra first
   const extra = (Constants.expoConfig as any)?.extra;
   if (extra?.[key]) return extra[key];

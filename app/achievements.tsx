@@ -1,9 +1,11 @@
 import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ACHIEVEMENTS, getUserStats, getUnlockedAchievements, UserStats } from '@/services/gamification';
 import { AchievementCard } from '@/components/ui/achievement-card';
+import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { H1, Body } from '@/components/ui/typography';
@@ -32,28 +34,49 @@ export default function AchievementsScreen() {
   const [stats, setStats] = useState<UserStats | null>(null);
   const [unlocked, setUnlocked] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevUnlockedCountRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [statsData, unlockedData] = await Promise.all([
-          getUserStats(),
-          getUnlockedAchievements(),
-        ]);
-        setStats(statsData);
-        setUnlocked(unlockedData);
-      } catch (error) {
-        console.error('Failed to load achievements:', error);
-      } finally {
-        setLoading(false);
-      }
+  const loadAchievements = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [statsData, unlockedData] = await Promise.all([
+        getUserStats(),
+        getUnlockedAchievements(),
+      ]);
+      setStats(statsData);
+      setUnlocked(unlockedData);
+    } catch (error) {
+      console.error('Failed to load achievements:', error);
+    } finally {
+      setLoading(false);
     }
-    load();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadAchievements();
+    }, [loadAchievements])
+  );
 
   const unlockedIds = unlocked.map(a => a.id);
   const unlockedCount = unlockedIds.length;
-  const totalCount = ACHIEVEMENTS.length;
+  const specialAchievements = unlocked.filter(
+    (achievement) => !ACHIEVEMENTS.some((baseAchievement) => baseAchievement.id === achievement.id)
+  );
+  const totalCount = ACHIEVEMENTS.length + specialAchievements.length;
+
+  useEffect(() => {
+    if (prevUnlockedCountRef.current === null) {
+      prevUnlockedCountRef.current = unlockedCount;
+      return;
+    }
+    if (unlockedCount > prevUnlockedCountRef.current) {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 2500);
+    }
+    prevUnlockedCountRef.current = unlockedCount;
+  }, [unlockedCount]);
 
   const categories = {
     'Explorer': ACHIEVEMENTS.filter((a) => getAchievementCategory(a.id) === 'exploration'),
@@ -145,19 +168,39 @@ export default function AchievementsScreen() {
             );
           })}
 
-          {unlockedCount === 0 && (
-            <View style={styles.emptyState}>
-              <Text style={{ fontSize: 48, marginBottom: 16 }}>🏆</Text>
-              <Text style={[styles.emptyTitle, { color: text }]}>
-                Start Your Journey
-              </Text>
-              <Text style={[styles.emptyText, { color: muted }]}>
-                Check in at spots to unlock achievements and build your streak!
-              </Text>
+          {specialAchievements.length ? (
+            <View style={styles.categorySection}>
+              <View style={styles.categoryHeader}>
+                <Text style={[styles.categoryTitle, { color: text }]}>Special</Text>
+                <Text style={[styles.categoryCount, { color: muted }]}>
+                  {specialAchievements.length}/{specialAchievements.length}
+                </Text>
+              </View>
+              {specialAchievements.map((achievement) => (
+                <AchievementCard
+                  key={achievement.id}
+                  achievement={achievement}
+                  stats={stats || {} as UserStats}
+                  unlocked
+                />
+              ))}
             </View>
-          )}
+          ) : null}
+
+          {unlockedCount === 0 ? (
+            <View style={styles.emptyState}>
+              <EmptyState
+                icon="🏆"
+                title="Start your journey"
+                description="Check in at spots to unlock achievements and build your streak."
+                actionLabel="Make a check-in"
+                onAction={() => router.push('/checkin')}
+              />
+            </View>
+          ) : null}
         </ScrollView>
       )}
+      <CelebrationOverlay visible={showCelebration} />
     </ThemedView>
   );
 }
@@ -225,17 +268,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    textAlign: 'center',
-    maxWidth: 280,
+    paddingVertical: 30,
   },
 });

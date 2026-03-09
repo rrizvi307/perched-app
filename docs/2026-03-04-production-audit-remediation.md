@@ -1,0 +1,235 @@
+# Pre-Production Audit Remediation
+
+Date: 2026-03-04
+Label: `app-store-preprod-audit`
+Status: In progress
+
+## Scope
+
+This document captures the pre-production audit findings, the release blockers, and the remediation sequence so the work is not lost or silently undone.
+
+## Severity Summary
+
+- Critical:
+  - Backend functions package does not build.
+  - Public user docs expose contact data.
+  - Media privacy is weaker than the app privacy model.
+  - Raffle and gamification are client-authoritative.
+  - B2B API keys are stored in plaintext.
+- High:
+  - Provider intelligence is split across client and backend.
+  - `place_tags` is client-writable.
+  - Explore intelligence fan-out is expensive.
+  - Recommendation queries do not scale.
+  - Sign-in alert flow is broken.
+  - Feed report flow still fails App Store preflight.
+
+## Remediation Tracker
+
+1. Privacy hardening for user profiles
+   - Status: In progress
+   - Goal: stop storing contact fields in public profile docs and stop returning them from public user APIs.
+   - Current patch:
+     - public user reads are sanitized before they reach the app UI
+     - new writes route contact fields away from public profile documents
+     - Firestore rules block future public writes to `email`, `phone`, and `phoneNormalized`
+     - secure callable lookup is used for email and phone discovery instead of direct Firestore reads
+     - Firestore rules now also block `pushToken` writes on public `users` docs
+   - Follow-up:
+     - run `npm run migrate:sensitive-data:legacy -- --apply --service-account <path>` after reviewing the dry-run output to move legacy public contact fields and push tokens
+
+2. Backend deployability
+   - Status: In progress
+   - Goal: make `functions/` compile and deploy cleanly.
+   - Current patch:
+     - Cloud Functions import path is pinned to the v1 API surface used by this codebase
+     - removed deprecated `functions.config()` usage that broke builds under the installed package version
+   - Follow-up:
+     - add CI gating on `npm --prefix functions run build`
+
+3. Tag integrity hardening
+   - Status: In progress
+   - Goal: stop accepting client-written aggregate place tags.
+   - Current patch:
+     - `place_tags` aggregate writes are disabled in client code
+     - Firestore rules now treat `place_tags` as server-owned
+     - backend now recomputes `place_tags/{placeKey}` from `place_tag_votes` on every write so aggregate tags come from server-owned data instead of stale client docs
+     - spot intelligence now merges server-aggregated place-tag scores with visible check-in tags, improving low-checkin spots that have explicit user tag votes
+   - Follow-up:
+     - extend tag aggregation with check-in evidence so spots can build credible tag priors before enough direct tag votes exist
+
+4. Server-authoritative rewards and achievements
+   - Status: In progress
+   - Goal: move raffle entry and achievement progression off the client.
+   - Current patch:
+     - weekly raffle entry creation now happens from a backend check-in trigger
+     - client reads raffle progress but no longer writes `weeklyRaffleEntries`
+     - Firestore rules now block all client writes to `weeklyRaffleEntries`
+     - backend triggers now recompute `userStats/{userId}` from real check-in history
+     - backend now mints achievement unlock documents from server-side stats and social graph state
+     - client achievement/profile reads prefer remote `userStats` and `achievements` docs over AsyncStorage
+     - authenticated clients can request a one-time gamification backfill when remote docs are missing
+     - Firestore rules now treat `userStats` and `achievements` as server-owned
+   - Follow-up:
+     - backfill historical users by running the gamification sync across existing users
+
+5. Check-in media privacy hardening
+   - Status: In progress
+   - Goal: stop leaking private and friends-only check-in photos through document-stored download URLs.
+   - Current patch:
+     - private check-in photos now sync to Storage with visibility metadata
+     - non-public check-ins store `photoPath` (`gs://...`) instead of a bearer-style download URL
+     - shared image rendering now resolves `gs://` paths at runtime for authorized viewers
+     - Storage rules for `checkins/` now enforce `public` / `friends` / `close` access based on metadata and the social graph
+   - Follow-up:
+     - migrate legacy private photo URLs to `photoPath`
+     - add automated rules coverage for `storage.rules`
+
+6. Trust and safety / social graph consistency
+   - Status: In progress
+   - Goal: collapse duplicate block/friend/report flows into one backend-authoritative model.
+   - Current patch:
+     - `trustSafety.ts` blocking APIs now delegate to the canonical `users.blocked` social-graph path instead of writing shadow `blockedUsers`, `safetySettings.blockedUsers`, and `friends.friendIds` state
+     - safety settings reads now merge preference data with the canonical blocked list at read time
+     - Firestore rules now reject new client writes to legacy `blockedUsers` docs and reject `blockedUsers` fields inside `safetySettings`
+     - the legacy `/friends` collection rule has been removed and demo seeding now writes only `users.friends`
+     - a dry-run-first admin migration script now exists to move legacy `/friends`, `blockedUsers`, and `safetySettings.blockedUsers` data onto the canonical social graph
+     - client friend/block/unblock flows no longer silently fall back to direct Firestore relationship writes when the callable backend is unavailable; they now fail loudly instead of reintroducing split-brain state
+   - Follow-up:
+     - run `npm run migrate:social-graph:legacy -- --apply --service-account <path>` against production after reviewing the dry-run output
+
+7. Intelligence pipeline unification
+   - Status: In progress
+   - Goal: serve hours, tags, and provider data from one backend-normalized source.
+   - Current patch:
+     - `placeSignalsProxy` now returns normalized Google place details alongside Yelp and Foursquare provider signals
+     - place intelligence now prefers the backend-provided Google snapshot for hours, ratings, reviews, and open status before falling back to direct client Google fetches
+     - this removes one major client/backend split in the explore intelligence path and reduces provider drift for `openNow`, hours, and rating aggregation
+     - added `googlePlacesProxy` in Cloud Functions for normalized Google `details`, `nearby`, `search_text`, `search_locations`, and `reverse_geocode` lookups
+     - `services/googleMaps.ts` now prefers the authenticated backend proxy for spot, check-in, and signed-in search flows, while keeping a direct Google fallback for unauthenticated onboarding/search recovery paths
+     - `services/googleMaps.ts` now also uses the backend proxy when an App Check token is present without a signed-in user, so protected bootstrap flows do not unnecessarily fall back to direct Google calls
+   - Follow-up:
+     - eliminate the remaining unauthenticated direct Google fallback once App Check or a public-safe bootstrap path is in place
+     - initialize and enforce App Check once the mobile-side provider path is fully backend-backed
+
+8. App Store feed/report remediation
+   - Status: In progress
+   - Goal: clear remaining `appstore:preflight` failures and complete iPad release checks.
+   - Current patch:
+     - feed report flow now submits a structured report instead of opening email
+     - pending-state locking and success feedback now satisfy automated preflight checks
+   - Remaining manual work:
+     - upload native iPad screenshots in App Store Connect
+     - run iPad release-build smoke test and capture evidence
+
+9. B2B API key secret hardening
+   - Status: In progress
+   - Goal: stop storing partner API secrets in Firestore and remove plaintext validation paths.
+   - Current patch:
+     - backend API key issuance now stores only `keyHash`, `keyPreview`, and `keyLast4`
+     - backend key validation now resolves only by hash, not plaintext Firestore queries
+     - legacy key records are self-healed on access to remove the old `key` field and rebuild the hash index
+     - the legacy `services/b2bAPI.ts` helper now also validates by hash and never writes plaintext keys into Firestore
+     - a dry-run-first admin migration script now exists to remove legacy plaintext `apiKeys.key` data at rest and rebuild hash index entries
+   - Follow-up:
+     - add backend tests around API key generation, validation, and rate-limit enforcement
+
+10. Posting eligibility hardening
+   - Status: In progress
+   - Goal: stop unverified email accounts from creating production check-ins.
+   - Current patch:
+     - Firestore rules now require check-in creators to be admin, phone-authenticated, or email-verified
+     - demo seeding scripts now mark seeded auth users as email-verified
+     - demo/dev seeders no longer write email into public `users` docs and instead write to `userPrivate`
+   - Follow-up:
+     - add emulator coverage for the verified-email / phone-auth check-in rule path
+
+11. Notification scheduling reliability
+   - Status: In progress
+   - Goal: stop local scheduling code from canceling unrelated notifications or duplicating weekly recap reminders.
+   - Current patch:
+     - local streak reminders and weekly recap notifications now use managed per-type schedule IDs instead of `cancelAllScheduledNotificationsAsync()`
+     - weekly recap scheduling now de-duplicates existing jobs and rolls forward if the current week's send time has already passed
+     - notification permission/handler setup is now routed through one shared implementation instead of two separate service paths
+   - Follow-up:
+     - add unit coverage around managed notification scheduling and preference disable flows
+
+12. Explore enrichment fan-out control
+   - Status: In progress
+   - Goal: reduce provider-call bursts and repeated render churn on explore load.
+   - Current patch:
+     - explore now skips intelligence builds for spots already present in the in-memory map
+     - initial enrichment now runs through a bounded concurrency pool instead of unconstrained per-item async launches
+     - completed intelligence results are merged into state in one batched update instead of one `setState` per spot
+   - Follow-up:
+     - move place-intelligence computation fully server-side for cacheable normalized payloads
+
+13. Sign-in alert delivery hardening
+   - Status: In progress
+   - Goal: remove client-side email sending and make sign-in alerts backend-owned and auditable.
+   - Current patch:
+     - sign-in alert delivery now goes through a callable Cloud Function instead of a client-side SendGrid request
+     - the backend resolves the recipient email from canonical private profile data and authenticated user context
+     - login alert sends are throttle-protected and recorded in `login_notifications` with delivery status
+     - the mobile client now uses a thin callable wrapper instead of storing or reading email-provider credentials
+   - Follow-up:
+     - add backend tests around throttle behavior and SendGrid failure handling
+
+14. Security-rules emulator coverage
+   - Status: In progress
+   - Goal: add repeatable Firestore and Storage rules coverage for the privacy and media paths we hardened.
+   - Current patch:
+     - added `__tests__/securityRules.test.ts` covering `userPrivate` access, public `users` contact-field blocking, verified-email / phone-auth check-in creation, raffle write lockout, and check-in media access rules
+     - added an explicit read-only `spots` rule so deployed Firestore policy matches the app’s direct `spots` reads in explore and recommendations
+     - rules coverage now includes authenticated `spots` reads and a blocked client-side `spots` mutation case
+     - added `npm run test:rules` to execute the rules suite through `firebase emulators:exec`
+     - removed the repo-wide `ajv` override that was breaking `firebase-tools` by forcing an incompatible major
+   - Environment blocker:
+     - Firestore emulator execution currently requires Java on PATH; the test harness is committed, but this machine cannot run `npm run test:rules` until Java is installed
+
+15. Mobile memory-pressure hardening
+   - Status: In progress
+   - Goal: stop long-lived in-memory place caches from growing without bound during heavy browsing sessions.
+   - Current patch:
+     - `services/googleMaps.ts` cache hits now refresh recency and all geocode/search/details caches are size-bounded
+     - `services/placeIntelligence.ts` intelligence, provider-signal, weather, review-NLP, and telemetry-throttle maps are now bounded and prune oldest entries
+   - Follow-up:
+     - add lightweight metrics or debug counters so we can tune cache caps with real production usage
+
+16. Analytics privacy and event hygiene
+   - Status: In progress
+   - Goal: stop leaking raw identifiers into analytics and make wrapper event names semantically correct.
+   - Current patch:
+     - password-reset telemetry now records only `email_present` and `email_domain`, not the full email address
+     - generic analytics helpers no longer alias screen, timing, revenue, engagement, and premium conversion events to `app_opened`
+   - Follow-up:
+     - add focused tests around analytics event payload sanitization and naming
+
+17. Lint and dead-code cleanup
+   - Status: In progress
+   - Goal: reduce warning noise so new production issues are visible and stale code paths do not linger unnoticed.
+   - Current patch:
+     - removed unused friend-search and account-deletion helper paths that no longer had UI entry points
+     - cleaned stale hook dependencies and dead state in `feed`, `profile`, `signup`, `settings`, and `upgrade`
+     - `npm run lint` now passes with zero warnings
+   - Follow-up:
+     - add a CI gate that fails on lint warnings so warning debt does not reaccumulate
+
+18. Recommendations query scalability
+   - Status: In progress
+   - Goal: stop recommendation generation from fan-out scanning raw check-ins on-device.
+   - Current patch:
+     - candidate spot discovery now reads geohash-bounded `spots` aggregates instead of scanning public `checkins`
+     - personalized recommendation scoring now fetches user preference weights once per request instead of once per candidate spot
+     - time-pattern lookups are now batched for the top-ranked candidate subset and cached in memory, replacing one check-in query per spot
+     - collaborative recommendations now resolve place names from `spots` docs instead of issuing an extra check-in fan-out query for name hydration
+     - collaborative recommendations now prefer a backend callable, so the app no longer directly scans other users' check-ins when Functions are available
+     - the backend collaborative path only uses other users' public check-ins as recommendation signals, reducing privacy leakage from private activity
+     - the client keeps a narrow Firestore fallback for unavailable or undeployed callable environments so dev and partial deploys do not hard-break recommendations
+   - Follow-up:
+     - replace the remaining fallback with a fully server-owned aggregate once the callable path is stable in production
+
+## Audit Notes
+
+- This audit assumes a production mobile app with real users, App Store review exposure, and long-term scalability requirements.
+- Fixes should be deployed in severity order, not by implementation convenience.

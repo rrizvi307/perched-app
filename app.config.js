@@ -12,11 +12,19 @@ function pickEnv(...keys) {
 
 module.exports = ({ config }) => {
   const googleMapsApiKey = pickEnv("EXPO_PUBLIC_GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_API_KEY");
+  const enableClientProviderCalls = ["1", "true", "yes", "on"].includes(
+    pickEnv("EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS", "ENABLE_CLIENT_PROVIDER_CALLS").toLowerCase()
+  );
+  const enableGrowthPrograms = ["1", "true", "yes", "on"].includes(
+    pickEnv("EXPO_PUBLIC_ENABLE_GROWTH_PROGRAMS", "ENABLE_GROWTH_PROGRAMS").toLowerCase()
+  );
   const sentryDsn = pickEnv("EXPO_PUBLIC_SENTRY_DSN", "SENTRY_DSN");
   const env = pickEnv("EXPO_PUBLIC_ENV", "ENV") || "development";
   const segmentWriteKey = pickEnv("EXPO_PUBLIC_SEGMENT_WRITE_KEY", "SEGMENT_WRITE_KEY");
   const mixpanelToken = pickEnv("EXPO_PUBLIC_MIXPANEL_TOKEN", "MIXPANEL_TOKEN");
+  const revenueCatPublicKey = pickEnv("EXPO_PUBLIC_REVENUECAT_PUBLIC_KEY", "REVENUECAT_PUBLIC_KEY");
   const placeIntelEndpoint = pickEnv("EXPO_PUBLIC_PLACE_INTEL_ENDPOINT", "PLACE_INTEL_ENDPOINT");
+  const intelV1Enabled = pickEnv("EXPO_PUBLIC_INTEL_V1_ENABLED", "INTEL_V1_ENABLED");
   const firebaseFunctionsRegion = pickEnv("EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION", "FIREBASE_FUNCTIONS_REGION") || "us-central1";
 
   const firebaseFromEnv = {
@@ -53,16 +61,24 @@ module.exports = ({ config }) => {
     },
     extra: {
       ...extra,
-      GOOGLE_MAPS_API_KEY: googleMapsApiKey || extra.GOOGLE_MAPS_API_KEY,
+      GOOGLE_MAPS_API_KEY: enableClientProviderCalls ? (googleMapsApiKey || extra.GOOGLE_MAPS_API_KEY) : "",
       FIREBASE_CONFIG: {
         ...baseFirebase,
         ...firebaseFromEnv,
       },
+      ENABLE_CLIENT_PROVIDER_CALLS: enableClientProviderCalls,
+      ENABLE_GROWTH_PROGRAMS: enableGrowthPrograms,
       SENTRY_DSN: sentryDsn || extra.SENTRY_DSN,
       ENV: env || extra.ENV,
       SEGMENT_WRITE_KEY: segmentWriteKey || extra.SEGMENT_WRITE_KEY,
       MIXPANEL_TOKEN: mixpanelToken || extra.MIXPANEL_TOKEN,
+      REVENUECAT_PUBLIC_KEY: revenueCatPublicKey || extra.REVENUECAT_PUBLIC_KEY,
       PLACE_INTEL_ENDPOINT: placeIntelEndpoint || extra.PLACE_INTEL_ENDPOINT,
+      INTEL_V1_ENABLED: (
+        intelV1Enabled
+          ? intelV1Enabled === "true" || intelV1Enabled === "1"
+          : extra.INTEL_V1_ENABLED
+      ),
       FIREBASE_FUNCTIONS_REGION: firebaseFunctionsRegion || extra.FIREBASE_FUNCTIONS_REGION,
     },
   };

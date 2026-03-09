@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { Achievement, getAchievementProgress, UserStats } from '@/services/gamification';
+import { Achievement, getAchievementProgressDetails, UserStats } from '@/services/gamification';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
@@ -23,7 +23,7 @@ export function AchievementCard({ achievement, stats, unlocked, onPress }: Achie
   const border = useThemeColor({}, 'border');
   const surface = useThemeColor({}, 'surface');
 
-  const progress = getAchievementProgress(achievement, stats);
+  const progress = getAchievementProgressDetails(achievement, stats);
   const tierColor = TIER_COLORS[achievement.tier];
 
   return (
@@ -45,19 +45,20 @@ export function AchievementCard({ achievement, stats, unlocked, onPress }: Achie
           <Text style={[styles.description, { color: muted }]} numberOfLines={2}>
             {achievement.description}
           </Text>
-          {!unlocked && (
-            <View style={styles.progressBar}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${progress}%`,
-                    backgroundColor: tierColor,
-                  },
-                ]}
-              />
-            </View>
-          )}
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${progress.percent}%`,
+                  backgroundColor: tierColor,
+                },
+              ]}
+            />
+          </View>
+          <Text style={[styles.progressText, { color: muted }]}>
+            {Math.min(progress.current, progress.target)}/{progress.target}
+          </Text>
           {unlocked && achievement.unlockedAt && (
             <Text style={[styles.unlocked, { color: tierColor }]}>
               ✓ Unlocked {new Date(achievement.unlockedAt).toLocaleDateString()}
@@ -116,6 +117,11 @@ const styles = StyleSheet.create({
     fontSize: tokens.type.small.fontSize,
     fontWeight: '600',
     marginTop: 4,
+  },
+  progressText: {
+    fontSize: tokens.type.small.fontSize,
+    fontWeight: '600',
+    marginTop: 6,
   },
   badge: {
     position: 'absolute',

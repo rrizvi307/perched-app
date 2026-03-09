@@ -6,16 +6,15 @@ interface AnimatedMarkerProps extends MarkerProps {
   animationType?: 'drop' | 'fade' | 'none';
 }
 
-// Note: Reanimated marker animation is complex with react-native-maps
-// This is a placeholder that sets up the infrastructure
-// For best results, use opacity/transform animations on custom marker views
+// Reanimated marker animation is brittle with react-native-maps.
+// Keep a stable marker API here and let custom marker children own animations.
 
 export function AnimatedMarker({
   delay: _delay = 0,
   animationType: _animationType = 'drop',
   ...markerProps
 }: AnimatedMarkerProps) {
-  // Placeholder component: keep API surface while deferring animation to custom marker views.
+  // Keep the API surface stable while deferring animation to custom marker views.
   return <Marker {...markerProps} />;
 }
 

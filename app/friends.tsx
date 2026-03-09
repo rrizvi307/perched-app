@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, Alert } from 'react-native';
-import { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { router } from 'expo-router';
 import { ThemedView } from '@/components/themed-view';
 import { PolishedHeader } from '@/components/ui/polished-header';
@@ -15,6 +15,8 @@ import { tokens } from '@/constants/tokens';
 import { getDemoFriendRequests, getDemoFriendSuggestions } from '@/services/demoDataManager';
 import { isDemoMode } from '@/services/demoMode';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/contexts/ToastContext';
+import { devLog } from '@/services/logger';
 import {
   getIncomingFriendRequests,
   getOutgoingFriendRequests,
@@ -27,7 +29,8 @@ import {
 } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
-import { updateFriendsCount } from '@/services/gamification';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
 
 interface FriendRequest {
   id: string;
@@ -58,18 +61,24 @@ interface FriendSuggestion {
  */
 export default function FriendsScreen() {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [suggestions, setSuggestions] = useState<FriendSuggestion[]>([]);
   const [selectedTab, setSelectedTab] = useState<'requests' | 'suggestions'>('requests');
+  const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+  const firstDataMarkedRef = useRef(false);
 
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
 
   const loadFriendData = useCallback(async () => {
+    const markId = startPerfMark('friends_load_data');
+    let ok = true;
     if (!user?.id) {
       setLoading(false);
+      void endPerfMark(markId, true);
       return;
     }
 
@@ -124,7 +133,6 @@ export default function FriendsScreen() {
         if (campus) {
           const campusUsers = await getUsersByCampus(campus, 20);
           const friendSet = new Set(currentFriends);
-          // Exclude both incoming request senders and outgoing request targets
           const outgoingTargetIds = outgoingRequests.map((r: any) => r.toId);
           const pendingSet = new Set([...fromUserIds, ...outgoingTargetIds]);
 
@@ -150,14 +158,49 @@ export default function FriendsScreen() {
         setLoading(false);
       }
     } catch (error) {
-      console.error('Failed to load friend data:', error);
+      ok = false;
+      devLog('Failed to load friend data:', error);
       setLoading(false);
+    } finally {
+      void endPerfMark(markId, ok);
     }
   }, [user?.id, user?.campus, user?.campusOrCity]);
 
   useEffect(() => {
+    const markId = startPerfMark('screen_friends_mount');
+    let active = true;
+    void trackScreenLoad('friends').then((stop) => {
+      if (active) {
+        screenLoadStopRef.current = stop;
+      } else {
+        void stop();
+      }
+    });
+    void markPerfEvent('screen_friends_mounted');
+    return () => {
+      active = false;
+      void endPerfMark(markId, true);
+      const stop = screenLoadStopRef.current;
+      screenLoadStopRef.current = null;
+      if (stop) void stop();
+    };
+  }, []);
+
+  useEffect(() => {
     loadFriendData();
   }, [loadFriendData]);
+
+  useEffect(() => {
+    if (loading || firstDataMarkedRef.current) return;
+    firstDataMarkedRef.current = true;
+    const stop = screenLoadStopRef.current;
+    screenLoadStopRef.current = null;
+    if (stop) void stop();
+    void markPerfEvent('friends_first_data_ready', {
+      requests: requests.length,
+      suggestions: suggestions.length,
+    });
+  }, [loading, requests.length, suggestions.length]);
 
   const handleAcceptRequest = async (id: string) => {
     if (!user?.id) return;
@@ -176,15 +219,11 @@ export default function FriendsScreen() {
       // Track analytics
       void logEvent('friend_request_accepted', user.id, { fromUserId: request.fromUser.id });
       void promptRatingAtMoment(RatingTriggers.FRIEND_ADDED);
-
-      // Update gamification stats
-      const friends = await getUserFriends(user.id);
-      void updateFriendsCount(friends.length);
     } catch (error) {
-      console.error('Failed to accept friend request:', error);
+      devLog('Failed to accept friend request:', error);
       // Revert on error
       loadFriendData();
-      Alert.alert('Error', 'Failed to accept friend request. Please try again.');
+      showToast('Failed to accept friend request. Please try again.', 'error');
     }
   };
 
@@ -203,10 +242,10 @@ export default function FriendsScreen() {
       // Track analytics
       void logEvent('friend_request_rejected', user.id, { fromUserId: request?.fromUser.id });
     } catch (error) {
-      console.error('Failed to decline friend request:', error);
+      devLog('Failed to decline friend request:', error);
       // Revert on error
       loadFriendData();
-      Alert.alert('Error', 'Failed to decline friend request. Please try again.');
+      showToast('Failed to decline friend request. Please try again.', 'error');
     }
   };
 
@@ -223,8 +262,8 @@ export default function FriendsScreen() {
       // Track analytics
       void logEvent('friend_request_sent', user.id, { toUserId: targetUserId });
     } catch (error) {
-      console.error('Failed to send friend request:', error);
-      Alert.alert('Error', 'Failed to send friend request. Please try again.');
+      devLog('Failed to send friend request:', error);
+      showToast('Failed to send friend request. Please try again.', 'error');
       throw error; // Re-throw so SuggestionCard can handle UI state
     }
   };
@@ -233,8 +272,6 @@ export default function FriendsScreen() {
     <ThemedView style={{ flex: 1 }}>
       <PolishedHeader
         title="Friends"
-        leftIcon="chevron.left"
-        onLeftPress={() => router.back()}
         rightIcon="person.badge.plus"
         onRightPress={() => router.push('/find-friends')}
       />
@@ -360,6 +397,8 @@ export default function FriendsScreen() {
                 icon="sparkles"
                 title="No suggestions yet"
                 description="We'll suggest friends based on your campus, check-ins, and mutual connections."
+                actionLabel="Find friends"
+                onAction={() => router.push('/find-friends')}
               />
             ) : (
               <>
@@ -407,7 +446,7 @@ function SuggestionCard({
       await onAdd(suggestion.id);
       setAdded(true);
     } catch (error) {
-      console.error('Failed to add friend:', error);
+      devLog('Failed to add friend:', error);
     } finally {
       setAdding(false);
     }

@@ -5,11 +5,22 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
+import 'firebase/compat/functions';
 import Constants from 'expo-constants';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
 import { normalizePhone } from '@/utils/phone';
 import { recordPerfMetric } from './perfMonitor';
+import { withErrorBoundary } from './errorBoundary';
+import { registerSubscription } from './memoryMonitor';
+import {
+  invalidateCacheOnCheckinCreate,
+  invalidateCacheOnCheckinDelete,
+  invalidateCacheOnCheckinUpdate,
+  invalidateCacheOnMetricUpdate,
+} from './cacheInvalidation';
+import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
+import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -86,12 +97,218 @@ export function isFirebaseConfigured() {
 let _initialized = false;
 let _firebaseApp: any = null;
 let _initError: any = null;
+let _authPersistenceConfigured = false;
+let _authPersistencePromise: Promise<void> | null = null;
 const checkinsCache = new Map<string, { ts: number; payload: any }>();
 const usersByIdCache = new Map<string, { ts: number; payload: any[] }>();
 const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
 const CHECKINS_CACHE_MAX = 120;
 const USERS_BY_ID_CACHE_MAX = 160;
 const USER_FRIENDS_CACHE_MAX = 300;
+const USERS_COLLECTION = 'users';
+const PUBLIC_PROFILES_COLLECTION = 'publicProfiles';
+const SOCIAL_GRAPH_COLLECTION = 'socialGraph';
+const USER_PRIVATE_COLLECTION = 'userPrivate';
+const PUSH_TOKENS_COLLECTION = 'pushTokens';
+const PUBLIC_PROFILE_FIELDS = [
+  'name',
+  'nameLower',
+  'city',
+  'campus',
+  'campusOrCity',
+  'campusType',
+  'handle',
+  'coffeeIntents',
+  'ambiancePreference',
+  'photoUrl',
+  'avatarUrl',
+  'referralCode',
+] as const;
+const SOCIAL_GRAPH_FIELDS = ['friends', 'closeFriends', 'blocked'] as const;
+const PRIVATE_USER_PROFILE_FIELDS = ['email', 'phone', 'phoneNormalized', 'pushToken'];
+const LEGACY_PUBLIC_USERS_FIELDS = [...PUBLIC_PROFILE_FIELDS, ...SOCIAL_GRAPH_FIELDS, ...PRIVATE_USER_PROFILE_FIELDS];
+
+type SplitUserFields = {
+  publicProfileFields: Record<string, any>;
+  privateFields: Record<string, any>;
+  socialGraphFields: Record<string, any>;
+  accountFields: Record<string, any>;
+};
+
+function removeUndefinedFields(input: Record<string, any>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
+function stripPrivateUserFields<T extends Record<string, any> | null | undefined>(input: T, id?: string) {
+  if (!input) return null;
+  const next: Record<string, any> = { ...(input as Record<string, any>) };
+  PRIVATE_USER_PROFILE_FIELDS.forEach((field) => {
+    delete next[field];
+  });
+  if (id && !next.id) next.id = id;
+  return next;
+}
+
+function shouldConfigureWebAuthPersistence() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+
+async function ensureAuthPersistenceConfigured(firebaseApp?: any) {
+  const fb = firebaseApp || _firebaseApp;
+  if (!fb?.auth) return;
+  if (_authPersistenceConfigured) return;
+  if (!shouldConfigureWebAuthPersistence()) {
+    _authPersistenceConfigured = true;
+    return;
+  }
+  if (_authPersistencePromise) return _authPersistencePromise;
+
+  _authPersistencePromise = Promise.resolve()
+    .then(async () => {
+      const auth = fb.auth?.();
+      const persistence = fb?.auth?.Auth?.Persistence?.LOCAL;
+      if (!auth || !persistence || typeof auth.setPersistence !== 'function') {
+        _authPersistenceConfigured = true;
+        return;
+      }
+      await auth.setPersistence(persistence);
+      _authPersistenceConfigured = true;
+    })
+    .catch((error) => {
+      devLog('ensureAuthPersistenceConfigured failed', error);
+    })
+    .finally(() => {
+      _authPersistencePromise = null;
+    });
+
+  return _authPersistencePromise;
+}
+
+function splitUserDocumentFields(fields: Record<string, any> | null | undefined): SplitUserFields {
+  const publicProfileFields: Record<string, any> = {};
+  const privateFields: Record<string, any> = {};
+  const socialGraphFields: Record<string, any> = {};
+  const accountFields: Record<string, any> = {};
+  Object.entries(fields || {}).forEach(([key, value]) => {
+    if (PRIVATE_USER_PROFILE_FIELDS.includes(key)) {
+      privateFields[key] = value;
+      return;
+    }
+    if ((SOCIAL_GRAPH_FIELDS as readonly string[]).includes(key)) {
+      socialGraphFields[key] = value;
+      return;
+    }
+    if ((PUBLIC_PROFILE_FIELDS as readonly string[]).includes(key)) {
+      publicProfileFields[key] = value;
+      return;
+    }
+    accountFields[key] = value;
+  });
+  return { publicProfileFields, privateFields, socialGraphFields, accountFields };
+}
+
+async function writeUserPrivateProfile(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length) return;
+  await db.collection(USER_PRIVATE_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function writePublicProfile(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function writeSocialGraph(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...(Object.prototype.hasOwnProperty.call(fields, 'friends') ? { friends: normalizeStringArray(fields.friends) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(fields, 'closeFriends') ? { closeFriends: normalizeStringArray(fields.closeFriends) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(fields, 'blocked') ? { blocked: normalizeStringArray(fields.blocked) } : {}),
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => key !== 'createdAt' && key !== 'updatedAt');
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+async function writeUserAccountDoc(
+  fb: any,
+  db: any,
+  userId: string,
+  fields: Record<string, any>,
+  options: { isCreate?: boolean } = {}
+) {
+  const payload = removeUndefinedFields({
+    ...fields,
+    migrationVersion: 2,
+    ...(options.isCreate ? { createdAt: fb.firestore.FieldValue.serverTimestamp() } : {}),
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+  const meaningfulKeys = Object.keys(payload).filter((key) => !['createdAt', 'updatedAt', 'migrationVersion'].includes(key));
+  if (!meaningfulKeys.length && !options.isCreate) return;
+  await db.collection(USERS_COLLECTION).doc(userId).set(payload, { merge: true });
+}
+
+function buildLegacyUsersCleanupPayload(fb: any) {
+  return LEGACY_PUBLIC_USERS_FIELDS.reduce((acc, field) => {
+    acc[field] = fb.firestore.FieldValue.delete();
+    return acc;
+  }, {} as Record<string, any>);
+}
+
+async function getSanitizedUserById(db: any, userId: string) {
+  const doc = await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
+  if (!doc.exists) return null;
+  return stripPrivateUserFields(doc.data() || {}, doc.id);
+}
+
+async function getSocialGraphDoc(db: any, userId: string) {
+  const doc = await db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).get();
+  const data = doc.exists ? (doc.data() || {}) : {};
+  return {
+    friends: normalizeStringArray(data.friends),
+    closeFriends: normalizeStringArray(data.closeFriends),
+    blocked: normalizeStringArray(data.blocked),
+  };
+}
+
+async function getUserPrivateDoc(db: any, userId: string) {
+  const privateDoc = await db.collection(USER_PRIVATE_COLLECTION).doc(userId).get();
+  const legacyDoc = privateDoc.exists ? null : await db.collection(USERS_COLLECTION).doc(userId).get();
+  return {
+    ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
+    ...(privateDoc.exists ? privateDoc.data() || {} : {}),
+  };
+}
 
 function getCachedValue<T>(
   cache: Map<string, { ts: number; payload: T }>,
@@ -146,6 +363,378 @@ function invalidateUserFriendsCache(userIds: Array<string | undefined | null>) {
     if (!userId) return;
     userFriendsCache.delete(userId);
   });
+}
+
+export function resetFirebaseClientCaches() {
+  checkinsCache.clear();
+  usersByIdCache.clear();
+  userFriendsCache.clear();
+}
+
+function resolveSpotId(payload: Record<string, any> | null | undefined): string {
+  if (!payload) return '';
+  const spotPlaceId = payload.spotPlaceId;
+  if (typeof spotPlaceId === 'string' && spotPlaceId.trim()) return spotPlaceId.trim();
+  const spotId = payload.spotId;
+  if (typeof spotId === 'string' && spotId.trim()) return spotId.trim();
+  return '';
+}
+
+function hasMetricUpdates(fields: Record<string, any>): boolean {
+  const metricFields = ['wifiSpeed', 'noiseLevel', 'busyness', 'outletAvailability', 'outlets', 'tags', 'spotLatLng'];
+  return metricFields.some((field) => Object.prototype.hasOwnProperty.call(fields, field));
+}
+
+function hasOutcomeMetricUpdates(fields: Record<string, any>): boolean {
+  const metricFields = ['wifiSpeed', 'noiseLevel', 'busyness', 'laptopFriendly', 'outletAvailability', 'outlets'];
+  return metricFields.some((field) => Object.prototype.hasOwnProperty.call(fields, field));
+}
+
+function normalizeNoiseScore(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(1, Math.min(5, value));
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'silent') return 1;
+  if (normalized === 'quiet') return 2;
+  if (normalized === 'moderate' || normalized === 'average') return 3;
+  if (normalized === 'lively') return 4;
+  if (normalized === 'loud') return 5;
+  return null;
+}
+
+function normalizeScore(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(1, Math.min(5, value));
+}
+
+function normalizeBool(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  }
+  return null;
+}
+
+function round(value: number, digits = 2): number {
+  const factor = Math.pow(10, digits);
+  return Math.round(value * factor) / factor;
+}
+
+type OutcomeQualityLabel = 'excellent' | 'good' | 'mixed' | 'poor';
+
+function toLowerStrings(values: string[]) {
+  return values.map((value) => value.trim().toLowerCase()).filter(Boolean);
+}
+
+function estimateTagQualityDelta(tags: string[]) {
+  const normalized = toLowerStrings(tags);
+  const positive = [
+    'quiet',
+    'wifi',
+    'wi-fi',
+    'outlets',
+    'outlet',
+    'focus',
+    'study',
+    'laptop',
+    'productive',
+    'deep work',
+  ];
+  const negative = [
+    'loud',
+    'noisy',
+    'crowded',
+    'packed',
+    'slow wifi',
+    'no wifi',
+    'chaotic',
+  ];
+  let score = 0;
+  normalized.forEach((tag) => {
+    if (positive.some((token) => tag.includes(token))) score += 4;
+    if (negative.some((token) => tag.includes(token))) score -= 5;
+  });
+  return Math.max(-14, Math.min(14, score));
+}
+
+function estimateCaptionQualityDelta(caption: string) {
+  const normalized = String(caption || '').toLowerCase();
+  if (!normalized.trim()) return 0;
+  const positiveTokens = ['productive', 'great wifi', 'fast wifi', 'quiet', 'focused', 'smooth', 'good outlet'];
+  const negativeTokens = ['loud', 'noisy', 'crowded', 'packed', 'slow wifi', 'bad wifi', 'couldn\'t focus', 'chaos'];
+  let score = 0;
+  positiveTokens.forEach((token) => {
+    if (normalized.includes(token)) score += 5;
+  });
+  negativeTokens.forEach((token) => {
+    if (normalized.includes(token)) score -= 6;
+  });
+  return Math.max(-18, Math.min(18, score));
+}
+
+function deriveOutcomeQuality(
+  checkin: Record<string, any>,
+  observed: { observedWorkScore: number; signalCount: number }
+) {
+  const tags = normalizeStringArray(checkin.tags);
+  const caption = typeof checkin.caption === 'string' ? checkin.caption : '';
+  const tagDelta = estimateTagQualityDelta(tags);
+  const captionDelta = estimateCaptionQualityDelta(caption);
+  const outcomeQualityScore = Math.max(0, Math.min(100, observed.observedWorkScore + tagDelta + captionDelta));
+
+  let outcomeQualityLabel: OutcomeQualityLabel = 'mixed';
+  if (outcomeQualityScore >= 80) outcomeQualityLabel = 'excellent';
+  else if (outcomeQualityScore >= 65) outcomeQualityLabel = 'good';
+  else if (outcomeQualityScore < 45) outcomeQualityLabel = 'poor';
+
+  const signalBonus = Math.min(0.2, observed.signalCount * 0.04);
+  const annotationBonus = Math.min(0.15, (tags.length ? 0.08 : 0) + (caption.trim() ? 0.07 : 0));
+  const outcomeQualityConfidence = round(Math.max(0.2, Math.min(0.95, 0.45 + signalBonus + annotationBonus)), 2);
+
+  const reasons: string[] = [];
+  if (observed.observedWorkScore >= 75) reasons.push('strong_core_metrics');
+  if (observed.observedWorkScore < 45) reasons.push('weak_core_metrics');
+  if (tagDelta > 0) reasons.push('positive_tags');
+  if (tagDelta < 0) reasons.push('negative_tags');
+  if (captionDelta > 0) reasons.push('positive_caption_signal');
+  if (captionDelta < 0) reasons.push('negative_caption_signal');
+
+  return {
+    outcomeQualityLabel,
+    outcomeQualityScore,
+    outcomeQualityConfidence,
+    outcomeQualityReasons: reasons.slice(0, 4),
+  };
+}
+
+function buildObservedWorkScore(checkin: Record<string, any>) {
+  const wifi = normalizeScore(checkin.wifiSpeed);
+  const noise = normalizeNoiseScore(checkin.noiseLevel);
+  const busyness = normalizeScore(checkin.busyness);
+  const laptop = normalizeBool(checkin.laptopFriendly);
+  const outletsBool = normalizeBool(checkin.outletAvailability);
+  const outletsScore = normalizeScore(checkin.outlets);
+
+  let score = 0;
+  let weight = 0;
+  let signalCount = 0;
+
+  if (wifi !== null) {
+    signalCount += 1;
+    weight += 35;
+    score += ((wifi - 1) / 4) * 35;
+  }
+  if (noise !== null) {
+    signalCount += 1;
+    weight += 25;
+    score += ((5 - noise) / 4) * 25;
+  }
+  if (busyness !== null) {
+    signalCount += 1;
+    weight += 20;
+    score += ((5 - busyness) / 4) * 20;
+  }
+  if (laptop !== null) {
+    signalCount += 1;
+    weight += 12;
+    score += laptop ? 12 : 2;
+  }
+  if (outletsBool !== null || outletsScore !== null) {
+    signalCount += 1;
+    weight += 8;
+    if (outletsBool !== null) {
+      score += outletsBool ? 8 : 2;
+    } else if (outletsScore !== null) {
+      score += ((outletsScore - 1) / 4) * 8;
+    }
+  }
+
+  if (signalCount < 2 || weight <= 0) return null;
+
+  const observedWorkScore = Math.max(0, Math.min(100, Math.round((score / weight) * 100)));
+  return {
+    observedWorkScore,
+    signalCount,
+    metrics: {
+      wifiSpeed: wifi,
+      noiseLevel: noise,
+      busyness,
+      laptopFriendly: laptop,
+      outletAvailability: outletsBool,
+      outlets: outletsScore,
+    },
+  };
+}
+
+function toSafeFieldKey(value: string): string {
+  return String(value || 'unknown').replace(/[.#$/\[\]\s]+/g, '_').slice(0, 80) || 'unknown';
+}
+
+async function linkCheckinOutcomeTelemetry(checkinId: string, checkin: Record<string, any>) {
+  const fb = ensureFirebase();
+  if (!fb || !checkinId) return;
+
+  const placeId = typeof checkin.spotPlaceId === 'string' ? checkin.spotPlaceId.trim() : '';
+  const placeName = typeof checkin.spotName === 'string' ? checkin.spotName.trim() : '';
+  const userId = typeof checkin.userId === 'string' ? checkin.userId.trim() : '';
+  if (!placeId && !placeName) return;
+  if (!userId) return;
+
+  const observed = buildObservedWorkScore(checkin);
+  if (!observed) return;
+
+  const startedAt = Date.now();
+  try {
+    const db = fb.firestore();
+    const createdAtMs =
+      toMillisSafe(checkin.createdAt) ||
+      toMillisSafe(checkin.createdAtServer) ||
+      (typeof checkin.createdAtMs === 'number' ? checkin.createdAtMs : 0) ||
+      Date.now();
+
+    const windowStart = fb.firestore.Timestamp.fromMillis(createdAtMs - 6 * 60 * 60 * 1000);
+    const windowEnd = fb.firestore.Timestamp.fromMillis(createdAtMs + 20 * 60 * 1000);
+
+    const snapshot = await db
+      .collection('intelligencePredictions')
+      .where('createdAt', '>=', windowStart)
+      .where('createdAt', '<=', windowEnd)
+      .orderBy('createdAt', 'desc')
+      .limit(60)
+      .get();
+
+    type Candidate = {
+      id: string;
+      data: Record<string, any>;
+      score: number;
+      predictionCreatedAtMs: number;
+    };
+
+    const normalizedPlaceName = placeName.toLowerCase();
+    const candidates: Candidate[] = [];
+
+    snapshot.forEach((doc: any) => {
+      const data = (doc.data() || {}) as Record<string, any>;
+      const predictedScore = typeof data.workScore === 'number' ? data.workScore : null;
+      if (predictedScore === null) return;
+
+      const predictionPlaceId = typeof data.placeId === 'string' ? data.placeId.trim() : '';
+      const predictionPlaceName = typeof data.placeName === 'string' ? data.placeName.trim().toLowerCase() : '';
+      const predictionUserId = typeof data.userId === 'string' ? data.userId.trim() : '';
+      const predictionCreatedAtMs = toMillisSafe(data.createdAt) || toMillisSafe(data.generatedAt);
+
+      let score = 0;
+      if (placeId && predictionPlaceId && placeId === predictionPlaceId) score += 5;
+      if (!placeId && placeName && predictionPlaceName && normalizedPlaceName === predictionPlaceName) score += 4;
+      if (placeId && placeName && predictionPlaceName && normalizedPlaceName === predictionPlaceName) score += 1;
+      if (predictionUserId && userId === predictionUserId) score += 2;
+      if (predictionCreatedAtMs > 0 && predictionCreatedAtMs <= createdAtMs) {
+        const ageHours = (createdAtMs - predictionCreatedAtMs) / (60 * 60 * 1000);
+        score += Math.max(0, 2 - ageHours * 0.4);
+      }
+
+      if (score <= 0) return;
+      candidates.push({ id: doc.id, data, score, predictionCreatedAtMs });
+    });
+
+    if (!candidates.length) {
+      await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, false);
+      return;
+    }
+
+    candidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.predictionCreatedAtMs - a.predictionCreatedAtMs;
+    });
+    const best = candidates[0];
+    const predictedWorkScore = typeof best.data.workScore === 'number' ? best.data.workScore : 0;
+    const predictedConfidence = typeof best.data.confidence === 'number' ? best.data.confidence : 0;
+    const modelVersion = typeof best.data.modelVersion === 'string' ? best.data.modelVersion : 'unknown';
+    const signedError = round(observed.observedWorkScore - predictedWorkScore, 2);
+    const absError = Math.abs(signedError);
+    const squaredError = round(signedError * signedError, 4);
+
+    const confidenceBucket =
+      predictedConfidence >= 0.75 ? 'high' : predictedConfidence >= 0.5 ? 'medium' : 'low';
+    const outcomeQuality = deriveOutcomeQuality(checkin, observed);
+    const qualityKey = outcomeQuality.outcomeQualityLabel;
+    const modelKey = toSafeFieldKey(modelVersion);
+    const outcomeId = toSafeFieldKey(`${checkinId}_${best.id}`);
+    const outcomeRef = db.collection('intelligenceOutcomes').doc(outcomeId);
+    const existingOutcome = await outcomeRef.get();
+    if (existingOutcome.exists) {
+      await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, true);
+      return;
+    }
+
+    const outcomeDoc = {
+      checkinId,
+      predictionId: best.id,
+      userId,
+      placeId: placeId || null,
+      placeName: placeName || null,
+      modelVersion,
+      predictedWorkScore,
+      predictedConfidence,
+      observedWorkScore: observed.observedWorkScore,
+      observedMetrics: observed.metrics,
+      observedSignalCount: observed.signalCount,
+      signedError,
+      absError,
+      squaredError,
+      outcomeQualityLabel: outcomeQuality.outcomeQualityLabel,
+      outcomeQualityScore: outcomeQuality.outcomeQualityScore,
+      outcomeQualityConfidence: outcomeQuality.outcomeQualityConfidence,
+      outcomeQualityReasons: outcomeQuality.outcomeQualityReasons,
+      checkinCreatedAtMs: createdAtMs,
+      linkedAt: fb.firestore.FieldValue.serverTimestamp(),
+      linkedAtMs: Date.now(),
+    };
+
+    await outcomeRef.set(outcomeDoc, { merge: true });
+
+    await db.collection('intelligenceCalibrationMetrics').doc('current').set({
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+      sampleCount: fb.firestore.FieldValue.increment(1),
+      absErrorSum: fb.firestore.FieldValue.increment(absError),
+      squaredErrorSum: fb.firestore.FieldValue.increment(squaredError),
+      outcomeQualityScoreSum: fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityScore),
+      outcomeQualityConfidenceSum: fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityConfidence),
+      [`confidenceBuckets.${confidenceBucket}.count`]: fb.firestore.FieldValue.increment(1),
+      [`confidenceBuckets.${confidenceBucket}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`qualityBuckets.${qualityKey}.count`]: fb.firestore.FieldValue.increment(1),
+      [`qualityBuckets.${qualityKey}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`qualityBuckets.${qualityKey}.qualityScoreSum`]:
+        fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityScore),
+      [`qualityBuckets.${qualityKey}.qualityConfidenceSum`]:
+        fb.firestore.FieldValue.increment(outcomeQuality.outcomeQualityConfidence),
+      [`models.${modelKey}.count`]: fb.firestore.FieldValue.increment(1),
+      [`models.${modelKey}.absErrorSum`]: fb.firestore.FieldValue.increment(absError),
+      [`models.${modelKey}.squaredErrorSum`]: fb.firestore.FieldValue.increment(squaredError),
+      lastOutcome: {
+        absError,
+        signedError,
+        outcomeQualityLabel: outcomeQuality.outcomeQualityLabel,
+        outcomeQualityScore: outcomeQuality.outcomeQualityScore,
+        modelVersion,
+        placeId: placeId || null,
+      },
+    }, { merge: true });
+
+    await db.collection('intelligencePredictions').doc(best.id).set({
+      calibrationMatchedAt: fb.firestore.FieldValue.serverTimestamp(),
+      outcomeCount: fb.firestore.FieldValue.increment(1),
+      outcomeAbsErrorSum: fb.firestore.FieldValue.increment(absError),
+    }, { merge: true });
+
+    await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, true);
+    await recordPerfMetric('place_intelligence_calibration_abs_error', absError, true);
+  } catch {
+    await recordPerfMetric('place_intelligence_outcome_link', Date.now() - startedAt, false);
+  }
 }
 
 function normalizeStringArray(value: unknown) {
@@ -228,8 +817,23 @@ function writeLocalRequests(items: any[]) {
   } catch {}
 }
 
+function removeLocalFriendRequestPair(items: any[], userA: string, userB: string) {
+  return removeFriendRequestPair(items, userA, userB);
+}
+
+function addLocalMutualFriend(map: any, userA: string, userB: string) {
+  addMutualFriend(map, userA, userB, normalizeStringArray);
+}
+
+function removeLocalMutualFriend(map: any, userA: string, userB: string) {
+  removeMutualFriend(map, userA, userB, normalizeStringArray);
+}
+
 export function ensureFirebase() {
-  if (_initialized) return _firebaseApp;
+  if (_initialized) {
+    void ensureAuthPersistenceConfigured(_firebaseApp);
+    return _firebaseApp;
+  }
 
   try {
     const firebaseApp = (firebase as any)?.default ?? firebase;
@@ -238,6 +842,7 @@ export function ensureFirebase() {
     }
     _firebaseApp = firebaseApp;
     _initialized = true;
+    void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
   } catch (e) {
     _initError = e;
@@ -255,8 +860,8 @@ async function getBlobFromUri(uri: string): Promise<Blob | null> {
     if (response.ok) return await response.blob();
   } catch {}
   try {
-    const mod = await import('expo-file-system/legacy');
-    const base64 = await mod.readAsStringAsync(uri, { encoding: mod.EncodingType.Base64 });
+    const mod = await import('expo-file-system');
+    const base64 = await new mod.File(uri).base64();
     const dataUri = `data:image/jpeg;base64,${base64}`;
     const response = await fetch(dataUri);
     if (response.ok) return await response.blob();
@@ -270,11 +875,29 @@ async function getBase64FromUri(uri: string): Promise<string | null> {
     return uri;
   }
   try {
-    const mod = await import('expo-file-system/legacy');
-    const base64 = await mod.readAsStringAsync(uri, { encoding: mod.EncodingType.Base64 });
+    const mod = await import('expo-file-system');
+    const base64 = await new mod.File(uri).base64();
     return base64 || null;
   } catch {}
   return null;
+}
+
+type CheckinPhotoVisibility = 'public' | 'friends' | 'close';
+
+type UploadedCheckinPhoto = {
+  downloadURL: string;
+  storagePath: string;
+};
+
+function buildCheckinPhotoMetadata(userId: string, visibility: CheckinPhotoVisibility) {
+  return {
+    contentType: 'image/jpeg',
+    customMetadata: {
+      ownerId: userId,
+      visibility,
+      mediaKind: 'checkin',
+    },
+  };
 }
 
 export async function uploadPhotoToStorage(uri: string, userId?: string) {
@@ -318,11 +941,100 @@ export async function uploadPhotoToStorage(uri: string, userId?: string) {
   throw lastErr || new Error('Photo upload failed.');
 }
 
-export async function createCheckinRemote({ userId, userName, userHandle, userPhotoUrl, spotName, caption, photoUrl, photoPending, campusOrCity, city, campus, visibility, spotPlaceId, spotLatLng, clientId, tags }: any) {
+export async function uploadCheckinPhotoToStorage(
+  uri: string,
+  options: {
+    userId?: string;
+    checkinId: string;
+    visibility?: CheckinPhotoVisibility;
+  }
+): Promise<UploadedCheckinPhoto> {
+  const fb = ensureFirebase();
+  if (!fb) throw new Error('Firebase not initialized. Run `npm install firebase` and provide config.');
+  if (!options?.checkinId) throw new Error('Check-in photo upload requires a check-in id.');
+
+  const storage = fb.storage();
+  const resolvedUserId = options.userId || fb.auth()?.currentUser?.uid || 'anonymous';
+  const visibility = options.visibility || 'public';
+  const path = `checkins/${resolvedUserId}/${options.checkinId}.jpg`;
+  const metadata = buildCheckinPhotoMetadata(resolvedUserId, visibility);
+
+  const blob = await getBlobFromUri(uri);
+  const base64 = blob ? null : await getBase64FromUri(uri);
+  if (!blob && !base64) throw new Error('Unable to read photo for upload.');
+
+  let lastErr: any = null;
+  const buckets = getStorageBucketCandidates();
+  const refs = buckets.length
+    ? buckets.map((bucket) => storage.refFromURL(`gs://${bucket}`).child(path))
+    : [storage.ref().child(path)];
+
+  for (const ref of refs) {
+    try {
+      if (blob) {
+        await ref.put(blob, { ...metadata, contentType: blob.type || metadata.contentType });
+        try {
+          if (typeof (blob as any).close === 'function') (blob as any).close();
+        } catch {}
+      } else if (base64) {
+        if (base64.startsWith('data:')) {
+          await ref.putString(base64, 'data_url', metadata);
+        } else {
+          await ref.putString(base64, 'base64', metadata);
+        }
+      }
+      const downloadURL = await ref.getDownloadURL();
+      return {
+        downloadURL: String(downloadURL),
+        storagePath: `gs://${ref.bucket}/${ref.fullPath}`,
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Check-in photo upload failed.');
+}
+
+export async function updateCheckinPhotoVisibility(
+  photoPath: string,
+  userId: string,
+  visibility: CheckinPhotoVisibility
+) {
+  const fb = ensureFirebase();
+  if (!fb || !photoPath || !userId) return;
+  try {
+    const ref = fb.storage().refFromURL(photoPath);
+    await ref.updateMetadata(buildCheckinPhotoMetadata(userId, visibility));
+  } catch {
+    // ignore metadata sync failures; check-in visibility still updates in Firestore
+  }
+}
+
+export async function createCheckinRemote({
+  userId,
+  userName,
+  userHandle,
+  userPhotoUrl,
+  spotName,
+  caption,
+  photoUrl,
+  photoPath,
+  photoPending,
+  campusOrCity,
+  city,
+  campus,
+  visibility,
+  spotPlaceId,
+  spotLatLng,
+  clientId,
+  tags,
+  visitIntent,
+  photoTags,
+  ambiance,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
 
-  const db = fb.firestore();
   const now = Date.now();
   const createdAt = fb.firestore.Timestamp.fromMillis(now);
   const doc = {
@@ -337,7 +1049,11 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
     spotLatLng: spotLatLng || null,
     caption: caption || '',
     tags: Array.isArray(tags) ? tags : [],
+    visitIntent: Array.isArray(visitIntent) ? visitIntent.slice(0, 2) : [],
+    photoTags: Array.isArray(photoTags) ? photoTags.slice(0, 3) : [],
+    ambiance: typeof ambiance === 'string' ? ambiance : null,
     photoUrl: photoUrl || null,
+    photoPath: photoPath || null,
     photoPending: !!photoPending,
     campusOrCity: campusOrCity || city || null,
     city: city || null,
@@ -350,8 +1066,60 @@ export async function createCheckinRemote({ userId, userName, userHandle, userPh
     moderation: { status: 'approved' },
   };
 
+  if (typeof (fb as any).functions === 'function') {
+    try {
+      const callable = getRegionCallable(fb, 'createCheckinSecure');
+      const response = await callable({
+        clientId: doc.clientId,
+        userName: doc.userName,
+        userHandle: doc.userHandle,
+        userPhotoUrl: doc.userPhotoUrl,
+        visibility: doc.visibility,
+        spotName: doc.spotName,
+        spotPlaceId: doc.spotPlaceId,
+        spotLatLng: doc.spotLatLng,
+        caption: doc.caption,
+        tags: doc.tags,
+        visitIntent: doc.visitIntent,
+        photoTags: doc.photoTags,
+        ambiance: doc.ambiance,
+        photoUrl: doc.photoUrl,
+        photoPath: doc.photoPath,
+        photoPending: doc.photoPending,
+        campusOrCity: doc.campusOrCity,
+        city: doc.city,
+        campus: doc.campus,
+      });
+      const created = response?.data?.checkin;
+      if (!created?.id) {
+        throw new Error('Remote check-in creation failed.');
+      }
+      invalidateCheckinsCache();
+      void invalidateCacheOnCheckinCreate(created.id, resolveSpotId(created), userId || '');
+      void linkCheckinOutcomeTelemetry(created.id, created);
+      return {
+        ...doc,
+        ...created,
+      };
+    } catch (error: any) {
+      const code = String(error?.code || '').toLowerCase();
+      if (code.includes('resource-exhausted')) {
+        throw new Error('Posting too quickly. Wait a moment and retry.');
+      }
+      if (code.includes('permission-denied')) {
+        throw new Error('Account is not allowed to post check-ins yet.');
+      }
+      if (!__DEV__) {
+        throw new Error('Check-in service unavailable. Deploy Cloud Functions and retry.');
+      }
+    }
+  }
+
+  const db = fb.firestore();
   const ref = await db.collection('checkins').add(doc);
   invalidateCheckinsCache();
+  void invalidateCacheOnCheckinCreate(ref.id, resolveSpotId(doc), userId || '');
+  void linkCheckinOutcomeTelemetry(ref.id, doc);
   return { id: ref.id, ...doc };
 }
 
@@ -405,19 +1173,7 @@ export async function getUserPreferenceRemote(userId: string) {
 }
 
 export async function recordPlaceTagRemote(payload: { placeId?: string | null; name?: string; tag: string; delta?: number }) {
-  const fb = ensureFirebase();
-  if (!fb) return;
-  try {
-    const db = fb.firestore();
-    const delta = typeof payload.delta === 'number' ? payload.delta : 1;
-    const key = spotKey(payload.placeId || undefined, payload.name || 'unknown');
-    await db.collection('place_tags').doc(key).set({
-      [`tags.${payload.tag}`]: fb.firestore.FieldValue.increment(delta),
-      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  } catch {
-    // ignore
-  }
+  devLog('recordPlaceTagRemote skipped: aggregate tags are server-owned', payload);
 }
 
 export async function getPlaceTagRemote(placeId?: string, name?: string) {
@@ -466,82 +1222,311 @@ export async function getPlaceTagVotesRemote(userId: string, placeId?: string, n
 }
 
 export async function getCheckinsRemote(limit = 50, startAfter?: any) {
-  const startedAt = Date.now();
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
-
-  try {
+  return withErrorBoundary('firebase_get_checkins_remote', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    if (!fb.auth()?.currentUser?.uid) {
+      return { items: [], lastCursor: null, source: 'remote' as const };
+    }
     const cacheKey = `${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
       void recordPerfMetric('firebase_get_checkins_remote_cache_hit', Date.now() - startedAt, true);
+      return { ...cached, source: 'remote' as const };
+    }
+
+    const db = fb.firestore();
+
+    // Query public feed first so collection reads satisfy Firestore query rules.
+    let snapshot: any;
+    try {
+      let q: any = db
+        .collection('checkins')
+        .where('visibility', '==', 'public')
+        .orderBy('createdAt', 'desc')
+        .limit(limit);
+      if (startAfter) q = q.startAfter(startAfter);
+      snapshot = await q.get();
+    } catch {
+      // Legacy timestamp fallback
+      try {
+        let legacyQ: any = db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .orderBy('timestamp', 'desc')
+          .limit(limit);
+        if (startAfter) legacyQ = legacyQ.startAfter(startAfter);
+        snapshot = await legacyQ.get();
+      } catch {
+        // Both indexes missing; fall back to unordered query (can't paginate)
+        snapshot = await db
+          .collection('checkins')
+          .where('visibility', '==', 'public')
+          .limit(limit)
+          .get();
+      }
+    }
+
+    const publicItems: any[] = [];
+    snapshot.forEach((doc: any) => {
+      publicItems.push({ id: doc.id, ...(doc.data() || {}) });
+    });
+
+    // Include signed-in user's own check-ins on first page, regardless of visibility.
+    // This keeps personal history in feed/explore while preserving public pagination.
+    let ownItems: any[] = [];
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    if (!startAfter && currentUserId) {
+      try {
+        const ownSnapshot = await db
+          .collection('checkins')
+          .where('userId', '==', currentUserId)
+          .orderBy('createdAt', 'desc')
+          .limit(limit)
+          .get();
+        ownItems = ownSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+      } catch {
+        try {
+          const ownLegacySnapshot = await db
+            .collection('checkins')
+            .where('userId', '==', currentUserId)
+            .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .get();
+          ownItems = ownLegacySnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+        } catch {
+          try {
+            const ownFallbackSnapshot = await db
+              .collection('checkins')
+              .where('userId', '==', currentUserId)
+              .limit(limit)
+              .get();
+            ownItems = ownFallbackSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+          } catch {
+            ownItems = [];
+          }
+        }
+      }
+    }
+
+    const mergedById = new Map<string, any>();
+    [...publicItems, ...ownItems].forEach((item: any) => {
+      const fallbackKey = `${item?.userId || 'anon'}:${item?.spotPlaceId || item?.spotName || item?.spot || 'spot'}:${toMillisSafe(item?.createdAt || item?.timestamp)}`;
+      const key = item?.id || item?.clientId || fallbackKey;
+      const existing = mergedById.get(key);
+      if (!existing) {
+        mergedById.set(key, item);
+        return;
+      }
+      const nextTs = toMillisSafe(item?.createdAt || item?.timestamp);
+      const prevTs = toMillisSafe(existing?.createdAt || existing?.timestamp);
+      if (nextTs >= prevTs) mergedById.set(key, item);
+    });
+
+    const items = Array.from(mergedById.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp)
+    );
+
+    const lastCursor = publicItems.length
+      ? (publicItems[publicItems.length - 1].createdAt ?? publicItems[publicItems.length - 1].timestamp ?? null)
+      : null;
+    const payload = { items, lastCursor, source: 'remote' as const };
+    setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
+    return payload;
+  }, { items: [], lastCursor: null, source: 'fallback' as const });
+}
+
+export async function getCheckinsForSpotRemote(spotId: string, limit = 200) {
+  return withErrorBoundary('firebase_get_checkins_for_spot', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    if (!spotId) return { items: [], lastCursor: null };
+
+    const cacheKey = `spot:${spotId}:${limit}`;
+    const cached = getCachedValue(checkinsCache, cacheKey, 10000);
+    if (cached) {
+      void recordPerfMetric('firebase_get_checkins_for_spot_cache_hit', Date.now() - startedAt, true);
       return cached;
     }
 
     const db = fb.firestore();
-    let q: any = db.collection('checkins').orderBy('createdAt', 'desc');
-    if (startAfter) {
-      q = q.startAfter(startAfter);
+    // Query by spot directly so spot detail can show full history instead of
+    // sampling from the global feed window. Restrict the primary query to
+    // public visibility so Firestore rules allow the read.
+    let publicSnapshot: any;
+    try {
+      publicSnapshot = await db
+        .collection('checkins')
+        .where('spotPlaceId', '==', spotId)
+        .where('visibility', '==', 'public')
+        .orderBy('createdAt', 'desc')
+        .limit(limit)
+        .get();
+    } catch {
+      try {
+        publicSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('visibility', '==', 'public')
+          .orderBy('timestamp', 'desc')
+          .limit(limit)
+          .get();
+      } catch {
+        publicSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('visibility', '==', 'public')
+          .limit(limit)
+          .get();
+      }
     }
-    q = q.limit(limit);
 
-    const snapshot = await q.get();
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => {
-      items.push({ id: doc.id, ...(doc.data() || {}) });
+    let ownItems: any[] = [];
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    if (currentUserId) {
+      try {
+        const ownSnapshot = await db
+          .collection('checkins')
+          .where('spotPlaceId', '==', spotId)
+          .where('userId', '==', currentUserId)
+          .orderBy('createdAt', 'desc')
+          .limit(limit)
+          .get();
+        ownItems = ownSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+      } catch {
+        try {
+          const ownLegacySnapshot = await db
+            .collection('checkins')
+            .where('spotPlaceId', '==', spotId)
+            .where('userId', '==', currentUserId)
+            .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .get();
+          ownItems = ownLegacySnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+        } catch {
+          ownItems = [];
+        }
+      }
+    }
+
+    const publicItems = publicSnapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() || {}) }));
+    const mergedById = new Map<string, any>();
+    [...publicItems, ...ownItems].forEach((item: any) => {
+      const key = item?.id || item?.clientId || `${item?.userId || 'anon'}:${item?.spotPlaceId || 'spot'}:${toMillisSafe(item?.createdAt || item?.timestamp)}`;
+      const existing = mergedById.get(key);
+      if (!existing || toMillisSafe(item?.createdAt || item?.timestamp) >= toMillisSafe(existing?.createdAt || existing?.timestamp)) {
+        mergedById.set(key, item);
+      }
     });
 
-    // lastCursor is the createdAt value of the last item (useful as a startAfter cursor)
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const items = Array.from(mergedById.values()).sort(
+      (a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp)
+    );
+    const lastCursor = publicItems.length
+      ? (publicItems[publicItems.length - 1].createdAt ?? publicItems[publicItems.length - 1].timestamp ?? null)
+      : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
-    void recordPerfMetric('firebase_get_checkins_remote', Date.now() - startedAt, true);
     return payload;
-  } catch (error) {
-    void recordPerfMetric('firebase_get_checkins_remote', Date.now() - startedAt, false);
-    throw error;
-  }
+  }, { items: [], lastCursor: null });
 }
-
 export async function getCheckinsForUserRemote(userId: string, limit = 80, startAfter?: any) {
-  const startedAt = Date.now();
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
-  if (!userId) return { items: [], lastCursor: null };
-
-  try {
+  return withErrorBoundary('firebase_get_checkins_for_user', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
+    if (!userId) return { items: [], lastCursor: null, source: 'remote' as const };
     const cacheKey = `user:${userId}:${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
       void recordPerfMetric('firebase_get_checkins_for_user_cache_hit', Date.now() - startedAt, true);
-      return cached;
+      return { ...cached, source: 'remote' as const };
     }
 
     const db = fb.firestore();
-    let q: any = db.collection('checkins').where('userId', '==', userId).orderBy('createdAt', 'desc');
-    if (startAfter) q = q.startAfter(startAfter);
-    q = q.limit(limit);
+    const currentUserId = fb.auth()?.currentUser?.uid || null;
+    const isOwnProfile = currentUserId === userId;
 
-    const snapshot = await q.get();
+    let allowedVisibility: string[] = [];
+    if (!isOwnProfile) {
+      allowedVisibility = ['public'];
+      if (currentUserId) {
+        try {
+          const viewerGraph = await getSocialGraphDoc(db, currentUserId);
+          if (viewerGraph.friends.includes(userId)) {
+            allowedVisibility.push('friends');
+          }
+          const access = await getProfileAccessSnapshot(userId);
+          if (access?.canSeeClose) {
+            if (!allowedVisibility.includes('friends')) allowedVisibility.push('friends');
+            allowedVisibility.push('close');
+          }
+        } catch {
+          // Keep public-only fallback if relationship lookup fails.
+        }
+      }
+    }
+
+    const applyVisibilityFilter = (queryRef: any) => {
+      if (isOwnProfile) return queryRef;
+      if (allowedVisibility.length <= 1) {
+        return queryRef.where('visibility', '==', allowedVisibility[0] || 'public');
+      }
+      return queryRef.where('visibility', 'in', allowedVisibility);
+    };
+
+    // Use schema helper with automatic fallback for legacy data.
+    // If query fails (permissions/index/network/auth timing), degrade to empty state.
+    let snapshot: any;
+    try {
+      if (isOwnProfile) {
+        snapshot = await queryCheckinsByUser(db, fb, userId, { limit, startAfter });
+      } else {
+        let queryRef: any = db.collection('checkins').where('userId', '==', userId);
+        queryRef = applyVisibilityFilter(queryRef);
+        queryRef = queryRef.orderBy('createdAt', 'desc');
+        if (startAfter) queryRef = queryRef.startAfter(startAfter);
+        snapshot = await queryRef.limit(limit).get();
+      }
+    } catch (error) {
+      devLog('getCheckinsForUserRemote index fallback to unordered query', error);
+      try {
+        let fallbackQuery: any = db.collection('checkins').where('userId', '==', userId);
+        fallbackQuery = applyVisibilityFilter(fallbackQuery);
+        const fallbackSnapshot = await fallbackQuery.limit(limit).get();
+        const fallbackItems: any[] = [];
+        fallbackSnapshot.forEach((doc: any) => fallbackItems.push({ id: doc.id, ...(doc.data() || {}) }));
+        fallbackItems.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+        const fallbackCursor = fallbackItems.length
+          ? (fallbackItems[fallbackItems.length - 1].createdAt ?? fallbackItems[fallbackItems.length - 1].timestamp ?? null)
+          : null;
+        const fallbackPayload = { items: fallbackItems, lastCursor: fallbackCursor, source: 'remote' as const };
+        setCachedValue(checkinsCache, cacheKey, fallbackPayload, CHECKINS_CACHE_MAX);
+        return fallbackPayload;
+      } catch (unorderedError) {
+        devLog('getCheckinsForUserRemote unordered fallback to empty', unorderedError);
+        return { items: [], lastCursor: null, source: 'fallback' as const };
+      }
+    }
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
-    const payload = { items, lastCursor };
+    items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+    const lastCursor = items.length
+      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+      : null;
+    const payload = { items, lastCursor, source: 'remote' as const };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
-    void recordPerfMetric('firebase_get_checkins_for_user', Date.now() - startedAt, true);
     return payload;
-  } catch (error) {
-    void recordPerfMetric('firebase_get_checkins_for_user', Date.now() - startedAt, false);
-    throw error;
-  }
+  }, { items: [], lastCursor: null, source: 'fallback' as const });
 }
 
 export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
-  const startedAt = Date.now();
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
-
-  try {
+  return withErrorBoundary('firebase_get_approved_checkins', async () => {
+    const startedAt = Date.now();
+    const fb = ensureFirebase();
+    if (!fb) throw new Error('Firebase not initialized.');
     const cacheKey = `approved:${limit}:${cursorKey(startAfter)}`;
     const cached = getCachedValue(checkinsCache, cacheKey, 10000);
     if (cached) {
@@ -550,69 +1535,218 @@ export async function getApprovedCheckinsRemote(limit = 50, startAfter?: any) {
     }
 
     const db = fb.firestore();
-    let q: any = db.collection('checkins').where('approved', '==', true).orderBy('createdAt', 'desc');
-    if (startAfter) q = q.startAfter(startAfter);
-    q = q.limit(limit);
 
-    const snapshot = await q.get();
+    // Use schema helper with automatic fallback for legacy data
+    const snapshot = await queryAllCheckins(db, { limit, startAfter, approvedOnly: true });
     const items: any[] = [];
     snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    const lastCursor = items.length ? items[items.length - 1].createdAt : null;
+    const lastCursor = items.length
+      ? (items[items.length - 1].createdAt ?? items[items.length - 1].timestamp ?? null)
+      : null;
     const payload = { items, lastCursor };
     setCachedValue(checkinsCache, cacheKey, payload, CHECKINS_CACHE_MAX);
-    void recordPerfMetric('firebase_get_approved_checkins', Date.now() - startedAt, true);
     return payload;
-  } catch (error) {
-    void recordPerfMetric('firebase_get_approved_checkins', Date.now() - startedAt, false);
-    throw error;
-  }
+  }, { items: [], lastCursor: null });
 }
 
 export function subscribeApprovedCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
   const db = fb.firestore();
-  const q = db.collection('checkins').where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
-  const unsub = q.onSnapshot((snapshot: any) => {
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    onUpdate(items);
-  });
-  return unsub;
+
+  // Use schema helper with automatic fallback for legacy data
+  const unsubscribe = subscribeApprovedCheckinsHelper(db, onUpdate, limit);
+  return registerSubscription(unsubscribe);
 }
 
 export async function getUsersByIdsCached(ids: string[], ttlMs = 15000) {
-  if (!ids || ids.length === 0) return [];
-  const key = ids.slice().sort().join('|');
-  const cached = getCachedValue(usersByIdCache, key, ttlMs);
-  if (cached) return cached;
-  const payload = await getUsersByIds(ids);
-  setCachedValue(usersByIdCache, key, payload, USERS_BY_ID_CACHE_MAX);
-  return payload;
+  return withErrorBoundary('firebase_get_users_by_ids_cached', async () => {
+    if (!ids || ids.length === 0) return [];
+    const key = ids.slice().sort().join('|');
+    const cached = getCachedValue(usersByIdCache, key, ttlMs);
+    if (cached) return cached;
+    const payload = await getUsersByIds(ids);
+    setCachedValue(usersByIdCache, key, payload, USERS_BY_ID_CACHE_MAX);
+    return payload;
+  }, []);
 }
 
 export async function getUserFriendsCached(userId: string, ttlMs = 15000) {
-  if (!userId) return [];
-  const cached = getCachedValue(userFriendsCache, userId, ttlMs);
-  if (cached) return cached;
-  const payload = await getUserFriends(userId);
-  setCachedValue(userFriendsCache, userId, payload, USER_FRIENDS_CACHE_MAX);
-  return payload;
+  return withErrorBoundary('firebase_get_user_friends_cached', async () => {
+    if (!userId) return [];
+    const cached = getCachedValue(userFriendsCache, userId, ttlMs);
+    if (cached) return cached;
+    const payload = await getUserFriends(userId);
+    setCachedValue(userFriendsCache, userId, payload, USER_FRIENDS_CACHE_MAX);
+    return payload;
+  }, []);
+}
+
+async function callSocialGraphMutation(action: string, payload: Record<string, any>) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  const callable = getRegionCallable(fb, 'socialGraphMutation');
+  const response = await callable({ action, ...payload });
+  return response?.data || null;
+}
+
+async function getProfileAccessSnapshot(targetUserId: string) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function' || !targetUserId) return null;
+  try {
+    const callable = getRegionCallable(fb, 'getProfileAccessSnapshot');
+    const response = await callable({ targetUserId });
+    return response?.data || null;
+  } catch (error) {
+    devLog('getProfileAccessSnapshot failed', { targetUserId, error });
+    return null;
+  }
+}
+
+function getFunctionsRegion() {
+  return (
+    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
+    'us-central1'
+  );
+}
+
+function getRegionCallable(fb: any, name: string) {
+  const region =
+    getFunctionsRegion();
+  return (fb as any).app().functions(region).httpsCallable(name);
+}
+
+export async function callFirebaseCallable<T = any>(name: string, payload: Record<string, any> = {}): Promise<T | null> {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  const callable = getRegionCallable(fb, name);
+  const response = await callable(payload);
+  return (response?.data ?? null) as T | null;
+}
+
+async function callSecureUserLookup(type: 'email' | 'phone', query: string) {
+  const fb = ensureFirebase();
+  if (!fb || typeof (fb as any).functions !== 'function') return null;
+  try {
+    const callable = getRegionCallable(fb, 'secureUserLookup');
+    const response = await callable({ type, query });
+    return response?.data?.user || null;
+  } catch (error) {
+    devLog('secureUserLookup failed', { type, error });
+    return null;
+  }
+}
+
+function raiseSocialGraphPermissionError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because friend graph permissions are blocked. Re-authenticate and retry.`
+  );
+}
+
+function getSocialGraphCallableErrorCode(error: any): string {
+  return String(error?.code || error?.details || '').toLowerCase();
+}
+
+function raiseSocialGraphServiceUnavailableError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because the social graph service is unavailable. Deploy Cloud Functions and retry.`
+  );
+}
+
+function raiseSocialGraphAuthenticationError(action: string): never {
+  throw new Error(
+    `Unable to ${action} because authentication expired. Sign in again and retry.`
+  );
+}
+
+function handleSocialGraphCallableError(action: string, error: any): never {
+  const code = getSocialGraphCallableErrorCode(error);
+  if (code.includes('permission-denied')) {
+    raiseSocialGraphPermissionError(action);
+  }
+  if (code.includes('unauthenticated')) {
+    raiseSocialGraphAuthenticationError(action);
+  }
+  if (code.includes('not-found') || code.includes('unimplemented') || code.includes('unavailable') || code.includes('internal')) {
+    raiseSocialGraphServiceUnavailableError(action);
+  }
+  throw error instanceof Error ? error : new Error(String(error));
 }
 
 export function subscribeCheckins(onUpdate: (items: any[]) => void, limit = 40) {
   const fb = ensureFirebase();
   if (!fb) return () => {};
+  if (!fb.auth()?.currentUser?.uid) return () => {};
 
   const db = fb.firestore();
-  const q = db.collection('checkins').orderBy('createdAt', 'desc').limit(limit);
-  const unsub = q.onSnapshot((snapshot: any) => {
-    const items: any[] = [];
-    snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-    onUpdate(items);
-  });
 
-  return unsub;
+  // Try primary schema first (createdAt)
+  let primaryUnsub: (() => void) | null = null;
+  let legacyUnsub: (() => void) | null = null;
+  let settled = false;
+
+  const runUnorderedFallback = () => {
+    db.collection('checkins')
+      .where('visibility', '==', 'public')
+      .limit(limit)
+      .get()
+      .then((snap: any) => {
+        const items: any[] = [];
+        snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+        onUpdate(items);
+      })
+      .catch(() => onUpdate([]));
+  };
+
+  const startLegacySubscription = () => {
+    if (legacyUnsub) return;
+    const legacyQuery = db
+      .collection('checkins')
+      .where('visibility', '==', 'public')
+      .orderBy('timestamp', 'desc')
+      .limit(limit);
+    legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+      const items: any[] = [];
+      legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+      onUpdate(items);
+    }, runUnorderedFallback));
+  };
+
+  const primaryQuery = db
+    .collection('checkins')
+    .where('visibility', '==', 'public')
+    .orderBy('createdAt', 'desc')
+    .limit(limit);
+  primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+    if (settled) return;
+    if (!snapshot.empty) {
+      const items: any[] = [];
+      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+      onUpdate(items);
+
+      // Clean up legacy subscription if it exists
+      if (legacyUnsub) {
+        legacyUnsub();
+        legacyUnsub = null;
+      }
+    } else {
+      // No results, try legacy schema (timestamp)
+      startLegacySubscription();
+    }
+  }, () => {
+    if (settled) return;
+    settled = true;
+    // Index missing — try legacy
+    startLegacySubscription();
+  }));
+
+  // Return combined unsubscribe function
+  return () => {
+    if (primaryUnsub) primaryUnsub();
+    if (legacyUnsub) legacyUnsub();
+  };
 }
 
 export async function getCheckinByClientId(clientId: string) {
@@ -648,8 +1782,12 @@ export async function deleteCheckinRemote(checkinId: string) {
   const fb = ensureFirebase();
   if (!fb) return false;
   try {
-    await fb.firestore().collection('checkins').doc(checkinId).delete();
+    const docRef = fb.firestore().collection('checkins').doc(checkinId);
+    const snapshot = await docRef.get();
+    const existing = snapshot.exists ? (snapshot.data() || {}) : {};
+    await docRef.delete();
     invalidateCheckinsCache();
+    void invalidateCacheOnCheckinDelete(checkinId, resolveSpotId(existing), existing.userId);
     return true;
   } catch {
     return false;
@@ -661,8 +1799,21 @@ export async function updateCheckinRemote(checkinId: string, fields: Record<stri
   if (!fb || !checkinId) return;
   try {
     const db = fb.firestore();
-    await db.collection('checkins').doc(checkinId).set(fields, { merge: true });
+    const docRef = db.collection('checkins').doc(checkinId);
+    const snapshot = await docRef.get();
+    const existing = snapshot.exists ? (snapshot.data() || {}) : {};
+    const merged = { ...existing, ...fields };
+    await docRef.set(fields, { merge: true });
     invalidateCheckinsCache();
+    const spotId = resolveSpotId(merged);
+    const userId = merged.userId;
+    void invalidateCacheOnCheckinUpdate(checkinId, spotId || undefined, userId);
+    if (hasMetricUpdates(fields) && spotId) {
+      void invalidateCacheOnMetricUpdate(spotId, userId);
+    }
+    if (hasOutcomeMetricUpdates(fields)) {
+      void linkCheckinOutcomeTelemetry(checkinId, { ...merged, id: checkinId });
+    }
   } catch {
     // ignore
   }
@@ -707,14 +1858,63 @@ export function subscribeCheckinsForUsers(userIds: string[], onUpdate: (items: a
   for (let i = 0; i < userIds.length; i += 10) {
     const batchIndex = i / 10;
     const batch = userIds.slice(i, i + 10);
-    const q = db.collection('checkins').where('userId', 'in', batch).orderBy('createdAt', 'desc').limit(limit);
-    const unsub = q.onSnapshot((snapshot: any) => {
-      const items: any[] = [];
-      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-      snapshotsByBatch.set(batchIndex, items);
-      scheduleFlush();
+
+    // Try primary schema first (createdAt)
+    const primaryQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('createdAt', 'desc').limit(limit);
+    let legacyUnsub: (() => void) | null = null;
+
+    const runUnorderedFallback = () => {
+      db.collection('checkins').where('userId', 'in', batch).limit(limit).get()
+        .then((snap: any) => {
+          const items: any[] = [];
+          snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          items.sort((a, b) => toMillisSafe(b.createdAt || b.timestamp) - toMillisSafe(a.createdAt || a.timestamp));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        })
+        .catch(() => {
+          snapshotsByBatch.set(batchIndex, []);
+          scheduleFlush();
+        });
+    };
+
+    const startLegacySubscription = () => {
+      if (legacyUnsub) return;
+      const legacyQuery = db.collection('checkins').where('userId', 'in', batch).orderBy('timestamp', 'desc').limit(limit);
+      legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+        const items: any[] = [];
+        legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+      }, runUnorderedFallback));
+    };
+
+    const primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+      if (!snapshot.empty) {
+        // Primary schema has data, use it
+        const items: any[] = [];
+        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+
+        // Clean up legacy subscription if it exists
+        if (legacyUnsub) {
+          legacyUnsub();
+          legacyUnsub = null;
+        }
+      } else {
+        // No results from primary, try legacy schema (timestamp)
+        startLegacySubscription();
+      }
+    }, () => {
+      // Index error on primary — fall back to legacy subscription
+      startLegacySubscription();
+    }));
+
+    unsubs.push(() => {
+      primaryUnsub();
+      if (legacyUnsub) legacyUnsub();
     });
-    unsubs.push(unsub);
   }
 
   return () => {
@@ -766,14 +1966,40 @@ export function subscribeApprovedCheckinsForUsers(userIds: string[], onUpdate: (
   for (let i = 0; i < userIds.length; i += 10) {
     const batchIndex = i / 10;
     const batch = userIds.slice(i, i + 10);
-    const q = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
-    const unsub = q.onSnapshot((snapshot: any) => {
-      const items: any[] = [];
-      snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-      snapshotsByBatch.set(batchIndex, items);
-      scheduleFlush();
+
+    // Try primary schema first (createdAt)
+    const primaryQuery = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('createdAt', 'desc').limit(limit);
+    let legacyUnsub: (() => void) | null = null;
+
+    const primaryUnsub = registerSubscription(primaryQuery.onSnapshot((snapshot: any) => {
+      if (!snapshot.empty) {
+        // Primary schema has data, use it
+        const items: any[] = [];
+        snapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+        snapshotsByBatch.set(batchIndex, items);
+        scheduleFlush();
+
+        // Clean up legacy subscription if it exists
+        if (legacyUnsub) {
+          legacyUnsub();
+          legacyUnsub = null;
+        }
+      } else {
+        // No results from primary, try legacy schema (timestamp)
+        const legacyQuery = db.collection('checkins').where('userId', 'in', batch).where('approved', '==', true).orderBy('timestamp', 'desc').limit(limit);
+        legacyUnsub = registerSubscription(legacyQuery.onSnapshot((legacySnapshot: any) => {
+          const items: any[] = [];
+          legacySnapshot.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+          snapshotsByBatch.set(batchIndex, items);
+          scheduleFlush();
+        }));
+      }
+    }));
+
+    unsubs.push(() => {
+      primaryUnsub();
+      if (legacyUnsub) legacyUnsub();
     });
-    unsubs.push(unsub);
   }
 
   return () => {
@@ -828,10 +2054,8 @@ export async function getUserFriends(userId: string) {
   }
   const db = fb.firestore();
   try {
-    const doc = await db.collection('users').doc(userId).get();
-    if (!doc.exists) return [];
-    const data = doc.data() || {};
-    return normalizeStringArray(data.friends);
+    const graph = await getSocialGraphDoc(db, userId);
+    return graph.friends;
   } catch (e) {
     return [];
   }
@@ -842,103 +2066,128 @@ export async function getCloseFriends(userId: string) {
   if (!fb) return [];
   const db = fb.firestore();
   try {
-    const doc = await db.collection('users').doc(userId).get();
-    if (!doc.exists) return [];
-    const data = doc.data() || {};
-    return normalizeStringArray(data.closeFriends);
+    const graph = await getSocialGraphDoc(db, userId);
+    return graph.closeFriends;
   } catch (e) {
     return [];
   }
 }
 
 export async function followUserRemote(currentUserId: string, targetUserId: string) {
-  const fb = ensureFirebase();
-  if (!fb) {
-    const map = readLocalFriends();
-    const current = new Set(map[currentUserId] || []);
-    current.add(targetUserId);
-    map[currentUserId] = Array.from(current);
-    writeLocalFriends(map);
-    invalidateUserFriendsCache([currentUserId, targetUserId]);
-    return;
-  }
-  const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  await ref.set({ friends: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  await sendFriendRequest(currentUserId, targetUserId);
 }
 
 export async function unfollowUserRemote(currentUserId: string, targetUserId: string) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
   const fb = ensureFirebase();
   if (!fb) {
     const map = readLocalFriends();
-    map[currentUserId] = (map[currentUserId] || []).filter((id: string) => id !== targetUserId);
+    removeLocalMutualFriend(map, currentUserId, targetUserId);
     writeLocalFriends(map);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), currentUserId, targetUserId));
     invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
-  const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  await ref.set({ friends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+
+  try {
+    const callableResult = await callSocialGraphMutation('unfriend', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('remove this friend', error);
+  }
+  raiseSocialGraphServiceUnavailableError('remove this friend');
 }
 
 export async function setCloseFriendRemote(currentUserId: string, targetUserId: string, makeClose: boolean) {
-  const fb = ensureFirebase();
-  if (!fb) return;
-  const db = fb.firestore();
-  const ref = db.collection('users').doc(currentUserId);
-  if (makeClose) {
-    await ref.set({ closeFriends: fb.firestore.FieldValue.arrayUnion(targetUserId), friends: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
-  } else {
-    await ref.set({ closeFriends: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
+  try {
+    const callableResult = await callSocialGraphMutation(makeClose ? 'set_close_friend' : 'remove_close_friend', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError(makeClose ? 'set this close friend' : 'remove this close friend', error);
   }
-  invalidateUserFriendsCache([currentUserId, targetUserId]);
+  raiseSocialGraphServiceUnavailableError(makeClose ? 'set this close friend' : 'remove this close friend');
 }
 
-export async function createUserRemote({ userId, name, city, campus, campusOrCity, campusType, handle, email, photoUrl, phone }: any) {
+export async function createUserRemote({
+  userId,
+  name,
+  city,
+  campus,
+  campusOrCity,
+  campusType,
+  handle,
+  email,
+  photoUrl,
+  phone,
+  coffeeIntents,
+  ambiancePreference,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) return;
-
-  const sanitizeFields = (fields: Record<string, any>) =>
-    Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 
   const db = fb.firestore();
   const normalizedPhone = normalizePhone(phone || '');
-  const normalizedHandle = handle ? handle.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
-  const payload = sanitizeFields({
+  const publicPayload = removeUndefinedFields({
     name,
+    nameLower: typeof name === 'string' ? name.toLowerCase() : null,
     city: city || null,
     campus: campus || null,
     campusOrCity: campusOrCity || city || null,
     campusType: campusType || null,
     handle: handle || null,
-    handleNormalized: normalizedHandle,
-    email: email || null,
-    phone: phone || null,
-    phoneNormalized: normalizedPhone || null,
+    coffeeIntents: Array.isArray(coffeeIntents) ? coffeeIntents.slice(0, 3) : [],
+    ambiancePreference: typeof ambiancePreference === 'string' ? ambiancePreference : null,
     photoUrl: photoUrl || null,
-    createdAt: fb.firestore.FieldValue.serverTimestamp(),
   });
-  await db.collection('users').doc(userId).set(payload);
+  await writePublicProfile(fb, db, userId, publicPayload, { isCreate: true });
+  await writeSocialGraph(fb, db, userId, { friends: [], closeFriends: [], blocked: [] }, { isCreate: true });
+  await writeUserPrivateProfile(
+    fb,
+    db,
+    userId,
+    {
+      email: email || null,
+      phone: phone || null,
+      phoneNormalized: normalizedPhone || null,
+    },
+    { isCreate: true }
+  );
+  await writeUserAccountDoc(fb, db, userId, {}, { isCreate: true });
   usersByIdCache.clear();
 }
 
 export async function updateUserRemote(userId: string, fields: any) {
   const fb = ensureFirebase();
   if (!fb) return;
-  const sanitizeFields = (input: Record<string, any>) =>
-    Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
   const db = fb.firestore();
-  const normalizedPhone = fields?.phone ? normalizePhone(fields.phone) : undefined;
-  const normalizedHandle = fields?.handle ? fields.handle.toLowerCase().replace(/[^a-z0-9]/g, '') : undefined;
-  const payload = sanitizeFields({
-    ...fields,
-    phoneNormalized: normalizedPhone ?? fields?.phoneNormalized,
-    handleNormalized: normalizedHandle ?? fields?.handleNormalized,
-    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  const { publicProfileFields, privateFields, socialGraphFields, accountFields } = splitUserDocumentFields(fields);
+  const normalizedPhone =
+    Object.prototype.hasOwnProperty.call(privateFields, 'phone')
+      ? normalizePhone(privateFields.phone || '') || null
+      : privateFields.phoneNormalized;
+  const nameLower = typeof publicProfileFields?.name === 'string' ? publicProfileFields.name.toLowerCase() : undefined;
+  await writePublicProfile(fb, db, userId, {
+    ...publicProfileFields,
+    ...(nameLower !== undefined ? { nameLower } : {}),
   });
-  await db.collection('users').doc(userId).set(payload, { merge: true });
+  await writeSocialGraph(fb, db, userId, socialGraphFields);
+  await writeUserPrivateProfile(fb, db, userId, {
+    ...privateFields,
+    ...accountFields,
+    ...(Object.prototype.hasOwnProperty.call(privateFields, 'phone') ? { phoneNormalized: normalizedPhone } : {}),
+  });
+  await db.collection(USERS_COLLECTION).doc(userId).set({
+    ...buildLegacyUsersCleanupPayload(fb),
+    migrationVersion: 2,
+    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
   usersByIdCache.clear();
 }
 
@@ -948,11 +2197,15 @@ export async function findUserByEmail(email: string) {
     const users = readLocalUsers();
     return users.find((u: any) => (u.email || '').toLowerCase() === email.toLowerCase()) || null;
   }
+  const lookedUp = await callSecureUserLookup('email', email.toLowerCase());
+  if (lookedUp) return stripPrivateUserFields(lookedUp as Record<string, any>);
   const db = fb.firestore();
-  const q = await db.collection('users').where('email', '==', email).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  const currentUser = fb.auth?.()?.currentUser;
+  if (currentUser?.email?.toLowerCase() === email.toLowerCase()) {
+    return await getSanitizedUserById(db, currentUser.uid);
+  }
+  devLog('findUserByEmail blocked: secure server-side lookup required');
+  return null;
 }
 
 export async function findUserByPhone(phone: string) {
@@ -963,11 +2216,15 @@ export async function findUserByPhone(phone: string) {
     const users = readLocalUsers();
     return users.find((u: any) => normalizePhone(u.phone || '') === normalized) || null;
   }
+  const lookedUp = await callSecureUserLookup('phone', normalized);
+  if (lookedUp) return stripPrivateUserFields(lookedUp as Record<string, any>);
   const db = fb.firestore();
-  const q = await db.collection('users').where('phoneNormalized', '==', normalized).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  const currentUser = fb.auth?.()?.currentUser;
+  if (normalizePhone(currentUser?.phoneNumber || '') === normalized && currentUser?.uid) {
+    return await getSanitizedUserById(db, currentUser.uid);
+  }
+  devLog('findUserByPhone blocked: secure server-side lookup required');
+  return null;
 }
 
 export async function findUserByHandle(handle: string) {
@@ -979,11 +2236,64 @@ export async function findUserByHandle(handle: string) {
     return users.find((u: any) => (u.handle || '').toLowerCase() === normalized) || null;
   }
   const db = fb.firestore();
-  const q = await db.collection('users').where('handle', '==', normalized).limit(1).get();
+  const q = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
   if (q.empty) return null;
   const doc = q.docs[0];
-  return { id: doc.id, ...(doc.data() || {}) };
+  return stripPrivateUserFields(doc.data() || {}, doc.id);
 }
+
+/**
+ * Search users by name or handle prefix.
+ * Returns up to `limit` results matching the query as a prefix.
+ */
+export async function searchUsers(query: string, limit = 10): Promise<any[]> {
+  const trimmed = (query || '').trim().toLowerCase();
+  if (!trimmed) return [];
+  const prefix = trimmed.replace(/^@/, '');
+  const prefixEnd = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+  const fb = ensureFirebase();
+  if (!fb) {
+    const users = readLocalUsers();
+    return users.filter((u: any) => {
+      const name = (u.name || '').toLowerCase();
+      const handle = (u.handle || '').toLowerCase();
+      return name.includes(prefix) || handle.startsWith(prefix);
+    }).slice(0, limit);
+  }
+
+  const db = fb.firestore();
+  const results = new Map<string, any>();
+
+  // Search by handle prefix
+  try {
+    const handleSnap = await db.collection(PUBLIC_PROFILES_COLLECTION)
+      .where('handle', '>=', prefix)
+      .where('handle', '<', prefixEnd)
+      .limit(limit)
+      .get();
+    for (const doc of handleSnap.docs) {
+      results.set(doc.id, stripPrivateUserFields(doc.data() || {}, doc.id));
+    }
+  } catch {}
+
+  // Search by nameLower prefix (if the field exists)
+  try {
+    const nameSnap = await db.collection(PUBLIC_PROFILES_COLLECTION)
+      .where('nameLower', '>=', prefix)
+      .where('nameLower', '<', prefixEnd)
+      .limit(limit)
+      .get();
+    for (const doc of nameSnap.docs) {
+      if (!results.has(doc.id)) {
+        results.set(doc.id, stripPrivateUserFields(doc.data() || {}, doc.id));
+      }
+    }
+  } catch {}
+
+  return Array.from(results.values()).slice(0, limit);
+}
+
 export async function getUsersByIds(userIds: string[]) {
   const fb = ensureFirebase();
   if (!fb) {
@@ -996,8 +2306,8 @@ export async function getUsersByIds(userIds: string[]) {
   const items: any[] = [];
   for (let i = 0; i < userIds.length; i += 10) {
     const batch = userIds.slice(i, i + 10);
-    const snap = await db.collection('users').where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
-    snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    const snap = await db.collection(PUBLIC_PROFILES_COLLECTION).where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
+    snap.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   }
   return items;
 }
@@ -1011,12 +2321,12 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
   }
   const db = fb.firestore();
   const [snapCampus, snapLegacy] = await Promise.all([
-    db.collection('users').where('campus', '==', campusOrCity).limit(limit).get(),
-    db.collection('users').where('campusOrCity', '==', campusOrCity).limit(limit).get(),
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campus', '==', campusOrCity).limit(limit).get(),
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campusOrCity', '==', campusOrCity).limit(limit).get(),
   ]);
   const items: any[] = [];
-  snapCampus.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-  snapLegacy.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+  snapCampus.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
+  snapLegacy.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   const seen = new Set<string>();
   return items.filter((u) => {
     if (!u?.id || seen.has(u.id)) return false;
@@ -1026,31 +2336,51 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
 }
 
 export async function sendFriendRequest(fromId: string, toId: string) {
+  if (!fromId || !toId || fromId === toId) return null;
   const fb = ensureFirebase();
   if (!fb) {
-    if (!fromId || !toId || fromId === toId) return null;
+    const map = readLocalFriends();
+    if (normalizeStringArray(map[fromId]).includes(toId)) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return { id: `${fromId}_${toId}`, fromId, toId, status: 'accepted', alreadyFriends: true };
+    }
+
     const requests = readLocalRequests();
+    const reverseRequestId = `${toId}_${fromId}`;
+    const reverseRequest = requests.find((r: any) => r?.id === reverseRequestId && (r?.status || 'pending') === 'pending');
+    if (reverseRequest) {
+      addLocalMutualFriend(map, fromId, toId);
+      writeLocalFriends(map);
+      writeLocalRequests(removeLocalFriendRequestPair(requests, fromId, toId));
+      invalidateUserFriendsCache([fromId, toId]);
+      return { id: reverseRequestId, fromId: toId, toId: fromId, status: 'accepted', autoAccepted: true };
+    }
     const requestId = `${fromId}_${toId}`;
-    if (!requests.find((r: any) => r.id === requestId)) {
+    if (!requests.find((r: any) => r?.id === requestId)) {
       requests.push({ id: requestId, fromId, toId, status: 'pending', createdAt: Date.now() });
       writeLocalRequests(requests);
     }
     return { id: requestId, fromId, toId, status: 'pending' };
   }
-  if (!fromId || !toId || fromId === toId) return null;
-  const db = fb.firestore();
-  const requestId = `${fromId}_${toId}`;
-  const ref = db.collection('friendRequests').doc(requestId);
-  await ref.set(
-    {
-      fromId,
-      toId,
-      status: 'pending',
-      createdAt: fb.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-  return { id: requestId, fromId, toId, status: 'pending' };
+
+  // Try server-authoritative cloud function first
+  try {
+    const callableResult = await callSocialGraphMutation('send_friend_request', { toId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return {
+        id: callableResult.requestId || `${fromId}_${toId}`,
+        fromId,
+        toId,
+        status: callableResult.status || 'pending',
+        autoAccepted: Boolean(callableResult.autoAccepted),
+        alreadyFriends: Boolean(callableResult.alreadyFriends),
+      };
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('send this friend request', error);
+  }
+  raiseSocialGraphServiceUnavailableError('send this friend request');
 }
 
 export async function getIncomingFriendRequests(userId: string) {
@@ -1083,23 +2413,23 @@ export async function acceptFriendRequest(requestId: string, fromId: string, toI
   const fb = ensureFirebase();
   if (!fb) {
     const map = readLocalFriends();
-    const current = new Set(map[toId] || []);
-    current.add(fromId);
-    map[toId] = Array.from(current);
-    const other = new Set(map[fromId] || []);
-    other.add(toId);
-    map[fromId] = Array.from(other);
+    addLocalMutualFriend(map, fromId, toId);
     writeLocalFriends(map);
-    const requests = readLocalRequests().filter((r: any) => r.id !== requestId);
-    writeLocalRequests(requests);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), fromId, toId));
     invalidateUserFriendsCache([fromId, toId]);
     return;
   }
-  const db = fb.firestore();
-  await db.collection('users').doc(toId).set({ friends: fb.firestore.FieldValue.arrayUnion(fromId) }, { merge: true });
-  await db.collection('users').doc(fromId).set({ friends: fb.firestore.FieldValue.arrayUnion(toId) }, { merge: true });
-  await db.collection('friendRequests').doc(requestId).delete();
-  invalidateUserFriendsCache([fromId, toId]);
+
+  try {
+    const callableResult = await callSocialGraphMutation('accept_friend_request', { requestId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([fromId, toId]);
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('accept this friend request', error);
+  }
+  raiseSocialGraphServiceUnavailableError('accept this friend request');
 }
 
 export async function declineFriendRequest(requestId: string) {
@@ -1109,10 +2439,16 @@ export async function declineFriendRequest(requestId: string) {
     writeLocalRequests(requests);
     return;
   }
-  const db = fb.firestore();
-  // Update status to 'declined' before deletion so onDelete trigger knows not to send "accepted" notification
-  await db.collection('friendRequests').doc(requestId).update({ status: 'declined' });
-  await db.collection('friendRequests').doc(requestId).delete();
+
+  try {
+    const callableResult = await callSocialGraphMutation('decline_friend_request', { requestId });
+    if (callableResult?.ok) {
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('decline this friend request', error);
+  }
+  raiseSocialGraphServiceUnavailableError('decline this friend request');
 }
 
 export async function reportUserRemote(reporterId: string | undefined, targetUserId: string, reason?: string) {
@@ -1131,18 +2467,55 @@ export async function reportUserRemote(reporterId: string | undefined, targetUse
   });
 }
 
-export async function blockUserRemote(currentUserId: string, targetUserId: string) {
+export async function reportCheckinRemote(
+  reporterId: string | undefined,
+  checkinId: string,
+  reason?: string,
+  reportedUserId?: string
+) {
   const fb = ensureFirebase();
   if (!fb) {
+    devLog('reportCheckinRemote (local):', { reporterId, checkinId, reason, reportedUserId });
+    return;
+  }
+  const db = fb.firestore();
+  await db.collection('reports').add({
+    reporterId: reporterId || null,
+    checkinId,
+    reportedUserId: reportedUserId || null,
+    reason: reason || null,
+    status: 'open',
+    createdAt: fb.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+export async function blockUserRemote(currentUserId: string, targetUserId: string) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) return;
+  const fb = ensureFirebase();
+  if (!fb) {
+    const friendsMap = readLocalFriends();
+    removeLocalMutualFriend(friendsMap, currentUserId, targetUserId);
+    writeLocalFriends(friendsMap);
+    writeLocalRequests(removeLocalFriendRequestPair(readLocalRequests(), currentUserId, targetUserId));
     const map = readLocalBlocked();
     const set = new Set(map[currentUserId] || []);
     set.add(targetUserId);
     map[currentUserId] = Array.from(set);
     writeLocalBlocked(map);
+    invalidateUserFriendsCache([currentUserId, targetUserId]);
     return;
   }
-  const db = fb.firestore();
-  await db.collection('users').doc(currentUserId).set({ blocked: fb.firestore.FieldValue.arrayUnion(targetUserId) }, { merge: true });
+
+  try {
+    const callableResult = await callSocialGraphMutation('block_user', { targetUserId });
+    if (callableResult?.ok) {
+      invalidateUserFriendsCache([currentUserId, targetUserId]);
+      return;
+    }
+  } catch (error) {
+    handleSocialGraphCallableError('block this user', error);
+  }
+  raiseSocialGraphServiceUnavailableError('block this user');
 }
 
 export async function unblockUserRemote(currentUserId: string, targetUserId: string) {
@@ -1153,8 +2526,14 @@ export async function unblockUserRemote(currentUserId: string, targetUserId: str
     writeLocalBlocked(map);
     return;
   }
-  const db = fb.firestore();
-  await db.collection('users').doc(currentUserId).set({ blocked: fb.firestore.FieldValue.arrayRemove(targetUserId) }, { merge: true });
+
+  try {
+    const callableResult = await callSocialGraphMutation('unblock_user', { targetUserId });
+    if (callableResult?.ok) return;
+  } catch (error) {
+    handleSocialGraphCallableError('unblock this user', error);
+  }
+  raiseSocialGraphServiceUnavailableError('unblock this user');
 }
 
 export async function getBlockedUsers(currentUserId: string) {
@@ -1164,10 +2543,8 @@ export async function getBlockedUsers(currentUserId: string) {
     return normalizeStringArray(map[currentUserId]);
   }
   const db = fb.firestore();
-  const doc = await db.collection('users').doc(currentUserId).get();
-  if (!doc.exists) return [];
-  const data = doc.data() || {};
-  return normalizeStringArray(data.blocked);
+  const graph = await getSocialGraphDoc(db, currentUserId);
+  return graph.blocked;
 }
 
 export async function savePushToken(userId: string, token: string) {
@@ -1179,7 +2556,19 @@ export async function savePushToken(userId: string, token: string) {
     return;
   }
   const db = fb.firestore();
-  await db.collection('users').doc(userId).set({ pushToken: token, updatedAt: fb.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await db.collection(PUSH_TOKENS_COLLECTION).doc(userId).set(
+    {
+      userId,
+      token,
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  await writeUserPrivateProfile(fb, db, userId, { pushToken: token });
+  await db.collection(USERS_COLLECTION).doc(userId).set(
+    { pushToken: fb.firestore.FieldValue.delete(), updatedAt: fb.firestore.FieldValue.serverTimestamp(), migrationVersion: 2 },
+    { merge: true }
+  );
 }
 
 export async function clearPushToken(userId: string) {
@@ -1191,13 +2580,16 @@ export async function clearPushToken(userId: string) {
     return;
   }
   const db = fb.firestore();
-  await db.collection('users').doc(userId).set({ pushToken: fb.firestore.FieldValue.delete() }, { merge: true });
+  await db.collection(PUSH_TOKENS_COLLECTION).doc(userId).delete().catch(() => {});
+  await writeUserPrivateProfile(fb, db, userId, { pushToken: fb.firestore.FieldValue.delete() });
+  await db.collection(USERS_COLLECTION).doc(userId).set({ pushToken: fb.firestore.FieldValue.delete(), migrationVersion: 2 }, { merge: true });
 }
 
 // Auth helpers
 export async function linkAnonymousWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
 
   const auth = fb.auth();
   const user = auth.currentUser;
@@ -1211,14 +2603,28 @@ export async function linkAnonymousWithEmail({ email, password }: { email: strin
 export async function signInWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
   const auth = fb.auth();
   const res = await auth.signInWithEmailAndPassword(email, password);
   return res.user;
 }
 
-export async function createAccountWithEmail({ email, password, name, city, campus, campusOrCity, handle, campusType, phone }: any) {
+export async function createAccountWithEmail({
+  email,
+  password,
+  name,
+  city,
+  campus,
+  campusOrCity,
+  handle,
+  campusType,
+  phone,
+  coffeeIntents,
+  ambiancePreference,
+}: any) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  await ensureAuthPersistenceConfigured(fb);
   const auth = fb.auth();
   const res = await auth.createUserWithEmailAndPassword(email, password);
   const uid = res.user.uid;
@@ -1237,7 +2643,20 @@ export async function createAccountWithEmail({ email, password, name, city, camp
     // ignore
   }
   // create profile doc in background for faster UX
-  void createUserRemote({ userId: uid, name, city, campus, campusOrCity, campusType, handle, email, phone, photoUrl: res.user.photoURL || null });
+  void createUserRemote({
+    userId: uid,
+    name,
+    city,
+    campus,
+    campusOrCity,
+    campusType,
+    handle,
+    email,
+    phone,
+    coffeeIntents,
+    ambiancePreference,
+    photoUrl: res.user.photoURL || null,
+  });
   return res.user;
 }
 
@@ -1338,14 +2757,11 @@ export async function deleteAccountAndData({ password }: { password?: string } =
   try {
     // Remove this user from friends lists (best effort).
     try {
-      const userDoc = await db.collection('users').doc(userId).get();
-      const friends = normalizeStringArray(userDoc.data()?.friends);
+      const socialGraph = await getSocialGraphDoc(db, userId);
+      const friends = socialGraph.friends;
       for (const friendId of friends) {
         try {
-          await db
-            .collection('users')
-            .doc(friendId)
-            .set({ friends: fb.firestore.FieldValue.arrayRemove(userId) }, { merge: true });
+          await callSocialGraphMutation('unfriend', { targetUserId: friendId });
         } catch {}
       }
     } catch {}
@@ -1380,7 +2796,13 @@ export async function deleteAccountAndData({ password }: { password?: string } =
 
     // Delete the user profile document last.
     try {
-      await db.collection('users').doc(userId).delete();
+      await Promise.allSettled([
+        db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).delete(),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).delete(),
+        db.collection(USER_PRIVATE_COLLECTION).doc(userId).delete(),
+        db.collection(PUSH_TOKENS_COLLECTION).doc(userId).delete(),
+        db.collection(USERS_COLLECTION).doc(userId).delete(),
+      ]);
     } catch {}
   } catch (e) {
     // Continue to account deletion; server-side cleanup can be handled separately if needed.
@@ -1416,31 +2838,64 @@ export async function addReactionToFirestore(reaction: {
   createdAt: number;
 }) {
   const fb = ensureFirebase();
-  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return;
+  if (!fb || !reaction?.checkinId || !reaction?.userId || !reaction?.type) return false;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  if (!currentUid || currentUid !== reaction.userId) return false;
   const db = fb.firestore();
-  const id = reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
-  await db.collection('reactions').doc(id).set({
-    ...reaction,
-    createdAt: reaction.createdAt || Date.now(),
-    updatedAt: fb.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
+  const deterministicId = `rx_${sanitizeId(reaction.checkinId)}_${sanitizeId(reaction.userId)}`;
+  const id = deterministicId || reaction.id || `${reaction.userId}_${reaction.type}_${Date.now()}`;
+  try {
+    await db.collection('reactions').doc(id).set({
+      ...reaction,
+      createdAt: reaction.createdAt || Date.now(),
+      updatedAt: fb.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return true;
+  } catch (error) {
+    devLog('addReactionToFirestore failed', error);
+    return false;
+  }
 }
 
 export async function removeReactionFromFirestore(checkinId: string, userId: string, type: string) {
   const fb = ensureFirebase();
-  if (!fb || !checkinId || !userId || !type) return;
+  if (!fb || !checkinId || !userId || !type) return false;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  if (!currentUid || currentUid !== userId) return false;
   const db = fb.firestore();
-  const snap = await db
-    .collection('reactions')
-    .where('checkinId', '==', checkinId)
-    .where('userId', '==', userId)
-    .where('type', '==', type)
-    .limit(10)
-    .get();
-  if (snap.empty) return;
-  const batch = db.batch();
-  snap.docs.forEach((doc: any) => batch.delete(doc.ref));
-  await batch.commit();
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
+  const deterministicId = `rx_${sanitizeId(checkinId)}_${sanitizeId(userId)}`;
+  const deterministicRef = db.collection('reactions').doc(deterministicId);
+
+  try {
+    const deterministicSnap = await deterministicRef.get();
+    if (deterministicSnap.exists) {
+      const data = deterministicSnap.data() || {};
+      if (!data.type || data.type === type) {
+        await deterministicRef.delete();
+      }
+    }
+  } catch {}
+
+  // Legacy cleanup for older reaction IDs.
+  try {
+    const snap = await db
+      .collection('reactions')
+      .where('checkinId', '==', checkinId)
+      .where('userId', '==', userId)
+      .where('type', '==', type)
+      .limit(50)
+      .get();
+    if (snap.empty) return true;
+    const batch = db.batch();
+    snap.docs.forEach((doc: any) => batch.delete(doc.ref));
+    await batch.commit();
+    return true;
+  } catch (error) {
+    devLog('removeReactionFromFirestore failed', error);
+    return false;
+  }
 }
 
 export async function getReactionsFromFirestore(checkinId: string, limit = 250) {
@@ -1448,17 +2903,75 @@ export async function getReactionsFromFirestore(checkinId: string, limit = 250) 
   if (!fb || !checkinId) return [];
   const db = fb.firestore();
   const safeLimit = Math.min(Math.max(limit, 1), 500);
-  const snap = await db
-    .collection('reactions')
-    .where('checkinId', '==', checkinId)
-    .orderBy('createdAt', 'desc')
-    .limit(safeLimit)
-    .get();
+  let snap: any;
+  try {
+    snap = await db
+      .collection('reactions')
+      .where('checkinId', '==', checkinId)
+      .orderBy('createdAt', 'desc')
+      .limit(safeLimit)
+      .get();
+  } catch (error) {
+    devLog('getReactionsFromFirestore failed', error);
+    return [];
+  }
   const items: any[] = [];
   snap.forEach((doc: any) => {
     items.push({ id: doc.id, ...(doc.data() || {}) });
   });
-  return items;
+  const dedupedByUser = new Map<string, any>();
+  items.forEach((item) => {
+    const key = item?.userId ? String(item.userId) : `anon:${item?.id || ''}`;
+    if (!dedupedByUser.has(key)) {
+      dedupedByUser.set(key, item);
+    }
+  });
+  return Array.from(dedupedByUser.values());
+}
+
+export async function getReactionsForCheckinsFromFirestore(checkinIds: string[], limitPerCheckin = 24) {
+  const fb = ensureFirebase();
+  if (!fb || !Array.isArray(checkinIds) || checkinIds.length === 0) return {};
+  const db = fb.firestore();
+  const uniqueIds = Array.from(new Set(checkinIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!uniqueIds.length) return {};
+
+  const safePerCheckin = Math.min(Math.max(limitPerCheckin, 1), 50);
+  const grouped = new Map<string, Map<string, any>>();
+  uniqueIds.forEach((id) => grouped.set(id, new Map()));
+
+  for (let i = 0; i < uniqueIds.length; i += 10) {
+    const batch = uniqueIds.slice(i, i + 10);
+    try {
+      const snap = await db
+        .collection('reactions')
+        .where('checkinId', 'in', batch)
+        .limit(Math.min(batch.length * safePerCheckin, 500))
+        .get();
+      snap.forEach((doc: any) => {
+        const item = { id: doc.id, ...(doc.data() || {}) };
+        const reactionCheckinId = String(item?.checkinId || '');
+        if (!reactionCheckinId || !grouped.has(reactionCheckinId)) return;
+        const userMap = grouped.get(reactionCheckinId)!;
+        const dedupeKey = item?.userId ? String(item.userId) : `anon:${item?.id || doc.id}`;
+        const existing = userMap.get(dedupeKey);
+        if (!existing) {
+          userMap.set(dedupeKey, item);
+          return;
+        }
+        const nextTs = toMillisSafe(item?.updatedAt || item?.createdAt);
+        const prevTs = toMillisSafe(existing?.updatedAt || existing?.createdAt);
+        if (nextTs >= prevTs) {
+          userMap.set(dedupeKey, item);
+        }
+      });
+    } catch (error) {
+      devLog('getReactionsForCheckinsFromFirestore failed', error);
+      batch.forEach((id) => grouped.set(id, new Map()));
+    }
+  }
+
+  return Object.fromEntries(uniqueIds.map((id) => [id, Array.from(grouped.get(id)?.values() || [])]));
 }
 
 export async function addCommentToFirestore(comment: {

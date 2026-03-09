@@ -1,4 +1,5 @@
 import { track } from './analytics';
+import { devLog } from './logger';
 
 export type ReactionType = 'fire' | 'coffee' | 'book' | 'party' | 'heart' | 'thumbs_up';
 
@@ -43,8 +44,9 @@ export async function addReaction(
   userName: string,
   userHandle?: string
 ): Promise<Reaction> {
+  const sanitizeId = (value: string) => String(value || '').replace(/[\/#?]+/g, '_');
   const reaction: Reaction = {
-    id: `${userId}_${type}_${Date.now()}`,
+    id: `rx_${sanitizeId(checkinId)}_${sanitizeId(userId)}`,
     checkinId,
     userId,
     userName,
@@ -64,7 +66,7 @@ export async function addReaction(
       checkin_id: checkinId,
     });
   } catch (error) {
-    console.error('Failed to add reaction:', error);
+    devLog('addReaction failed', error);
   }
 
   return reaction;
@@ -82,7 +84,7 @@ export async function removeReaction(
     const { removeReactionFromFirestore } = await import('./firebaseClient');
     await removeReactionFromFirestore(checkinId, userId, type);
   } catch (error) {
-    console.error('Failed to remove reaction:', error);
+    devLog('removeReaction failed', error);
   }
 }
 
@@ -94,8 +96,18 @@ export async function getReactions(checkinId: string): Promise<Reaction[]> {
     const { getReactionsFromFirestore } = await import('./firebaseClient');
     return await getReactionsFromFirestore(checkinId);
   } catch (error) {
-    console.error('Failed to get reactions:', error);
+    devLog('getReactions failed', error);
     return [];
+  }
+}
+
+export async function getReactionsForCheckins(checkinIds: string[]): Promise<Record<string, Reaction[]>> {
+  try {
+    const { getReactionsForCheckinsFromFirestore } = await import('./firebaseClient');
+    return await getReactionsForCheckinsFromFirestore(checkinIds) as Record<string, Reaction[]>;
+  } catch (error) {
+    devLog('getReactionsForCheckins failed', error);
+    return Object.fromEntries((checkinIds || []).map((id) => [id, []]));
   }
 }
 
@@ -201,6 +213,7 @@ export default {
   addReaction,
   removeReaction,
   getReactions,
+  getReactionsForCheckins,
   getReactionCounts,
   addComment,
   getComments,

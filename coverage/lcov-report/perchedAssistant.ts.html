@@ -1,0 +1,568 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for perchedAssistant.ts</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="prettify.css" />
+    <link rel="stylesheet" href="base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="index.html">All files</a> perchedAssistant.ts</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>0/115</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>0/39</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>0/15</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>0/85</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">export type ExploreVibe = 'all' | 'quiet' | 'study' | 'social' | 'late' | 'cowork';
+export type OpenFilter = 'all' | 'open' | 'closed';
+export type NoisePreference = 'any' | 'quiet' | 'moderate' | 'lively';
+export type WifiPreference = 'any' | 'fast' | 'ok';
+export type BusynessPreference = 'any' | 'empty' | 'moderate' | 'busy';
+&nbsp;
+export type OutletPreference = 'any' | 'has-outlets';
+&nbsp;
+export type PerchedIntent = {
+  raw: string;
+  vibe: ExploreVibe;
+  openFilter: OpenFilter;
+  tags: string[];
+  // Utility metric filters
+  wifiSpeed: WifiPreference;
+  noiseLevel: NoisePreference;
+  busyness: BusynessPreference;
+  outlets: OutletPreference;
+};
+&nbsp;
+const TAG_CANONICAL: Array&lt;{ match: RegExp; tag: string }&gt; = <span class="cstat-no" title="statement not covered" >[</span>
+  { match: /\bwi[\s-]?fi\b|\binternet\b|\bwireless\b/g, tag: 'Wi-Fi' },
+  { match: /\boutlet(s)?\b|\bpower\b|\bcharger\b|\bcharging\b/g, tag: 'Outlets' },
+  { match: /\bseat(s)?\b|\bseating\b|\bbooth\b|\bchair(s)?\b|\bbench\b/g, tag: 'Seating' },
+  { match: /\bbright\b|\bsun(light)?\b|\bnatural light\b|\bwindow(s)?\b/g, tag: 'Bright' },
+  { match: /\bspacious\b|\broomy\b|\bspace\b|\bspread out\b/g, tag: 'Spacious' },
+  { match: /\bquiet\b|\bcalm\b|\bsilent\b|\bpeaceful\b|\blow noise\b/g, tag: 'Quiet' },
+  { match: /\bstudy\b|\bwork\b|\bworking\b|\bcoding\b|\blaptop\b|\bdeep work\b|\bhomework\b/g, tag: 'Study' },
+  { match: /\bsocial\b|\bhang\b|\bhangout\b|\bmeet\b|\bfriends?\b|\bdate\b|\blively\b|\bbuzzy\b/g, tag: 'Social' },
+  { match: /\bcowork\b|\bco-work\b|\bcoworking\b|\bworkspace\b|\bshared office\b|\bdesk\b|\bwework\b|\bregus\b/g, tag: 'Coworking' },
+  { match: /\blate\b|\bnight\b|\bmidnight\b|\b24\b|\bopen late\b|\bafter \d{1,2}\b/g, tag: 'Late-night' },
+];
+&nbsp;
+function <span class="fstat-no" title="function not covered" >uniq(</span>list: string[]) {
+  const out: string[] = <span class="cstat-no" title="statement not covered" >[];</span>
+  const seen = <span class="cstat-no" title="statement not covered" >new Set&lt;string&gt;();</span>
+<span class="cstat-no" title="statement not covered" >  for (const item of list) {</span>
+    const trimmed = <span class="cstat-no" title="statement not covered" >item.trim();</span>
+<span class="cstat-no" title="statement not covered" >    <span class="missing-if-branch" title="if path not taken" >I</span>if (!trimmed || seen.has(trimmed)) <span class="cstat-no" title="statement not covered" >continue;</span></span>
+<span class="cstat-no" title="statement not covered" >    seen.add(trimmed);</span>
+<span class="cstat-no" title="statement not covered" >    out.push(trimmed);</span>
+  }
+<span class="cstat-no" title="statement not covered" >  return out;</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >scoreVibes(</span>text: string): Record&lt;Exclude&lt;ExploreVibe, 'all'&gt;, number&gt; {
+  const scores = <span class="cstat-no" title="statement not covered" >{ quiet: 0, study: 0, social: 0, late: 0, cowork: 0 };</span>
+  const add = <span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >(k</span>ey: keyof typeof scores, re: RegExp, weight = <span class="branch-0 cbranch-no" title="branch not covered" >1)</span> =&gt; {</span>
+    const m = <span class="cstat-no" title="statement not covered" >text.match(re);</span>
+<span class="cstat-no" title="statement not covered" >    <span class="missing-if-branch" title="if path not taken" >I</span>if (!m) <span class="cstat-no" title="statement not covered" >return;</span></span>
+<span class="cstat-no" title="statement not covered" >    scores[key] += m.length * weight;</span>
+  };
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  add('quiet', /\bquiet\b|\bcalm\b|\bsilent\b|\bpeaceful\b|\blibrary\b|\bread(ing)?\b/g, 1);</span>
+<span class="cstat-no" title="statement not covered" >  add('quiet', /\bfocus\b|\bdeep work\b|\blow noise\b/g, 2);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  add('study', /\bstudy\b|\bwork\b|\bworking\b|\bcoding\b|\blaptop\b|\bhomework\b|\bassignment\b/g, 2);</span>
+<span class="cstat-no" title="statement not covered" >  add('study', /\blibrary\b|\bworkspace\b|\bproductive\b/g, 1);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  add('cowork', /\bcowork\b|\bco-work\b|\bcoworking\b|\bwework\b|\bregus\b|\bindustrious\b|\bshared office\b|\bdesk\b|\boffice\b/g, 2);</span>
+<span class="cstat-no" title="statement not covered" >  add('cowork', /\boutlet(s)?\b|\bpower\b/g, 1);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  add('social', /\bsocial\b|\bhang\b|\bhangout\b|\bmeet\b|\bfriends?\b|\bdate\b|\blively\b|\bbuzzy\b/g, 2);</span>
+<span class="cstat-no" title="statement not covered" >  add('social', /\bcafe\b|\bcoffee\b|\bespresso\b|\btea\b|\bbakery\b|\blounge\b/g, 1);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  add('late', /\bopen late\b|\blate\b|\bnight\b|\bmidnight\b|\b24\b|\bafter \d{1,2}\b/g, 2);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >  return scores;</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickVibe(</span>text: string): ExploreVibe {
+  const scores = <span class="cstat-no" title="statement not covered" >scoreVibes(text);</span>
+  const entries = <span class="cstat-no" title="statement not covered" >Object.entries(scores) as Array&lt;[keyof typeof scores, number]&gt;;</span>
+<span class="cstat-no" title="statement not covered" >  entries.sort(<span class="fstat-no" title="function not covered" >(a</span>, b) =&gt; <span class="cstat-no" title="statement not covered" >b[1] - a[1])</span>;</span>
+  const [best, bestScore] = <span class="cstat-no" title="statement not covered" >entries[0];</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (!bestScore || bestScore &lt; 1) <span class="cstat-no" title="statement not covered" >return 'all';</span></span>
+<span class="cstat-no" title="statement not covered" >  return best;</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickOpenFilter(</span>text: string): OpenFilter {
+  const t = <span class="cstat-no" title="statement not covered" >text.toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bclosed\b|\bnot open\b|\bafter close\b|\bafter closing\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'closed';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bopen now\b|\bcurrently open\b|\bopen right now\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'open';</span></span>
+<span class="cstat-no" title="statement not covered" >  return 'all';</span>
+}
+&nbsp;
+// Utility metric parsers
+function <span class="fstat-no" title="function not covered" >pickWifiSpeed(</span>text: string): WifiPreference {
+  const t = <span class="cstat-no" title="statement not covered" >text.toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bfast\s*wi[\s-]?fi\b|\bgood\s*wi[\s-]?fi\b|\bstrong\s*wi[\s-]?fi\b|\bfast\s*internet\b|\bgreat\s*wi[\s-]?fi\b|\breliable\s*wi[\s-]?fi\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'fast';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bdecent\s*wi[\s-]?fi\b|\bok\s*wi[\s-]?fi\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'ok';</span></span>
+<span class="cstat-no" title="statement not covered" >  return 'any';</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickNoiseLevel(</span>text: string): NoisePreference {
+  const t = <span class="cstat-no" title="statement not covered" >text.toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bquiet\b|\bsilent\b|\bpeaceful\b|\blow noise\b|\bno noise\b|\bhush\b|\bcalm\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'quiet';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\blively\b|\bbuzzy\b|\benergetic\b|\bloud\b|\bnoisy\b|\bbusy atmosphere\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'lively';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bmoderate noise\b|\bsome noise\b|\bbackground noise\b|\blight buzz\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'moderate';</span></span>
+<span class="cstat-no" title="statement not covered" >  return 'any';</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickBusyness(</span>text: string): BusynessPreference {
+  const t = <span class="cstat-no" title="statement not covered" >text.toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bempty\b|\bnot busy\b|\bnot crowded\b|\bquiet spot\b|\bavailable seats\b|\bseats available\b|\buncrowded\b|\bnot packed\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'empty';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bbusy\b|\bcrowded\b|\bpacked\b|\bpopular\b|\bhot spot\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'busy';</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\bmoderate crowd\b|\bsome people\b|\bfew people\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'moderate';</span></span>
+<span class="cstat-no" title="statement not covered" >  return 'any';</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickOutlets(</span>text: string): OutletPreference {
+  const t = <span class="cstat-no" title="statement not covered" >text.toLowerCase();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (/\boutlet(s)?\b|\bpower\b|\bcharger\b|\bcharging\b|\bplug(s)?\b|\bcharge my\b/.test(t)) <span class="cstat-no" title="statement not covered" >return 'has-outlets';</span></span>
+<span class="cstat-no" title="statement not covered" >  return 'any';</span>
+}
+&nbsp;
+function <span class="fstat-no" title="function not covered" >pickTags(</span>text: string): string[] {
+  const tags: string[] = <span class="cstat-no" title="statement not covered" >[];</span>
+<span class="cstat-no" title="statement not covered" >  for (const rule of TAG_CANONICAL) {</span>
+<span class="cstat-no" title="statement not covered" >    <span class="missing-if-branch" title="if path not taken" >I</span>if (rule.match.test(text)) <span class="cstat-no" title="statement not covered" >tags.push(rule.tag);</span></span>
+  }
+  // reset global regex state for safety across calls
+<span class="cstat-no" title="statement not covered" >  TAG_CANONICAL.forEach(<span class="fstat-no" title="function not covered" >(r</span>) =&gt; (<span class="cstat-no" title="statement not covered" >r.match.lastIndex = 0)</span>);</span>
+<span class="cstat-no" title="statement not covered" >  return uniq(tags);</span>
+}
+&nbsp;
+<span class="cstat-no" title="statement not covered" >export function <span class="fstat-no" title="function not covered" >p</span>arsePerchedQuery(</span>raw: string): PerchedIntent | null {
+  const trimmed = <span class="cstat-no" title="statement not covered" >String(raw || '').trim();</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (trimmed.length &lt; 2) <span class="cstat-no" title="statement not covered" >return null;</span></span>
+  const text = <span class="cstat-no" title="statement not covered" >trimmed.toLowerCase();</span>
+  const vibe = <span class="cstat-no" title="statement not covered" >pickVibe(text);</span>
+  const openFilter = <span class="cstat-no" title="statement not covered" >pickOpenFilter(text);</span>
+  const tags = <span class="cstat-no" title="statement not covered" >pickTags(text);</span>
+  const wifiSpeed = <span class="cstat-no" title="statement not covered" >pickWifiSpeed(text);</span>
+  const noiseLevel = <span class="cstat-no" title="statement not covered" >pickNoiseLevel(text);</span>
+  const busyness = <span class="cstat-no" title="statement not covered" >pickBusyness(text);</span>
+  const outlets = <span class="cstat-no" title="statement not covered" >pickOutlets(text);</span>
+<span class="cstat-no" title="statement not covered" >  return { raw: trimmed, vibe, openFilter, tags, wifiSpeed, noiseLevel, busyness, outlets };</span>
+}
+&nbsp;
+<span class="cstat-no" title="statement not covered" >export function <span class="fstat-no" title="function not covered" >f</span>ormatIntentChips(</span>intent: PerchedIntent | null): string[] {
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (!intent) <span class="cstat-no" title="statement not covered" >return [];</span></span>
+  const chips: string[] = <span class="cstat-no" title="statement not covered" >[];</span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.vibe !== 'all') {</span>
+<span class="cstat-no" title="statement not covered" >    chips.push(intent.vibe === 'late' ? 'Late-night' : intent.vibe === 'cowork' ? 'Coworking' : `${intent.vibe[0].toUpperCase()}${intent.vibe.slice(1)}`);</span>
+  }
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.openFilter === 'open') <span class="cstat-no" title="statement not covered" >chips.push('Open now');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.openFilter === 'closed') <span class="cstat-no" title="statement not covered" >chips.push('Closed now');</span></span>
+  // Utility metric chips
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.wifiSpeed === 'fast') <span class="cstat-no" title="statement not covered" >chips.push('Fast WiFi');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.wifiSpeed === 'ok') <span class="cstat-no" title="statement not covered" >chips.push('Decent WiFi');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.noiseLevel === 'quiet') <span class="cstat-no" title="statement not covered" >chips.push('Quiet');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.noiseLevel === 'lively') <span class="cstat-no" title="statement not covered" >chips.push('Lively');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.noiseLevel === 'moderate') <span class="cstat-no" title="statement not covered" >chips.push('Moderate noise');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.busyness === 'empty') <span class="cstat-no" title="statement not covered" >chips.push('Not busy');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.busyness === 'busy') <span class="cstat-no" title="statement not covered" >chips.push('Busy spot');</span></span>
+<span class="cstat-no" title="statement not covered" >  <span class="missing-if-branch" title="if path not taken" >I</span>if (intent.outlets === 'has-outlets') <span class="cstat-no" title="statement not covered" >chips.push('Has Outlets');</span></span>
+<span class="cstat-no" title="statement not covered" >  intent.tags.forEach(<span class="fstat-no" title="function not covered" >(t</span>) =&gt; <span class="cstat-no" title="statement not covered" >chips.push(t))</span>;</span>
+<span class="cstat-no" title="statement not covered" >  return uniq(chips).slice(0, 6);</span>
+}
+&nbsp;
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-02-10T04:28:56.639Z
+            </div>
+        <script src="prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="sorter.js"></script>
+        <script src="block-navigation.js"></script>
+    </body>
+</html>
+    

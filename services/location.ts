@@ -138,13 +138,14 @@ export async function getForegroundLocationIfPermitted(): Promise<SimpleLocation
   return browser;
 }
 
-export async function requestForegroundLocation(): Promise<SimpleLocation | null> {
-  const res = await requestForegroundLocationWithStatus();
+export async function requestForegroundLocation(options?: { ignoreCache?: boolean; preferFresh?: boolean }): Promise<SimpleLocation | null> {
+  const res = await requestForegroundLocationWithStatus(options);
   return res.coords;
 }
 
-export async function requestForegroundLocationWithStatus(): Promise<{ coords: SimpleLocation | null; state: LocationPermissionState }> {
-  if (cached && isFresh(cached.ts, 90_000)) {
+export async function requestForegroundLocationWithStatus(options?: { ignoreCache?: boolean; preferFresh?: boolean }): Promise<{ coords: SimpleLocation | null; state: LocationPermissionState }> {
+  // Skip cache if explicitly requested
+  if (!options?.ignoreCache && cached && isFresh(cached.ts, 90_000)) {
     return { coords: cached.coords, state: { status: 'granted', granted: true, canAskAgain: true, servicesEnabled: true, error: null } };
   }
 
@@ -161,11 +162,13 @@ export async function requestForegroundLocationWithStatus(): Promise<{ coords: S
       return { coords: null, state: { ...perm, servicesEnabled, error: getLastLocationError() } };
     }
     try {
-      const lastKnown = await getLastKnownLocation(ExpoLocation);
-      if (lastKnown) {
-        cached = { coords: lastKnown, ts: Date.now() };
-        setLastError(null);
-        return { coords: lastKnown, state: { ...perm, servicesEnabled, error: null } };
+      if (!options?.preferFresh) {
+        const lastKnown = await getLastKnownLocation(ExpoLocation);
+        if (lastKnown) {
+          cached = { coords: lastKnown, ts: Date.now() };
+          setLastError(null);
+          return { coords: lastKnown, state: { ...perm, servicesEnabled, error: null } };
+        }
       }
       const pos = await ExpoLocation.getCurrentPositionAsync({
         accuracy: ExpoLocation.Accuracy?.Balanced ?? undefined,
@@ -184,4 +187,12 @@ export async function requestForegroundLocationWithStatus(): Promise<{ coords: S
   if (browser) cached = { coords: browser, ts: Date.now() };
   setLastError(browser ? null : 'Unable to fetch location');
   return { coords: browser, state: { status: browser ? 'granted' : 'undetermined', granted: !!browser, canAskAgain: true, servicesEnabled: true, error: getLastLocationError() } };
+}
+
+/**
+ * Clear cached location data
+ * Used when switching to demo mode to ensure demo data takes priority
+ */
+export function clearLocationCache() {
+  cached = null;
 }

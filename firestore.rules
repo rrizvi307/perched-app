@@ -19,54 +19,220 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.token.email_verified == true;
     }
 
-    // Rate limiting helper - approximate check
-    function withinRateLimit() {
-      // This is a basic check - for production, consider using Cloud Functions
-      // to enforce more sophisticated rate limiting
-      return true;
+    function hasPostingAccess() {
+      return isAdmin() ||
+        isVerified() ||
+        (isAuthenticated() && request.auth.token.phone_number != null);
     }
 
-    // Users collection
-    match /users/{userId} {
-      // Anyone can read public profile fields
+    function isStringList(value) {
+      return !(value is list) || value.size() == 0 || value[0] is string;
+    }
+
+    function isRequiredBoundedString(value, maxLength) {
+      return value is string && value.size() > 0 && value.size() <= maxLength;
+    }
+
+    function isOptionalBoundedString(value, maxLength) {
+      return value == null || (value is string && value.size() <= maxLength);
+    }
+
+    function isValidCampusType(value) {
+      return value == null || value == 'campus' || value == 'city';
+    }
+
+    function isValidAmbiancePreference(value) {
+      return value == null ||
+        value == 'cozy' ||
+        value == 'modern' ||
+        value == 'rustic' ||
+        value == 'bright' ||
+        value == 'intimate' ||
+        value == 'energetic';
+    }
+
+    function isValidPlaceVoteMap(votes) {
+      return votes is map &&
+        votes.keys().hasOnly(['Quiet', 'Wi-Fi', 'Outlets', 'Seating', 'Bright', 'Spacious', 'Late-night']) &&
+        (!votes.keys().hasAny(['Quiet']) || votes.Quiet is bool) &&
+        (!votes.keys().hasAny(['Wi-Fi']) || votes['Wi-Fi'] is bool) &&
+        (!votes.keys().hasAny(['Outlets']) || votes.Outlets is bool) &&
+        (!votes.keys().hasAny(['Seating']) || votes.Seating is bool) &&
+        (!votes.keys().hasAny(['Bright']) || votes.Bright is bool) &&
+        (!votes.keys().hasAny(['Spacious']) || votes.Spacious is bool) &&
+        (!votes.keys().hasAny(['Late-night']) || votes['Late-night'] is bool);
+    }
+
+    function socialGraphExists(userId) {
+      return exists(/databases/$(database)/documents/socialGraph/$(userId));
+    }
+
+    function socialGraphData(userId) {
+      return get(/databases/$(database)/documents/socialGraph/$(userId)).data;
+    }
+
+    function hasFriendAccess(userId) {
+      return socialGraphExists(userId) &&
+        socialGraphData(userId).friends is list &&
+        socialGraphData(userId).friends.hasAny([request.auth.uid]);
+    }
+
+    function hasCloseFriendAccess(userId) {
+      return socialGraphExists(userId) &&
+        socialGraphData(userId).closeFriends is list &&
+        socialGraphData(userId).closeFriends.hasAny([request.auth.uid]);
+    }
+
+    function canReadCheckinData(checkinData) {
+      return isAuthenticated() && (
+        checkinData.userId == request.auth.uid ||
+        checkinData.visibility == 'public' ||
+        (
+          checkinData.visibility == 'friends' && hasFriendAccess(checkinData.userId)
+        ) ||
+        (
+          checkinData.visibility == 'close' && hasCloseFriendAccess(checkinData.userId)
+        )
+      );
+    }
+
+    function canReadCheckinById(checkinId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/checkins/$(checkinId)) &&
+        canReadCheckinData(get(/databases/$(database)/documents/checkins/$(checkinId)).data);
+    }
+
+    match /publicProfiles/{userId} {
       allow read: if isAuthenticated();
 
-      // Users can only create/update their own profile
-      allow create: if isAuthenticated() &&
-                      request.auth.uid == userId &&
-                      request.resource.data.keys().hasAll(['email', 'createdAt']);
+      allow create: if isOwner(userId) &&
+                      request.resource.data.keys().hasOnly([
+                        'name',
+                        'nameLower',
+                        'city',
+                        'campus',
+                        'campusOrCity',
+                        'campusType',
+                        'handle',
+                        'photoUrl',
+                        'avatarUrl',
+                        'coffeeIntents',
+                        'ambiancePreference',
+                        'referralCode',
+                        'createdAt',
+                        'updatedAt'
+                      ]) &&
+                      isOptionalBoundedString(request.resource.data.name, 80) &&
+                      isOptionalBoundedString(request.resource.data.nameLower, 80) &&
+                      isOptionalBoundedString(request.resource.data.city, 120) &&
+                      isOptionalBoundedString(request.resource.data.campus, 120) &&
+                      isOptionalBoundedString(request.resource.data.campusOrCity, 120) &&
+                      isValidCampusType(request.resource.data.campusType) &&
+                      isOptionalBoundedString(request.resource.data.handle, 32) &&
+                      isOptionalBoundedString(request.resource.data.photoUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.avatarUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.referralCode, 32) &&
+                      isValidAmbiancePreference(request.resource.data.ambiancePreference) &&
+                      (!(request.resource.data.coffeeIntents is list) ||
+                        (request.resource.data.coffeeIntents.size() <= 3 &&
+                         isStringList(request.resource.data.coffeeIntents)));
 
       allow update: if isOwner(userId) &&
-                      // Prevent changing critical fields
-                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'createdAt']);
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                        'name',
+                        'nameLower',
+                        'city',
+                        'campus',
+                        'campusOrCity',
+                        'campusType',
+                        'handle',
+                        'photoUrl',
+                        'avatarUrl',
+                        'coffeeIntents',
+                        'ambiancePreference',
+                        'referralCode',
+                        'updatedAt'
+                      ]) &&
+                      isOptionalBoundedString(request.resource.data.name, 80) &&
+                      isOptionalBoundedString(request.resource.data.nameLower, 80) &&
+                      isOptionalBoundedString(request.resource.data.city, 120) &&
+                      isOptionalBoundedString(request.resource.data.campus, 120) &&
+                      isOptionalBoundedString(request.resource.data.campusOrCity, 120) &&
+                      isValidCampusType(request.resource.data.campusType) &&
+                      isOptionalBoundedString(request.resource.data.handle, 32) &&
+                      isOptionalBoundedString(request.resource.data.photoUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.avatarUrl, 2048) &&
+                      isOptionalBoundedString(request.resource.data.referralCode, 32) &&
+                      isValidAmbiancePreference(request.resource.data.ambiancePreference) &&
+                      (!(request.resource.data.coffeeIntents is list) ||
+                        (request.resource.data.coffeeIntents.size() <= 3 &&
+                         isStringList(request.resource.data.coffeeIntents)));
 
-      // Only user or admin can delete
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /socialGraph/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if isOwner(userId) &&
+                      request.resource.data.keys().hasOnly([
+                        'friends',
+                        'closeFriends',
+                        'blocked',
+                        'createdAt',
+                        'updatedAt'
+                      ]) &&
+                      isStringList(request.resource.data.friends) &&
+                      isStringList(request.resource.data.closeFriends) &&
+                      isStringList(request.resource.data.blocked);
+
+      allow update: if false;
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Raw owner/admin account doc
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId) &&
+                              request.resource.data.keys().hasOnly([
+                                'createdAt',
+                                'updatedAt',
+                                'migrationVersion'
+                              ]);
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /userPrivate/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAuthenticated() &&
+                              request.auth.uid == userId &&
+                              !request.resource.data.keys().hasAny([
+                                'friends',
+                                'closeFriends',
+                                'blocked',
+                                'name',
+                                'nameLower',
+                                'handle',
+                                'city',
+                                'campus',
+                                'campusOrCity',
+                                'campusType',
+                                'photoUrl',
+                                'avatarUrl',
+                                'coffeeIntents',
+                                'ambiancePreference'
+                              ]);
       allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Check-ins collection
     match /checkins/{checkinId} {
       // Read access based on visibility
-      allow read: if isAuthenticated() && (
-        // Public check-ins
-        resource.data.visibility == 'public' ||
-        // Friends-only: check if requester is in user's friends list
-        (resource.data.visibility == 'friends' &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.friends.hasAny([request.auth.uid])) ||
-        // Close friends
-        (resource.data.visibility == 'close' &&
-         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(resource.data.userId)).data.closeFriends.hasAny([request.auth.uid])) ||
-        // Own check-ins
-        resource.data.userId == request.auth.uid
-      );
+      allow read: if canReadCheckinData(resource.data);
 
-      // Only authenticated, verified users can create
-      allow create: if isVerified() &&
-                      request.auth.uid == request.resource.data.userId &&
-                      request.resource.data.keys().hasAll(['userId', 'createdAt', 'spotName']) &&
-                      withinRateLimit();
+      // Check-ins are created via Cloud Functions so posting eligibility and rate limits
+      // are enforced server-side instead of trusting client writes.
+      allow create: if false;
 
       // Only owner can update their check-ins
       allow update: if isOwner(resource.data.userId) &&
@@ -79,8 +245,9 @@ service cloud.firestore {
 
     // Friend requests collection
     match /friendRequests/{requestId} {
-      // Users can read requests involving them
+      // Users can read requests involving them (resource == null means doc doesn't exist — allow so existence checks work)
       allow read: if isAuthenticated() && (
+        resource == null ||
         resource.data.fromId == request.auth.uid ||
         resource.data.toId == request.auth.uid
       );
@@ -89,13 +256,20 @@ service cloud.firestore {
       allow create: if isAuthenticated() &&
                       request.resource.data.fromId == request.auth.uid &&
                       request.resource.data.toId != request.auth.uid &&
-                      request.resource.data.keys().hasAll(['fromId', 'toId', 'status', 'createdAt']);
+                      request.resource.data.status == 'pending' &&
+                      request.resource.data.keys().hasAll(['fromId', 'toId', 'status', 'createdAt']) &&
+                      request.resource.data.keys().hasOnly(['fromId', 'toId', 'status', 'createdAt', 'respondedAt']);
 
       // Users can update requests they're involved in (to accept/reject)
       allow update: if isAuthenticated() && (
         resource.data.fromId == request.auth.uid ||
         resource.data.toId == request.auth.uid
-      );
+      ) &&
+      request.resource.data.fromId == resource.data.fromId &&
+      request.resource.data.toId == resource.data.toId &&
+      request.resource.data.createdAt == resource.data.createdAt &&
+      request.resource.data.status in ['pending', 'accepted', 'declined'] &&
+      request.resource.data.keys().hasOnly(['fromId', 'toId', 'status', 'createdAt', 'respondedAt']);
 
       // Users can delete their own requests
       allow delete: if isAuthenticated() && (
@@ -107,13 +281,17 @@ service cloud.firestore {
     // Reports collection
     match /reports/{reportId} {
       // Only admins can read reports
-      allow read: if isAdmin();
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.reporterId == request.auth.uid);
 
       // Any authenticated user can create a report
       allow create: if isAuthenticated() &&
                       request.resource.data.reporterId == request.auth.uid &&
                       request.resource.data.keys().hasAll(['reporterId', 'reason', 'createdAt']) &&
-                      request.resource.data.keys().hasAny(['reportedUserId', 'checkinId']);
+                      request.resource.data.keys().hasAny(['reportedUserId', 'reportedId', 'checkinId']) &&
+                      isRequiredBoundedString(request.resource.data.reason, 300) &&
+                      isOptionalBoundedString(request.resource.data.reportedUserId, 160) &&
+                      isOptionalBoundedString(request.resource.data.reportedId, 160) &&
+                      isOptionalBoundedString(request.resource.data.checkinId, 160);
 
       // Only admins can update (to change status)
       allow update: if isAdmin();
@@ -144,6 +322,17 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /checkinWriteGuards/{userId} {
+      allow read, write: if false;
+    }
+
+    // Spot aggregates used by explore, spot detail, and recommendations.
+    // These docs are server-managed; clients may read but not mutate them.
+    match /spots/{spotId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if false;
+    }
+
     // Place events/tags (for trending/ranking)
     match /placeEvents/{eventId} {
       allow read: if isAuthenticated();
@@ -157,10 +346,37 @@ service cloud.firestore {
     match /placeTags/{tagId} {
       allow read: if isAuthenticated();
 
-      // Aggregate updates only - Cloud Function should handle this
-      allow create, update: if isAuthenticated();
+      // Server-owned aggregate (Admin SDK bypasses rules).
+      allow create, update: if false;
 
       allow delete: if false;
+    }
+
+    // Active aggregate + per-user vote collections used by current mobile clients.
+    match /place_tags/{tagId} {
+      allow read: if isAuthenticated();
+      allow create, update: if false;
+      allow delete: if false;
+    }
+
+    match /place_tag_votes/{voteId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid &&
+                      voteId == request.auth.uid + '_' + request.resource.data.placeKey &&
+                      request.resource.data.keys().hasOnly(['userId', 'placeKey', 'votes', 'updatedAt']) &&
+                      isRequiredBoundedString(request.resource.data.placeKey, 160) &&
+                      isValidPlaceVoteMap(request.resource.data.votes);
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      request.resource.data.userId == request.auth.uid &&
+                      voteId == request.auth.uid + '_' + resource.data.placeKey &&
+                      request.resource.data.placeKey == resource.data.placeKey &&
+                      request.resource.data.keys().hasOnly(['userId', 'placeKey', 'votes', 'updatedAt']) &&
+                      isValidPlaceVoteMap(request.resource.data.votes);
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid;
     }
 
     // Notifications
@@ -191,84 +407,252 @@ service cloud.firestore {
 
       // Users can create/update their own tokens
       allow create, update: if isAuthenticated() &&
-                              request.resource.data.userId == request.auth.uid;
+                              tokenId == request.auth.uid &&
+                              request.resource.data.userId == request.auth.uid &&
+                              request.resource.data.keys().hasOnly(['userId', 'token', 'updatedAt']) &&
+                              request.resource.data.token is string &&
+                              request.resource.data.token.size() > 0 &&
+                              request.resource.data.token.size() < 512;
 
       // Users can delete their own tokens
       allow delete: if isAuthenticated() &&
+                      tokenId == request.auth.uid &&
                       resource.data.userId == request.auth.uid;
     }
 
     // Reactions collection (for check-in reactions)
     match /reactions/{reactionId} {
-      // Anyone authenticated can read reactions
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinById(resource.data.checkinId);
 
-      // Users can create reactions with their own userId
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['checkinId', 'type', 'userId', 'createdAt']);
+                      request.resource.data.keys().hasAll(['checkinId', 'type', 'userId', 'createdAt']) &&
+                      canReadCheckinById(request.resource.data.checkinId);
 
-      // Users can only delete their own reactions
       allow delete: if isAuthenticated() &&
-                      resource.data.userId == request.auth.uid;
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId);
 
-      // No updates allowed - users should delete and recreate
-      allow update: if false;
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.checkinId == resource.data.checkinId &&
+                      request.resource.data.keys().hasOnly([
+                        'id',
+                        'checkinId',
+                        'userId',
+                        'userName',
+                        'userHandle',
+                        'type',
+                        'createdAt',
+                        'updatedAt'
+                      ]);
     }
 
     // Comments collection (for check-in comments)
     match /comments/{commentId} {
-      // Anyone authenticated can read comments
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinById(resource.data.checkinId);
 
-      // Users can create comments with their own userId
       allow create: if isAuthenticated() &&
                       request.resource.data.userId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']);
+                      request.resource.data.keys().hasAll(['checkinId', 'text', 'userId', 'createdAt']) &&
+                      isRequiredBoundedString(request.resource.data.text, 500) &&
+                      isOptionalBoundedString(request.resource.data.userName, 120) &&
+                      isOptionalBoundedString(request.resource.data.userHandle, 64) &&
+                      canReadCheckinById(request.resource.data.checkinId);
 
-      // Users can update/delete their own comments
-      allow update, delete: if isAuthenticated() &&
-                              resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.checkinId == resource.data.checkinId &&
+                      request.resource.data.keys().hasOnly([
+                        'id',
+                        'checkinId',
+                        'userId',
+                        'userName',
+                        'userHandle',
+                        'text',
+                        'createdAt',
+                        'updatedAt'
+                      ]) &&
+                      isRequiredBoundedString(request.resource.data.text, 500) &&
+                      isOptionalBoundedString(request.resource.data.userName, 120) &&
+                      isOptionalBoundedString(request.resource.data.userHandle, 64);
+
+      allow delete: if isAuthenticated() &&
+                      resource.data.userId == request.auth.uid &&
+                      canReadCheckinById(resource.data.checkinId);
     }
 
     // User stats collection (for gamification)
     match /userStats/{userId} {
-      // Users can read their own stats, or anyone can read for leaderboards
-      allow read: if isAuthenticated();
-
-      // Users can create/update their own stats
-      allow create, update: if isAuthenticated() &&
-                              request.auth.uid == userId;
-
-      // No deletes
+      allow read: if isAuthenticated() &&
+                    (request.auth.uid == userId || isAdmin());
+      allow create, update: if false;
       allow delete: if false;
     }
 
     // Achievements collection (for unlocked achievements)
     match /achievements/{achievementId} {
-      // Users can read their own achievements
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if false;
+    }
 
-      // Users can create their own achievement unlocks
+    // Referral signup tracking (write by newly created user, process server-side).
+    match /referrals/{referralId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.newUserId == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() &&
-                      request.resource.data.userId == request.auth.uid;
-
-      // No updates or deletes (achievements are permanent)
+                      request.resource.data.newUserId == request.auth.uid &&
+                      request.resource.data.referralCode is string &&
+                      request.resource.data.status == 'pending';
       allow update, delete: if false;
     }
 
-    // Referrals collection (for tracking signup referrals)
-    match /referrals/{referralId} {
-      // Only Cloud Functions should read referrals
-      allow read: if false;
+    // Business ownership claims
+    match /businessSpots/{businessSpotId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow create: if false;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
 
-      // Authenticated users can create referrals for themselves
+    // Promotions for business spots
+    match /promotions/{promotionId} {
+      allow read: if isAuthenticated();
+      allow create: if false;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /promotionRedemptions/{redemptionId} {
+      allow read: if isAuthenticated();
       allow create: if isAuthenticated() &&
-                      request.resource.data.newUserId == request.auth.uid &&
-                      request.resource.data.keys().hasAll(['referralCode', 'newUserId', 'status', 'createdAt']);
-
-      // Only Cloud Functions update referrals (to mark as credited)
+                      request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
+    }
+
+    match /checkinResponses/{responseId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid ||
+                     resource.data.ownerId == request.auth.uid ||
+                     isAdmin());
+      allow create: if false;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    // Partner program
+    match /partners/{partnerId} {
+      allow read: if isAuthenticated();
+      allow create: if false;
+      allow update, delete: if isAuthenticated() &&
+                              (resource.data.ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /loyaltyCards/{cardId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() &&
+                      (resource.data.userId == request.auth.uid || isAdmin());
+      allow delete: if false;
+    }
+
+    match /loyaltyRedemptions/{redemptionId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /partnerEvents/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.keys().hasAll(['partnerId']) &&
+                      exists(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)) &&
+                      get(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)).data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              exists(/databases/$(database)/documents/partners/$(resource.data.partnerId)) &&
+                              get(/databases/$(database)/documents/partners/$(resource.data.partnerId)).data.ownerId == request.auth.uid;
+    }
+
+    match /equipmentSponsorships/{sponsorshipId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+                      request.resource.data.keys().hasAll(['partnerId']) &&
+                      exists(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)) &&
+                      get(/databases/$(database)/documents/partners/$(request.resource.data.partnerId)).data.ownerId == request.auth.uid;
+      allow update, delete: if isAuthenticated() &&
+                              exists(/databases/$(database)/documents/partners/$(resource.data.partnerId)) &&
+                              get(/databases/$(database)/documents/partners/$(resource.data.partnerId)).data.ownerId == request.auth.uid;
+    }
+
+    // Trust & safety collections
+    match /blockedUsers/{blockId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /safetySettings/{userId} {
+      allow read: if isAuthenticated() &&
+                    (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAuthenticated() &&
+                              request.auth.uid == userId &&
+                              request.resource.data.userId == userId &&
+                              !request.resource.data.keys().hasAny(['blockedUsers']);
+      allow delete: if false;
+    }
+
+    match /userWarnings/{warningId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /flaggedContent/{contentId} {
+      allow read: if isAuthenticated() &&
+                    (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() &&
+                      request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    // Performance metrics (write-only from clients, read by admins)
+    match /performanceMetrics/{metricId} {
+      allow create: if isAuthenticated();
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Gamification profiles
+    match /gamification/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    // Weekly early-adopter raffle entries
+    match /weeklyRaffleEntries/{entryId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.userId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    // B2B keys/logs must be server-managed
+    match /apiKeys/{apiKeyId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /apiUsageLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     // Default deny

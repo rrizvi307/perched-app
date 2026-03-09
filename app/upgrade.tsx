@@ -27,7 +27,7 @@ export default function UpgradeAccount() {
   const [emailError, setEmailError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
-  const { register, signInWithEmail, changePassword, deleteAccount, user } = useAuth();
+  const { register, signInWithEmail, changePassword, user } = useAuth();
   const color = useThemeColor({}, 'text');
   const border = useThemeColor({}, 'border');
   const background = useThemeColor({}, 'background');
@@ -92,28 +92,6 @@ export default function UpgradeAccount() {
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Unable to change password');
     }
-  }
-
-  async function handleDeleteAccount() {
-    if (!user) return;
-    if (!currentPassword) {
-      Alert.alert('Confirm', 'Enter your current password to delete this account.');
-      return;
-    }
-    Alert.alert('Delete account?', 'This will permanently delete your account and check-ins. This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteAccount(currentPassword);
-          } catch (e: any) {
-            Alert.alert('Error', e.message || 'Unable to delete account');
-          }
-        },
-      },
-    ]);
   }
 
   const styles = {
@@ -195,10 +173,6 @@ export default function UpgradeAccount() {
                 </>
               ) : null}
               <Button onPress={handleChangePassword}>Change password</Button>
-              <View style={{ height: 12 }} />
-              <Button onPress={handleDeleteAccount} style={{ backgroundColor: danger }}>
-                Delete account
-              </Button>
             </>
           )}
         </ScrollView>

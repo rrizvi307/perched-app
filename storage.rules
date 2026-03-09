@@ -14,6 +14,11 @@ service firebase.storage {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
+    function isAdmin() {
+      return request.auth != null &&
+        (request.auth.token.admin == true || request.auth.token.role == "admin");
+    }
+
     function isValidImage() {
       return request.resource.contentType.matches('image/.*');
     }
@@ -23,25 +28,54 @@ service firebase.storage {
       return request.resource.size < 10 * 1024 * 1024;
     }
 
+    function isValidCheckinVisibility(value) {
+      return value in ['public', 'friends', 'close'];
+    }
+
+    function hasFriendAccess(userId) {
+      return firestore.exists(/databases/(default)/documents/socialGraph/$(userId)) &&
+        firestore.get(/databases/(default)/documents/socialGraph/$(userId)).data.friends.hasAny([request.auth.uid]);
+    }
+
+    function hasCloseFriendAccess(userId) {
+      return firestore.exists(/databases/(default)/documents/socialGraph/$(userId)) &&
+        firestore.get(/databases/(default)/documents/socialGraph/$(userId)).data.closeFriends.hasAny([request.auth.uid]);
+    }
+
+    function hasValidCheckinMetadata(userId) {
+      return request.resource.metadata.ownerId == userId &&
+        request.resource.metadata.mediaKind == 'checkin' &&
+        isValidCheckinVisibility(request.resource.metadata.visibility);
+    }
+
+    function canReadCheckinMedia(userId) {
+      return isOwner(userId) || (
+        isAuthenticated() &&
+        resource.metadata.ownerId == userId &&
+        resource.metadata.mediaKind == 'checkin' &&
+        (
+          resource.metadata.visibility == 'public' ||
+          (resource.metadata.visibility == 'friends' && hasFriendAccess(userId)) ||
+          (resource.metadata.visibility == 'close' && hasCloseFriendAccess(userId))
+        )
+      );
+    }
+
     // Check-in photos
     match /checkins/{userId}/{filename} {
-      // Anyone can read public check-in photos
-      // (Firestore rules handle visibility filtering)
-      allow read: if isAuthenticated();
+      allow read: if canReadCheckinMedia(userId);
 
-      // Only the owner can upload to their folder
       allow create: if isOwner(userId) &&
-                      isVerified() &&
                       isValidImage() &&
-                      isValidSize();
+                      isValidSize() &&
+                      hasValidCheckinMetadata(userId);
 
-      // Only owner can update their own photos
       allow update: if isOwner(userId) &&
                       isValidImage() &&
-                      isValidSize();
+                      isValidSize() &&
+                      hasValidCheckinMetadata(userId);
 
-      // Only owner can delete their photos
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Profile photos
@@ -60,7 +94,7 @@ service firebase.storage {
                       isValidSize();
 
       // Only owner can delete
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Story/share images (temporary exports)
@@ -74,7 +108,7 @@ service firebase.storage {
                       isValidSize();
 
       // Owner can delete
-      allow delete: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
     // Default deny all other paths

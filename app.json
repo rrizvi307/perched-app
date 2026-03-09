@@ -2,22 +2,23 @@
   "expo": {
     "name": "Perched",
     "slug": "perched",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
-    "icon": "./assets/brand/Perched App Logo.png",
+    "icon": "./assets/brand/perched-app-icon.png",
     "scheme": "perched",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "app.perched",
-      "buildNumber": "1",
+      "buildNumber": "4",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Perched uses the camera to capture your check-in photo.",
         "NSPhotoLibraryUsageDescription": "Perched uses your photo library to attach a check-in photo.",
         "NSPhotoLibraryAddUsageDescription": "Perched can save your check-in photos to your library.",
         "NSLocationWhenInUseUsageDescription": "Perched uses your location to show nearby third places and friend hotspots.",
-        "NSContactsUsageDescription": "Perched uses your contacts to help you find friends."
+        "NSContactsUsageDescription": "Perched uses your contacts to help you find friends.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "config": {
         "googleMapsApiKey": ""
@@ -34,8 +35,8 @@
         "READ_MEDIA_IMAGES"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#FBFAF8",
-        "foregroundImage": "./assets/brand/Perched App Logo.png"
+        "backgroundColor": "#1a1a2e",
+        "foregroundImage": "./assets/brand/perched-mark.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -59,33 +60,41 @@
       "ADMIN_EMAILS": "",
       "SUPPORT_EMAIL": "perchedappteam@gmail.com",
       "INSTAGRAM_URL": "https://instagram.com/perchedapp",
+      "REVENUECAT_PUBLIC_KEY": "",
       "TIKTOK_URL": "https://tiktok.com/@perchedapp",
+      "INTEL_V1_ENABLED": false,
+      "PLACE_INTEL_ENABLE_WEATHER": "true",
       "eas": {
-        "projectId": ""
-      }
+        "projectId": "8413644e-43e4-4409-8302-9454707c4f42"
+      },
+      "ENV": "development",
+      "FIREBASE_FUNCTIONS_REGION": "us-central1",
+      "router": {}
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/brand/Perched App Logo.png"
+      "favicon": "./assets/brand/perched-favicon.png"
     },
     "plugins": [
       "expo-router",
+      "expo-contacts",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/brand/Perched App Logo.png",
-          "imageWidth": 200,
+          "image": "./assets/brand/perched-splash.png",
+          "imageWidth": 280,
           "resizeMode": "contain",
-          "backgroundColor": "#FBFAF8",
+          "backgroundColor": "#FFFFFF",
           "dark": {
-            "image": "./assets/brand/Perched App Logo.png",
-            "backgroundColor": "#0E0F12"
+            "image": "./assets/brand/perched-splash.png",
+            "backgroundColor": "#000000"
           }
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "owner": "rrizvi307"
   }
 }

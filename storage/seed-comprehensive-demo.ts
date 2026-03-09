@@ -20,7 +20,10 @@ const KEYS = {
   FRIENDS: 'spot_friends_v1',
   FRIEND_REQUESTS_INCOMING: '@perched_friend_requests_incoming',
   FRIEND_REQUESTS_OUTGOING: '@perched_friend_requests_outgoing',
+  COMPREHENSIVE_LAST_SEEDED_AT: '@perched_demo_comprehensive_last_seeded_at',
 };
+const COMPREHENSIVE_SEED_TTL_MS = 6 * 60 * 60 * 1000;
+const inFlightComprehensiveSeeds = new Map<string, Promise<void>>();
 
 /**
  * Seed comprehensive user stats with unlocked achievements
@@ -152,28 +155,58 @@ export async function seedFriendRequests(userId: string): Promise<void> {
  * Seed ALL demo data for comprehensive testing
  */
 export async function seedComprehensiveDemoData(userId: string): Promise<void> {
-  console.log('🌱 Seeding comprehensive demo data for user:', userId);
+  const existing = inFlightComprehensiveSeeds.get(userId);
+  if (existing) {
+    await existing;
+    return;
+  }
 
+  const task = (async () => {
+    const seedKey = `${KEYS.COMPREHENSIVE_LAST_SEEDED_AT}_${userId}`;
+    const now = Date.now();
+    try {
+      const raw = await AsyncStorage.getItem(seedKey);
+      const lastSeededAt = raw ? Number(raw) : 0;
+      if (Number.isFinite(lastSeededAt) && lastSeededAt > 0 && now - lastSeededAt < COMPREHENSIVE_SEED_TTL_MS) {
+        return;
+      }
+    } catch {
+      // continue with seeding
+    }
+
+    console.log('🌱 Seeding comprehensive demo data for user:', userId);
+
+    try {
+      await Promise.all([
+        seedUserStats(userId),
+        seedSavedSpots(userId),
+        seedMetricsImpact(userId),
+        seedFriendRequests(userId),
+      ]);
+
+      console.log('✅ Comprehensive demo data seeded successfully!');
+      console.log('');
+      console.log('📊 What was seeded:');
+      console.log('  • User stats with 47 check-ins');
+      console.log('  • 5-day streak with achievements unlocked');
+      console.log('  • 3 saved spots');
+      console.log('  • 32 metrics shared, ~96 people helped');
+      console.log('  • 2 incoming + 1 outgoing friend requests');
+      console.log('  • 12 friends (from seedDemoNetwork)');
+      await AsyncStorage.setItem(seedKey, String(now));
+    } catch (error) {
+      console.error('❌ Failed to seed demo data:', error);
+      throw error;
+    }
+  })();
+
+  inFlightComprehensiveSeeds.set(userId, task);
   try {
-    await Promise.all([
-      seedUserStats(userId),
-      seedSavedSpots(userId),
-      seedMetricsImpact(userId),
-      seedFriendRequests(userId),
-    ]);
-
-    console.log('✅ Comprehensive demo data seeded successfully!');
-    console.log('');
-    console.log('📊 What was seeded:');
-    console.log('  • User stats with 47 check-ins');
-    console.log('  • 5-day streak with achievements unlocked');
-    console.log('  • 3 saved spots');
-    console.log('  • 32 metrics shared, ~96 people helped');
-    console.log('  • 2 incoming + 1 outgoing friend requests');
-    console.log('  • 12 friends (from seedDemoNetwork)');
-  } catch (error) {
-    console.error('❌ Failed to seed demo data:', error);
-    throw error;
+    await task;
+  } finally {
+    if (inFlightComprehensiveSeeds.get(userId) === task) {
+      inFlightComprehensiveSeeds.delete(userId);
+    }
   }
 }
 
@@ -187,6 +220,7 @@ export async function clearDemoData(userId: string): Promise<void> {
     AsyncStorage.removeItem(`${KEYS.METRICS_IMPACT}_${userId}`),
     AsyncStorage.removeItem(KEYS.FRIEND_REQUESTS_INCOMING),
     AsyncStorage.removeItem(KEYS.FRIEND_REQUESTS_OUTGOING),
+    AsyncStorage.removeItem(`${KEYS.COMPREHENSIVE_LAST_SEEDED_AT}_${userId}`),
   ]);
 
   console.log('🧹 Cleared all demo data');

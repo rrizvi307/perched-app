@@ -63,6 +63,11 @@ export type AnalyticsEvent =
   | 'feed_viewed'
   | 'feed_refreshed'
   | 'feed_scrolled'
+  | 'screen_viewed'
+  | 'timing_recorded'
+  | 'revenue_tracked'
+  | 'engagement_tracked'
+  | 'premium_converted'
 
   // Engagement
   | 'app_opened'
@@ -125,6 +130,12 @@ const ENV = Constants.expoConfig?.extra?.ENV || 'development';
 let initialized = false;
 let currentUserId: string | null = null;
 let sessionStartTime = Date.now();
+let nativeFirebaseAnalytics:
+  | {
+      logEvent: (eventName: string, params?: Record<string, unknown>) => Promise<void>;
+    }
+  | null
+  | undefined;
 
 // Device context to enrich all events
 const deviceContext = {
@@ -136,6 +147,28 @@ const deviceContext = {
   osVersion: Device.osVersion || undefined,
   deviceYear: Device.deviceYearClass || undefined,
 };
+
+function getNativeFirebaseAnalytics() {
+  if (nativeFirebaseAnalytics !== undefined) return nativeFirebaseAnalytics;
+  try {
+    const loaded = require('@react-native-firebase/analytics');
+    const analyticsFactory = loaded?.default ?? loaded;
+    nativeFirebaseAnalytics = typeof analyticsFactory === 'function' ? analyticsFactory() : null;
+  } catch {
+    nativeFirebaseAnalytics = null;
+  }
+  return nativeFirebaseAnalytics;
+}
+
+async function logNativeFirebaseEvent(event: string, properties?: Record<string, unknown>) {
+  const nativeAnalytics = getNativeFirebaseAnalytics();
+  if (!nativeAnalytics) return;
+  try {
+    await nativeAnalytics.logEvent(event.substring(0, 40), properties);
+  } catch {
+    // Do not throw from analytics paths.
+  }
+}
 
 /**
  * Initialize analytics services
@@ -163,7 +196,7 @@ export function initAnalytics() {
  * Track an event with properties
  */
 export function track(
-  event: AnalyticsEvent,
+  event: AnalyticsEvent | string,
   properties?: AnalyticsProperties
 ) {
   if (!initialized && event !== 'app_opened') {
@@ -192,7 +225,7 @@ export function track(
       logFirebaseEvent(event, enrichedProperties);
     }
 
-    // TODO: Add Segment, Mixpanel, etc. when configured
+    // Optional downstream sinks plug in here when write keys are configured.
     // if (SEGMENT_WRITE_KEY) {
     //   logSegmentEvent(event, enrichedProperties);
     // }
@@ -218,7 +251,7 @@ export function identify(userId: string, properties?: UserProperties) {
     // Firebase Analytics
     logFirebaseUserProperties(properties);
 
-    // TODO: Segment, Mixpanel
+    // Additional identity sinks can be added here when enabled.
   } catch (error) {
     console.error('Failed to identify user:', error);
   }
@@ -238,7 +271,7 @@ export function resetAnalytics() {
     // Firebase Analytics doesn't need explicit reset
     // User ID will be null on next event
 
-    // TODO: Reset Segment, Mixpanel
+    // Additional analytics sinks can reset here when enabled.
   } catch (error) {
     console.error('Failed to reset analytics:', error);
   }
@@ -248,8 +281,8 @@ export function resetAnalytics() {
  * Track screen view
  */
 export function trackScreen(screenName: string, properties?: AnalyticsProperties) {
-  track('app_opened' as AnalyticsEvent, {
-    screen: screenName,
+  track('screen_viewed', {
+    screen_name: screenName,
     ...properties,
   });
 }
@@ -263,7 +296,7 @@ export function trackTiming(
   timeMs: number,
   label?: string
 ) {
-  track('app_opened' as AnalyticsEvent, {
+  track('timing_recorded', {
     timing_category: category,
     timing_variable: variable,
     timing_ms: timeMs,
@@ -316,6 +349,7 @@ function logFirebaseEvent(event: string, properties: AnalyticsProperties) {
     // Log to Firebase via logEvent service
     const logEvent = require('./logEvent').logEvent;
     void logEvent(sanitizedEvent, currentUserId, sanitizedProperties);
+    void logNativeFirebaseEvent(sanitizedEvent, sanitizedProperties);
   } catch (error) {
     console.error('Firebase Analytics error:', error);
   }
@@ -344,11 +378,10 @@ export function trackRevenue(
   currency: string = 'USD',
   properties?: AnalyticsProperties
 ) {
-  track('app_opened' as AnalyticsEvent, {
+  track('revenue_tracked', {
     ...properties,
     revenue,
     currency,
-    event_type: 'revenue',
   });
 }
 
@@ -366,10 +399,28 @@ export function trackOnboardingStep(
 
 // Helper: Track engagement metrics
 export function trackEngagement(type: 'daily' | 'weekly' | 'monthly') {
-  track('app_opened', {
+  track('engagement_tracked', {
     engagement_type: type,
     session_duration: getSessionDuration(),
   });
+}
+
+export async function trackCheckinCreated(spotId: string) {
+  const payload = { spot_id: spotId };
+  track('checkin_posted', payload);
+  await logNativeFirebaseEvent('checkin_created', payload);
+}
+
+export async function trackSpotViewed(spotId: string) {
+  const payload = { spot_id: spotId };
+  track('spot_viewed', payload);
+  await logNativeFirebaseEvent('spot_viewed', payload);
+}
+
+export async function trackPremiumConversion(tier: string) {
+  const payload = { tier };
+  track('premium_converted', payload);
+  await logNativeFirebaseEvent('premium_conversion', payload);
 }
 
 // Legacy compatibility
@@ -389,6 +440,9 @@ export default {
   trackRevenue,
   trackOnboardingStep,
   trackEngagement,
+  trackCheckinCreated,
+  trackSpotViewed,
+  trackPremiumConversion,
   getSessionDuration,
   trackEvent,
 };

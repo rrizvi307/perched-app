@@ -1,16 +1,8 @@
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Badge, UserGamificationProfile } from '@/services/gamificationService';
 import { withAlpha } from '@/utils/colors';
-import React, { memo, useMemo } from 'react';
+import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-
-// Badge tier colors - static, outside component
-const TIER_COLORS = {
-  bronze: '#CD7F32',
-  silver: '#C0C0C0',
-  gold: '#FFD700',
-  platinum: '#E5E4E2',
-} as const;
 
 // ============ STREAK DISPLAY ============
 
@@ -20,7 +12,7 @@ type StreakDisplayProps = {
   compact?: boolean;
 };
 
-export const StreakDisplay = memo(function StreakDisplay({ currentStreak, longestStreak, compact }: StreakDisplayProps) {
+export function StreakDisplay({ currentStreak, longestStreak, compact }: StreakDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
 
@@ -50,7 +42,7 @@ export const StreakDisplay = memo(function StreakDisplay({ currentStreak, longes
       )}
     </View>
   );
-});
+}
 
 // ============ LEVEL DISPLAY ============
 
@@ -61,7 +53,7 @@ type LevelDisplayProps = {
   compact?: boolean;
 };
 
-export const LevelDisplay = memo(function LevelDisplay({ level, xp, xpToNextLevel, compact }: LevelDisplayProps) {
+export function LevelDisplay({ level, xp, xpToNextLevel, compact }: LevelDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
@@ -100,7 +92,7 @@ export const LevelDisplay = memo(function LevelDisplay({ level, xp, xpToNextLeve
       </View>
     </View>
   );
-});
+}
 
 // ============ BADGE DISPLAY ============
 
@@ -111,7 +103,14 @@ type BadgeDisplayProps = {
   onPress?: () => void;
 };
 
-export const BadgeDisplay = memo(function BadgeDisplay({ badge, size = 'medium', showProgress, onPress }: BadgeDisplayProps) {
+const TIER_COLORS = {
+  bronze: '#CD7F32',
+  silver: '#C0C0C0',
+  gold: '#FFD700',
+  platinum: '#E5E4E2',
+};
+
+export function BadgeDisplay({ badge, size = 'medium', showProgress, onPress }: BadgeDisplayProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
@@ -156,7 +155,7 @@ export const BadgeDisplay = memo(function BadgeDisplay({ badge, size = 'medium',
       )}
     </Pressable>
   );
-});
+}
 
 // ============ BADGES ROW ============
 
@@ -167,12 +166,12 @@ type BadgesRowProps = {
   onViewAll?: () => void;
 };
 
-export const BadgesRow = memo(function BadgesRow({ badges, title, showAll, onViewAll }: BadgesRowProps) {
+export function BadgesRow({ badges, title, showAll, onViewAll }: BadgesRowProps) {
   const text = useThemeColor({}, 'text');
   const primary = useThemeColor({}, 'primary');
 
-  const displayBadges = useMemo(() => showAll ? badges : badges.slice(0, 6), [badges, showAll]);
-  const unlockedCount = useMemo(() => badges.filter(b => b.unlockedAt).length, [badges]);
+  const displayBadges = showAll ? badges : badges.slice(0, 6);
+  const unlockedCount = badges.filter(b => b.unlockedAt).length;
 
   return (
     <View style={styles.badgesSection}>
@@ -198,7 +197,7 @@ export const BadgesRow = memo(function BadgesRow({ badges, title, showAll, onVie
       </ScrollView>
     </View>
   );
-});
+}
 
 // ============ XP EARNED TOAST ============
 
@@ -207,7 +206,7 @@ type XPEarnedProps = {
   reason?: string;
 };
 
-export const XPEarned = memo(function XPEarned({ amount, reason }: XPEarnedProps) {
+export function XPEarned({ amount, reason }: XPEarnedProps) {
   const primary = useThemeColor({}, 'primary');
 
   return (
@@ -216,7 +215,7 @@ export const XPEarned = memo(function XPEarned({ amount, reason }: XPEarnedProps
       {reason && <Text style={styles.xpToastReason}>{reason}</Text>}
     </View>
   );
-});
+}
 
 // ============ BADGE UNLOCKED MODAL ============
 
@@ -225,7 +224,7 @@ type BadgeUnlockedProps = {
   onDismiss: () => void;
 };
 
-export const BadgeUnlocked = memo(function BadgeUnlocked({ badge, onDismiss }: BadgeUnlockedProps) {
+export function BadgeUnlocked({ badge, onDismiss }: BadgeUnlockedProps) {
   const text = useThemeColor({}, 'text');
   const card = useThemeColor({}, 'card');
   const tierColor = TIER_COLORS[badge.tier];
@@ -251,7 +250,7 @@ export const BadgeUnlocked = memo(function BadgeUnlocked({ badge, onDismiss }: B
       </View>
     </Pressable>
   );
-});
+}
 
 // ============ PROFILE STATS ============
 
@@ -259,17 +258,17 @@ type ProfileStatsProps = {
   profile: UserGamificationProfile;
 };
 
-export const ProfileStats = memo(function ProfileStats({ profile }: ProfileStatsProps) {
+export function ProfileStats({ profile }: ProfileStatsProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
 
-  const stats = useMemo(() => [
+  const stats = [
     { label: 'Check-ins', value: profile.totalCheckIns, emoji: '📍' },
     { label: 'Spots Visited', value: profile.uniqueSpotsVisited, emoji: '🗺️' },
     { label: 'Reviews', value: profile.reviewsWritten, emoji: '✍️' },
     { label: 'Badges', value: profile.badges.length, emoji: '🏅' },
-  ], [profile.totalCheckIns, profile.uniqueSpotsVisited, profile.reviewsWritten, profile.badges.length]);
+  ];
 
   return (
     <View style={styles.statsGrid}>
@@ -282,7 +281,7 @@ export const ProfileStats = memo(function ProfileStats({ profile }: ProfileStats
       ))}
     </View>
   );
-});
+}
 
 // ============ LEADERBOARD ENTRY ============
 
@@ -293,7 +292,7 @@ type LeaderboardEntryProps = {
   isCurrentUser?: boolean;
 };
 
-export const LeaderboardEntryRow = memo(function LeaderboardEntryRow({ rank, userName, score, isCurrentUser }: LeaderboardEntryProps) {
+export function LeaderboardEntryRow({ rank, userName, score, isCurrentUser }: LeaderboardEntryProps) {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
@@ -321,7 +320,7 @@ export const LeaderboardEntryRow = memo(function LeaderboardEntryRow({ rank, use
       </Text>
     </View>
   );
-});
+}
 
 // ============ STYLES ============
 

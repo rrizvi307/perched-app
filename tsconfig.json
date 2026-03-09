@@ -2,6 +2,7 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "isolatedModules": true,
     "paths": {
       "@/*": [
         "./*"
@@ -19,6 +20,8 @@
     "spot-checkin-app",
     "spot-checkin-app/**",
     "scripts",
-    "scripts/**"
+    "scripts/**",
+    "functions",
+    "functions/**"
   ]
 }

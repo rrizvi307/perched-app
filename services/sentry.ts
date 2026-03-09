@@ -14,10 +14,12 @@ export function initSentry() {
 	}
 
 	try {
-		Sentry.init({
+		const sentryOptions: any = {
 			dsn: SENTRY_DSN,
 			environment: ENV,
 			enabled: ENV === 'production' || ENV === 'staging',
+			enableInExpoDevelopment: false,
+			debug: __DEV__,
 			enableAutoSessionTracking: true,
 			sessionTrackingIntervalMillis: 30000,
 
@@ -26,7 +28,7 @@ export function initSentry() {
 			enableAutoPerformanceTracing: true,
 
 			// Add context
-			beforeSend(event, hint) {
+			beforeSend(event: any, _hint: any) {
 				// Filter out non-critical errors in dev
 				if (ENV === 'development') {
 					return null;
@@ -43,7 +45,8 @@ export function initSentry() {
 			integrations: [
 				Sentry.reactNativeTracingIntegration(),
 			],
-		});
+		};
+		Sentry.init(sentryOptions);
 
 		// Set device context
 		Sentry.setContext('device', {
@@ -56,12 +59,13 @@ export function initSentry() {
 			deviceYearClass: Device.deviceYearClass,
 		});
 
-		// Set update context
-		if (Updates.manifest) {
-			Sentry.setContext('update', {
-				updateId: Updates.updateId,
-				channel: Updates.channel,
-			});
+		// Set update context without relying on deprecated manifest fields.
+		const updateContext = {
+			...(Updates.updateId ? { updateId: Updates.updateId } : {}),
+			...(Updates.channel ? { channel: Updates.channel } : {}),
+		};
+		if (Object.keys(updateContext).length) {
+			Sentry.setContext('update', updateContext);
 		}
 
 		initialized = true;

@@ -3,11 +3,11 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserStats } from './gamification';
 import { track } from './analytics';
-import { haversineDistance } from '@/utils/geo';
 
 const NOTIF_PREFS_KEY = '@perched_notification_prefs';
 const LAST_NOTIF_KEY = '@perched_last_notification';
-const STREAK_REMINDER_ID_KEY = '@perched_streak_reminder_id';
+const SCHEDULED_NOTIFICATION_IDS_KEY = '@perched_scheduled_notification_ids';
+let notificationHandlerConfigured = false;
 
 export interface NotificationPreferences {
   enabled: boolean;
@@ -18,22 +18,75 @@ export interface NotificationPreferences {
   weeklyRecap: boolean;
 }
 
-// Configure notification behavior
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+type ManagedNotificationType = 'streak_reminder' | 'weekly_recap';
+
+export function ensureNotificationHandlerConfigured(): void {
+  if (notificationHandlerConfigured) return;
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+  notificationHandlerConfigured = true;
+}
 
 function buildDateTrigger(date: Date): Notifications.NotificationTriggerInput {
   return {
     type: Notifications.SchedulableTriggerInputTypes.DATE,
     date,
   };
+}
+
+async function getManagedNotificationIds(): Promise<Partial<Record<ManagedNotificationType, string>>> {
+  try {
+    const raw = await AsyncStorage.getItem(SCHEDULED_NOTIFICATION_IDS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<Record<ManagedNotificationType, string>>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function setManagedNotificationId(type: ManagedNotificationType, identifier: string | null): Promise<void> {
+  const ids = await getManagedNotificationIds();
+  if (identifier) {
+    ids[type] = identifier;
+  } else {
+    delete ids[type];
+  }
+  await AsyncStorage.setItem(SCHEDULED_NOTIFICATION_IDS_KEY, JSON.stringify(ids));
+}
+
+async function cancelManagedNotification(type: ManagedNotificationType): Promise<void> {
+  const ids = await getManagedNotificationIds();
+  const identifier = ids[type];
+  if (identifier) {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(identifier);
+    } catch {}
+  }
+  await setManagedNotificationId(type, null);
+}
+
+async function scheduleManagedNotification(
+  type: ManagedNotificationType,
+  request: Notifications.NotificationRequestInput
+): Promise<string> {
+  await cancelManagedNotification(type);
+  const identifier = await Notifications.scheduleNotificationAsync(request);
+  await setManagedNotificationId(type, identifier);
+  return identifier;
+}
+
+export async function clearManagedNotifications(
+  types: ManagedNotificationType[] = ['streak_reminder', 'weekly_recap']
+): Promise<void> {
+  await Promise.all(types.map((type) => cancelManagedNotification(type)));
 }
 
 /**
@@ -43,6 +96,7 @@ export async function initPushNotifications(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
 
   try {
+    ensureNotificationHandlerConfigured();
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
@@ -85,7 +139,7 @@ export async function getNotificationPreferences(): Promise<NotificationPreferen
 
   // Defaults
   return {
-    enabled: true,
+    enabled: false,
     streakReminders: true,
     friendActivity: true,
     nearbySpots: true,
@@ -114,15 +168,15 @@ export async function updateNotificationPreferences(
  */
 export async function scheduleStreakReminder(): Promise<void> {
   const prefs = await getNotificationPreferences();
-  if (!prefs.enabled || !prefs.streakReminders) return;
+  if (!prefs.enabled || !prefs.streakReminders) {
+    await cancelManagedNotification('streak_reminder');
+    return;
+  }
 
   const stats = await getUserStats();
-  if (stats.streakDays === 0) return; // No streak to save
-
-  // Cancel only the previous streak reminder (not all notifications)
-  const previousId = await AsyncStorage.getItem(STREAK_REMINDER_ID_KEY);
-  if (previousId) {
-    await Notifications.cancelScheduledNotificationAsync(previousId);
+  if (stats.streakDays === 0) {
+    await cancelManagedNotification('streak_reminder');
+    return;
   }
 
   // Schedule for 8pm today if user hasn't checked in
@@ -135,7 +189,7 @@ export async function scheduleStreakReminder(): Promise<void> {
     reminderTime.setDate(reminderTime.getDate() + 1);
   }
 
-  const notificationId = await Notifications.scheduleNotificationAsync({
+  await scheduleManagedNotification('streak_reminder', {
     content: {
       title: `🔥 ${stats.streakDays} day streak!`,
       body: "Don't break your streak! Check in before midnight.",
@@ -143,9 +197,6 @@ export async function scheduleStreakReminder(): Promise<void> {
     },
     trigger: buildDateTrigger(reminderTime),
   });
-
-  // Store the ID so we can cancel only this notification later
-  await AsyncStorage.setItem(STREAK_REMINDER_ID_KEY, notificationId);
 
   track('notification_scheduled', {
     type: 'streak_reminder',
@@ -225,14 +276,20 @@ export async function notifyFriendActivity(
  */
 export async function scheduleWeeklyRecap(): Promise<void> {
   const prefs = await getNotificationPreferences();
-  if (!prefs.enabled || !prefs.weeklyRecap) return;
+  if (!prefs.enabled || !prefs.weeklyRecap) {
+    await cancelManagedNotification('weekly_recap');
+    return;
+  }
 
   // Schedule for Sunday at 6pm
   const sunday = new Date();
   sunday.setDate(sunday.getDate() + ((7 - sunday.getDay()) % 7));
   sunday.setHours(18, 0, 0, 0);
+  if (sunday <= new Date()) {
+    sunday.setDate(sunday.getDate() + 7);
+  }
 
-  await Notifications.scheduleNotificationAsync({
+  await scheduleManagedNotification('weekly_recap', {
     content: {
       title: '📊 Your Week on Perched',
       body: 'Check out your weekly recap and see where your friends have been!',
@@ -275,12 +332,14 @@ export async function sendSmartCheckInSuggestion(spotName: string, reason: strin
 export function addNotificationReceivedListener(
   handler: (notification: Notifications.Notification) => void
 ) {
+  ensureNotificationHandlerConfigured();
   return Notifications.addNotificationReceivedListener(handler);
 }
 
 export function addNotificationResponseListener(
   handler: (response: Notifications.NotificationResponse) => void
 ) {
+  ensureNotificationHandlerConfigured();
   return Notifications.addNotificationResponseReceivedListener((response) => {
     const data = response.notification.request.content.data as Record<string, unknown> | null | undefined;
     const rawType = data?.type;
@@ -465,15 +524,12 @@ export async function getNotificationStats(): Promise<{
     const stats: { [type: string]: { sent: number; opened: number; openRate: number } } = {};
 
     for (const key of analyticsKeys) {
-      // Key format: @notif_analytics_${notificationType}_${action}
-      // notificationType may contain underscores (e.g. friend_request), action is always last
       const prefix = '@notif_analytics_';
-      const suffix = key.slice(prefix.length); // e.g. "friend_request_sent"
+      const suffix = key.slice(prefix.length);
       const lastUnderscore = suffix.lastIndexOf('_');
-
       if (lastUnderscore > 0) {
-        const type = suffix.slice(0, lastUnderscore); // e.g. "friend_request"
-        const action = suffix.slice(lastUnderscore + 1); // e.g. "sent"
+        const type = suffix.slice(0, lastUnderscore);
+        const action = suffix.slice(lastUnderscore + 1);
         const countStr = await AsyncStorage.getItem(key);
         const count = countStr ? parseInt(countStr, 10) : 0;
 
@@ -498,6 +554,32 @@ export async function getNotificationStats(): Promise<{
     console.error('Failed to get notification stats:', error);
     return {};
   }
+}
+
+// Helper function
+function haversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRad(degrees: number): number {
+  return degrees * (Math.PI / 180);
 }
 
 export default {

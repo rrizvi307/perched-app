@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { memo, useEffect } from 'react';
+import { Pressable, View, Text, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -10,13 +10,13 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import { IconSymbol } from './icon-symbol';
-import { PremiumButton } from './premium-button';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { tokens } from '@/constants/tokens';
 
 interface EmptyStateProps {
   icon: string;
   title: string;
+  message?: string;
   description?: string;
   actionLabel?: string;
   onAction?: () => void;
@@ -28,9 +28,10 @@ interface EmptyStateProps {
  * Beautiful empty state with smooth entrance animation
  * Inspired by Linear and Notion
  */
-export const EmptyState = memo(function EmptyState({
+export function EmptyState({
   icon,
   title,
+  message,
   description,
   actionLabel,
   onAction,
@@ -40,6 +41,7 @@ export const EmptyState = memo(function EmptyState({
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
+  const border = useThemeColor({}, 'border');
 
   const iconScale = useSharedValue(0.5);
   const iconOpacity = useSharedValue(0);
@@ -74,88 +76,100 @@ export const EmptyState = memo(function EmptyState({
     opacity: contentOpacity.value,
     transform: [{ translateY: contentY.value }],
   }));
+  const bodyText = message ?? description;
+  const emojiIcon = /\p{Extended_Pictographic}/u.test(icon);
 
   return (
     <View style={styles.container}>
       {/* Icon */}
       <Animated.View style={[styles.iconContainer, iconAnimatedStyle]}>
-        <IconSymbol name={icon as any} size={56} color={primary} />
+        {emojiIcon ? (
+          <Text style={{ fontSize: 56 }}>{icon}</Text>
+        ) : (
+          <IconSymbol name={icon as any} size={56} color={primary} />
+        )}
       </Animated.View>
 
       {/* Content */}
       <Animated.View style={[styles.content, contentAnimatedStyle]}>
         <Text style={[styles.title, { color: text }]}>{title}</Text>
-        {description && (
+        {bodyText && (
           <Text style={[styles.description, { color: muted }]}>
-            {description}
+            {bodyText}
           </Text>
         )}
 
         {/* Actions */}
         {actionLabel && onAction && (
           <View style={styles.actions}>
-            <PremiumButton
+            <Pressable
               onPress={onAction}
-              variant="primary"
-              size="medium"
+              style={({ pressed }) => [
+                styles.primaryAction,
+                { backgroundColor: primary },
+                pressed ? { opacity: 0.86 } : null,
+              ]}
             >
-              {actionLabel}
-            </PremiumButton>
+              <Text style={styles.primaryActionText}>{actionLabel}</Text>
+            </Pressable>
 
             {secondaryLabel && onSecondary && (
-              <PremiumButton
+              <Pressable
                 onPress={onSecondary}
-                variant="ghost"
-                size="medium"
+                style={({ pressed }) => [
+                  styles.secondaryAction,
+                  { borderColor: border },
+                  pressed ? { opacity: 0.72 } : null,
+                ]}
               >
-                {secondaryLabel}
-              </PremiumButton>
+                <Text style={[styles.secondaryActionText, { color: text }]}>{secondaryLabel}</Text>
+              </Pressable>
             )}
           </View>
         )}
       </Animated.View>
     </View>
   );
-});
+}
 
 /**
  * Pre-built empty states for common scenarios
  */
-export const EmptyFeed = memo(function EmptyFeed({ onCheckin }: { onCheckin: () => void }) {
+export function EmptyFeed({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="photo.on.rectangle.angled"
-      title="No check-ins yet"
-      description="Start sharing your favorite spots and see what your friends are up to."
-      actionLabel="Check in now"
-      onAction={onCheckin}
-      secondaryLabel="Find friends"
-      onSecondary={() => {/* Navigate to explore */}}
+      icon="📍"
+      title="Your feed is waiting"
+      message="Check in to your favorite work spot and see what friends are up to"
+      actionLabel="Make your first check-in"
+      onAction={onAction}
     />
   );
-});
+}
 
-export const EmptySearch = memo(function EmptySearch() {
+export function EmptySpots({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="magnifyingglass"
-      title="No results found"
-      description="Try adjusting your search or filters to find what you're looking for."
+      icon="🗺️"
+      title="No spots nearby"
+      message="Be the first to discover and rate work spots in this area"
+      actionLabel="Explore the map"
+      onAction={onAction}
     />
   );
-});
+}
 
-export const EmptySpots = memo(function EmptySpots({ onExplore }: { onExplore: () => void }) {
+export function EmptySearch({ onAction }: { onAction?: () => void }) {
   return (
     <EmptyState
-      icon="map.fill"
-      title="Discover spots nearby"
-      description="Find coffee shops, libraries, and coworking spaces perfect for you."
-      actionLabel="Explore map"
-      onAction={onExplore}
+      icon="🔍"
+      title="No matches"
+      message="Try adjusting your filters or searching a different area"
+      actionLabel="Clear filters"
+      onAction={onAction}
     />
   );
-});
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -193,5 +207,28 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     gap: 12,
     width: '100%',
+  },
+  primaryAction: {
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  primaryActionText: {
+    color: '#FFFFFF',
+    fontSize: tokens.type.body.fontSize,
+    fontWeight: '700',
+  },
+  secondaryAction: {
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    backgroundColor: 'transparent',
+  },
+  secondaryActionText: {
+    fontSize: tokens.type.body.fontSize,
+    fontWeight: '600',
   },
 });

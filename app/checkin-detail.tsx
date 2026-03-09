@@ -16,13 +16,14 @@ import { deleteCheckinRemote, getCheckinById, isFirebaseConfigured } from '@/ser
 import { getCheckins, removeCheckinLocalByClientId, removeCheckinLocalById } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function resolvePhoto(checkin: any) {
-  return checkin?.photoUrl || checkin?.photoURL || checkin?.imageUrl || checkin?.imageURL || checkin?.image || null;
+  return resolvePhotoUri(checkin);
 }
 
 function formatWhen(createdAt: any) {
@@ -50,7 +51,11 @@ export default function CheckinDetailScreen() {
   const danger = useThemeColor({}, 'danger');
   const highlight = withAlpha(primary, 0.12);
 
-  const cid = typeof params.cid === 'string' ? params.cid : '';
+  const cid = typeof params.cid === 'string'
+    ? params.cid
+    : typeof params.id === 'string'
+      ? params.id
+      : '';
   const [item, setItem] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
@@ -249,7 +254,7 @@ export default function CheckinDetailScreen() {
                       cid,
                       title,
                       user?.name || 'Someone',
-                      photo
+                      photo || undefined
                     );
                     if (result.success) {
                       showToast('Check-in shared!', 'success');

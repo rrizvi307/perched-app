@@ -15,7 +15,7 @@ export const Colors = {
     border: '#E5E5E5',
 
     // Electric purple (Instagram-inspired) - achievement, premium feel
-    primary: '#8B5CF6', // Vibrant purple
+    primary: '#6D28D9', // Deeper violet for accessible contrast
 
     // Hot pink accent (TikTok-inspired) - attention, excitement
     accent: '#EC4899', // Hot pink
@@ -27,10 +27,10 @@ export const Colors = {
     danger: '#EF4444', // Bright red
 
     // Secondary colors for variety
-    tint: '#8B5CF6',
+    tint: '#6D28D9',
     icon: '#737373',
-    tabIconDefault: '#A3A3A3',
-    tabIconSelected: '#8B5CF6', // Purple when active
+    tabIconDefault: '#6B7280',
+    tabIconSelected: '#6D28D9', // Violet when active
     accentSoft: '#FCE7F3', // Soft pink background
 
     // New dopamine-inducing colors
@@ -65,7 +65,7 @@ export const Colors = {
     // Secondary colors
     tint: '#A78BFA',
     icon: '#A3A3A3',
-    tabIconDefault: '#737373',
+    tabIconDefault: '#808080',
     tabIconSelected: '#A78BFA', // Purple when active
     accentSoft: '#27171A', // Dark pink background
 

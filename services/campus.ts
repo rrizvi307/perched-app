@@ -8,7 +8,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureFirebase, getUsersByIdsCached } from './firebaseClient';
 import { SimpleLocation } from './location';
 import { recordPerfMetric } from './perfMonitor';
-import { haversineDistance } from '@/utils/geo';
 
 export interface Campus {
   id: string;
@@ -155,6 +154,26 @@ export function getAllPilotCampuses(): Campus[] {
   return PILOT_CAMPUSES;
 }
 
+/**
+ * Calculate haversine distance between two points (in km)
+ */
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Earth's radius in km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRad(degrees: number): number {
+  return degrees * (Math.PI / 180);
+}
+
 function getCampusAliases(campusId: string): string[] {
   const campus = getCampusById(campusId);
   return Array.from(
@@ -248,8 +267,8 @@ export async function getCampusStats(campusId: string): Promise<CampusStats | nu
     const userIds = new Set<string>();
     await Promise.all(
       campusAliases.flatMap((alias) => ([
-        db.collection('users').where('campus', '==', alias).get(),
-        db.collection('users').where('campusOrCity', '==', alias).get(),
+        db.collection('publicProfiles').where('campus', '==', alias).get(),
+        db.collection('publicProfiles').where('campusOrCity', '==', alias).get(),
       ])).map(async (promise: Promise<any>) => {
         try {
           const snapshot = await promise;
@@ -371,7 +390,7 @@ export async function getCampusLeaderboard(
     const userById = new Map<string, any>(users.map((entry: any) => [entry.id, entry]));
     const leaderboard = sorted.map(([userId, checkinCount], index) => {
       const userData: any = userById.get(userId);
-      const streak = 0; // TODO: Implement proper streak calculation
+      const streak = userData?.streakDays ?? 0;
       return {
         userId,
         userName: userData?.name || 'Anonymous',

@@ -7,49 +7,76 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { getLocationOptions } from '@/constants/locations';
 import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import Logo from '@/components/logo';
-import { confirmPhoneAuth, findUserByHandle, getWebRecaptchaVerifier, isFirebaseConfigured, startPhoneAuth, updateUserRemote, FIREBASE_CONFIG } from '@/services/firebaseClient';
+import {
+  findUserByHandle,
+  isFirebaseConfigured,
+} from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
 import { getOnboardingProfile } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
-import { gapStyle } from '@/utils/layout';
 import { normalizePhone } from '@/utils/phone';
 import { getForegroundLocationIfPermitted } from '@/services/location';
 import { getAndClearReferralCode } from '@/services/deepLinking';
 import { trackReferralSignup } from '@/services/shareInvite';
+import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import { useEffect, useRef, useState } from 'react';
 import { useRootNavigationState, useRouter } from 'expo-router';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SignUp() {
   const insets = useSafeAreaInsets();
-  const [authMode, setAuthMode] = useState<'email' | 'phone'>('email');
+
+  // Account
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [phone, setPhone] = useState('');
-  const [smsCode, setSmsCode] = useState('');
-  const [verificationId, setVerificationId] = useState('');
-  const [sendingCode, setSendingCode] = useState(false);
-  const [verifyingCode, setVerifyingCode] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [city, setCity] = useState('');
-  const [campus, setCampus] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+
+  // Profile
   const [handle, setHandle] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [city, setCity] = useState('Houston');
+  const [campus, setCampus] = useState('');
+
+  // Submission state
   const [loading, setLoading] = useState(false);
-  const [handleAvailability, setHandleAvailability] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
-  const [cityQuery, setCityQuery] = useState('');
-  const [cityTouched, setCityTouched] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [handleAvailability, setHandleAvailability] = useState<
+    'idle' | 'checking' | 'available' | 'taken' | 'invalid'
+  >('idle');
+
+  // City search
+  const [cityQuery, setCityQuery] = useState('Houston');
+  const [cityDropdownOpen, setCityDropdownOpen] = useState(false);
   const [cityResults, setCityResults] = useState<string[]>([]);
   const [cityLoading, setCityLoading] = useState(false);
+  const [detectingCity, setDetectingCity] = useState(false);
+
+  // Campus search
   const [campusQuery, setCampusQuery] = useState('');
-  const [campusTouched, setCampusTouched] = useState(false);
+  const [campusDropdownOpen, setCampusDropdownOpen] = useState(false);
   const [campusResults, setCampusResults] = useState<string[]>([]);
   const [campusLoading, setCampusLoading] = useState(false);
-  const [detectingCity, setDetectingCity] = useState(false);
+
   const [geoBias, setGeoBias] = useState<{ lat: number; lng: number } | null>(null);
   const [referralCode, setReferralCode] = useState<string | null>(null);
-  const { register, user, refreshUser } = useAuth();
+  const [coffeeIntentsPref, setCoffeeIntentsPref] = useState<DiscoveryIntent[]>([]);
+  const [ambiancePreference, setAmbiancePreference] = useState<
+    'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null
+  >(null);
+
+  const { register, user } = useAuth();
   const fbAvailable = isFirebaseConfigured();
   const color = useThemeColor({}, 'text');
   const primary = useThemeColor({}, 'primary');
@@ -62,30 +89,35 @@ export default function SignUp() {
   const highlight = withAlpha(primary, 0.1);
   const router = useRouter();
   const rootNavigationState = useRootNavigationState();
-  const recaptchaVerifier = useRef<any>(null);
-  const [RecaptchaModal, setRecaptchaModal] = useState<any>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const passwordYRef = useRef(0);
-  const cityYRef = useRef(0);
 
+  // ── Validation ──────────────────────────────────────────────────────────────
   function validateEmail(e: string) {
     return /\S+@\S+\.\S+/.test(e);
   }
-
-  const normalizedHandle = handle.trim().replace(/^@/, '').toLowerCase();
-  const isEmailValid = validateEmail(email);
+  const isEmailValid = validateEmail(email.trim());
   const isPasswordValid = password.length >= 6;
+  const passwordsMatch = password === passwordConfirm;
   const normalizedPhone = phone.trim() ? normalizePhone(phone.trim()) : null;
-  const isPhoneValid = !!normalizedPhone;
-  const isHandleValid = !!normalizedHandle && normalizedHandle.length >= 3 && /^[a-z0-9_.]{3,20}$/.test(normalizedHandle);
+  const normalizedHandle = handle.trim().toLowerCase().replace(/^@+/, '');
+  const isHandleValid =
+    !!normalizedHandle &&
+    normalizedHandle.length >= 3 &&
+    /^[a-z0-9_.]{3,20}$/.test(normalizedHandle);
   const isCityValid = !!city;
-  const handleReady = handleAvailability !== 'checking' && handleAvailability !== 'taken' && handleAvailability !== 'invalid';
-  const canSubmitEmail = isEmailValid && isPasswordValid && isHandleValid && isCityValid && handleReady && !loading;
-  const canSubmitPhone = isPhoneValid && isHandleValid && isCityValid && handleReady && !!verificationId && smsCode.trim().length >= 4 && !verifyingCode;
-  const canSubmit = authMode === 'email' ? canSubmitEmail : canSubmitPhone;
-  const submitting = authMode === 'email' ? loading : verifyingCode;
+  const handleReady =
+    handleAvailability !== 'checking' &&
+    handleAvailability !== 'taken' &&
+    handleAvailability !== 'invalid';
+  const canSubmit =
+    isEmailValid &&
+    isPasswordValid &&
+    passwordsMatch &&
+    isHandleValid &&
+    isCityValid &&
+    handleReady &&
+    !loading;
 
-  const supportsPhoneAuth = Platform.OS === 'web' || !!RecaptchaModal;
   const { height } = useWindowDimensions();
   const keyboardVisible = useKeyboardVisible();
   const keyboardHeight = useKeyboardHeight();
@@ -93,126 +125,19 @@ export default function SignUp() {
   const logoSize = compactHeader ? 44 : height < 740 ? 56 : 72;
   const titleSize = compactHeader ? 30 : height < 740 ? 36 : undefined;
   const extraScrollPad = Platform.OS === 'ios' ? Math.max(28, keyboardHeight + 28) : 28;
-  const scrollToField = (fieldY: number) => {
-    if (Platform.OS !== 'ios') return;
-    const y = Math.max(0, fieldY - 90);
-    setTimeout(() => scrollRef.current?.scrollTo({ y, animated: true }), 140);
-  };
 
-  function getRecaptchaVerifier() {
-    if (Platform.OS === 'web') {
-      if (!recaptchaVerifier.current) {
-        recaptchaVerifier.current = getWebRecaptchaVerifier('recaptcha-container-signup');
-      }
-      return recaptchaVerifier.current;
-    }
-    return recaptchaVerifier.current;
-  }
-
-  async function sendCode() {
-    setAuthError(null);
-    if (!fbAvailable) {
-      setAuthError('Phone sign-up needs Firebase enabled.');
-      return;
-    }
-    if (!isPhoneValid) {
-      setAuthError('Enter a valid phone number with area code.');
-      return;
-    }
-    if (!normalizedPhone) {
-      setAuthError('Enter a valid phone number with area code.');
-      return;
-    }
-    if (!supportsPhoneAuth) {
-      setAuthError("Phone verification isn't available on this device yet. Use email for now.");
-      return;
-    }
-    const verifier = getRecaptchaVerifier();
-    if (!verifier) {
-      setAuthError('Unable to initialize phone verification.');
-      return;
-    }
-    setSendingCode(true);
-    try {
-      const res = await startPhoneAuth(normalizedPhone, verifier);
-      setVerificationId(res.verificationId);
-      setSmsCode('');
-      setAuthError(null);
-    } catch (e: any) {
-      devLog('phone auth start error', e);
-      setAuthError(e?.message || 'Unable to send code.');
-    } finally {
-      setSendingCode(false);
-    }
-  }
-
+  // ── Create account ───────────────────────────────────────────────────────────
   async function doRegister() {
     setAuthError(null);
-    if (!isHandleValid) return alert('Choose a handle (3-20 chars, letters/numbers/underscore/period).');
-    if (handleAvailability === 'taken') return alert('That handle is taken.');
-    if (handleAvailability === 'checking') return alert('Still checking handle availability. Try again in a moment.');
-    if (!isCityValid) return alert('Please select a city.');
 
-    if (authMode === 'phone') {
-      if (!fbAvailable) {
-        setAuthError('Phone sign-up needs Firebase enabled.');
-        return;
-      }
-      if (!isPhoneValid) {
-        setAuthError('Enter a valid phone number with area code.');
-        return;
-      }
-      if (!normalizedPhone) {
-        setAuthError('Enter a valid phone number with area code.');
-        return;
-      }
-      if (!verificationId) {
-        setAuthError('Send the verification code first.');
-        return;
-      }
-      if (!smsCode.trim()) {
-        setAuthError('Enter the verification code.');
-        return;
-      }
-      setVerifyingCode(true);
-      try {
-        let existing = null;
-        try {
-          existing = await findUserByHandle(normalizedHandle);
-        } catch (e) {
-          devLog('handle check skipped', e);
-        }
-        if (existing) {
-          setAuthError('That handle is taken.');
-          return;
-        }
-        const authUser = await confirmPhoneAuth(verificationId, smsCode.trim());
-        const uid = authUser?.uid;
-        if (!uid) throw new Error('Unable to verify phone');
-        const campusType = campus ? 'campus' : 'city';
-        await updateUserRemote(uid, {
-          name: name || null,
-          city: city || null,
-          campus: campus || null,
-          campusOrCity: campusType === 'campus' ? campus : city,
-          campusType,
-          handle: normalizedHandle,
-          phone: normalizedPhone,
-        });
-        // Referral tracking is handled by useEffect when user.id is set
-        await refreshUser?.();
-      } catch (e: any) {
-        devLog('phone register error', e);
-        setAuthError(e?.message || 'Unable to verify phone.');
-      } finally {
-        setVerifyingCode(false);
-      }
-      return;
-    }
+    if (!isEmailValid) return setAuthError('Enter a valid email address.');
+    if (!isPasswordValid) return setAuthError('Password must be at least 6 characters.');
+    if (!passwordsMatch) return setAuthError('Passwords do not match.');
+    if (!isHandleValid) return setAuthError('Choose a username (3–20 chars, letters/numbers/underscore/period).');
+    if (handleAvailability === 'taken') return setAuthError('That username is taken — pick a different one.');
+    if (handleAvailability === 'checking') return setAuthError('Still checking username — try again in a moment.');
+    if (!isCityValid) return setAuthError('Select your city.');
 
-    if (!isEmailValid) return alert('Enter a valid email');
-    if (!isPasswordValid) return alert('Password must be at least 6 characters');
-    if (phone.trim() && !isPhoneValid) return alert('Enter a valid phone number (include area code).');
     setLoading(true);
     const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -235,43 +160,63 @@ export default function SignUp() {
         devLog('handle check skipped', e);
       }
       if (existing) {
-        alert('That handle is taken.');
+        setAuthError('That username is taken.');
         setLoading(false);
         return;
       }
       const campusType = campus ? 'campus' : 'city';
-      await register(email.trim(), password, name || undefined, city || undefined, normalizedHandle, campusType, campus || undefined, normalizedPhone || undefined);
-      // Referral tracking will be handled in useEffect when user state updates
+      await register(
+        email.trim(),
+        password,
+        name || undefined,
+        city || undefined,
+        normalizedHandle,
+        campusType,
+        campus || undefined,
+        normalizedPhone || undefined,
+        {
+          coffeeIntents: coffeeIntentsPref.slice(0, 3),
+          ambiancePreference,
+        },
+      );
     } catch (e) {
       devLog('register error', e);
       const msg = (e as any)?.message || String(e);
-      alert('Unable to register: ' + msg);
+      setAuthError('Unable to register: ' + msg);
     } finally {
       setLoading(false);
     }
   }
 
+  // ── Effects ──────────────────────────────────────────────────────────────────
+
+  // Load onboarding profile (run once on mount)
   useEffect(() => {
     (async () => {
       try {
         const profile = await getOnboardingProfile();
-        if (profile?.name && !name) setName(profile.name);
-        if (profile?.city && !city) setCity(profile.city);
-        if (profile?.campus && !campus) setCampus(profile.campus);
-        if (!city && profile?.campusType === 'city' && profile?.campusOrCity) setCity(profile.campusOrCity);
-        if (!campus && profile?.campusType === 'campus' && profile?.campusOrCity) setCampus(profile.campusOrCity);
+        if (profile?.name) setName(profile.name);
+        if (profile?.city) {
+          setCity(profile.city);
+          setCityQuery(profile.city);
+        } else if (profile?.campusType === 'city' && profile?.campusOrCity) {
+          setCity(profile.campusOrCity);
+          setCityQuery(profile.campusOrCity);
+        }
+        if (profile?.campus) {
+          setCampus(profile.campus);
+          setCampusQuery(profile.campus);
+        } else if (profile?.campusType === 'campus' && profile?.campusOrCity) {
+          setCampus(profile.campusOrCity);
+          setCampusQuery(profile.campusOrCity);
+        }
+        if (Array.isArray(profile?.coffeeIntents)) setCoffeeIntentsPref(profile.coffeeIntents.slice(0, 3));
+        if (typeof profile?.ambiancePreference === 'string') setAmbiancePreference(profile.ambiancePreference);
       } catch {}
     })();
-  }, [campus, city, name]);
+  }, []);
 
-  useEffect(() => {
-    if (city && !cityTouched) setCityQuery(city);
-  }, [city, cityTouched]);
-
-  useEffect(() => {
-    if (campus && !campusTouched) setCampusQuery(campus);
-  }, [campus, campusTouched]);
-
+  // GPS bias for city search
   useEffect(() => {
     (async () => {
       const pos = await getForegroundLocationIfPermitted();
@@ -279,68 +224,42 @@ export default function SignUp() {
     })().catch(() => {});
   }, []);
 
-  // Load referral code if user came from a referral link
+  // Auto-detect city from GPS
+  useEffect(() => {
+    let cancelled = false;
+    if (!geoBias || cityDropdownOpen) return;
+    setDetectingCity(true);
+    (async () => {
+      const detected = await reverseGeocodeCity(geoBias.lat, geoBias.lng);
+      if (cancelled || !detected) return;
+      setCity(detected);
+      setCityQuery(detected);
+    })()
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setDetectingCity(false); });
+    return () => { cancelled = true; };
+  }, [geoBias]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Referral code
   useEffect(() => {
     (async () => {
       const code = await getAndClearReferralCode();
-      if (code) {
-        setReferralCode(code);
-        devLog('Referral code loaded:', code);
-      }
+      if (code) { setReferralCode(code); devLog('Referral code:', code); }
     })();
   }, []);
 
-  // Track referral when new user is created
   const referralTrackedRef = useRef(false);
   useEffect(() => {
     if (user?.id && referralCode && !referralTrackedRef.current) {
       referralTrackedRef.current = true;
       void trackReferralSignup(user.id, referralCode);
-      devLog('Referral tracked for user:', user.id, 'code:', referralCode);
     }
   }, [user?.id, referralCode]);
 
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-    try {
-      const req = eval('require');
-      const mod = req('expo-firebase-recaptcha');
-      if (mod?.FirebaseRecaptchaVerifierModal) {
-        setRecaptchaModal(() => mod.FirebaseRecaptchaVerifierModal);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    setAuthError(null);
-    setVerificationId('');
-    setSmsCode('');
-    setSendingCode(false);
-    setVerifyingCode(false);
-  }, [authMode]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!geoBias || cityTouched || city) return;
-    setDetectingCity(true);
-    (async () => {
-      const detected = await reverseGeocodeCity(geoBias.lat, geoBias.lng);
-      if (cancelled || !detected || cityTouched || city) return;
-      setCity(detected);
-      setCityQuery(detected);
-    })()
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setDetectingCity(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [geoBias, cityTouched, city]);
-
+  // City search (only fires when dropdown is open)
   useEffect(() => {
     let alive = true;
-    if (!cityQuery.trim()) {
+    if (!cityDropdownOpen || !cityQuery.trim()) {
       setCityResults([]);
       setCityLoading(false);
       return;
@@ -358,15 +277,13 @@ export default function SignUp() {
         if (alive) setCityLoading(false);
       }
     }, 250);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [cityQuery, geoBias]);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [cityQuery, cityDropdownOpen, geoBias]);
 
+  // Campus search (only fires when dropdown is open)
   useEffect(() => {
     let alive = true;
-    if (!campusQuery.trim()) {
+    if (!campusDropdownOpen || !campusQuery.trim()) {
       setCampusResults([]);
       setCampusLoading(false);
       return;
@@ -384,12 +301,10 @@ export default function SignUp() {
         if (alive) setCampusLoading(false);
       }
     }, 250);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [campusQuery, geoBias]);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [campusQuery, campusDropdownOpen, geoBias]);
 
+  // Handle availability check
   useEffect(() => {
     let cancelled = false;
     if (!normalizedHandle) {
@@ -405,21 +320,15 @@ export default function SignUp() {
       try {
         const existing = await findUserByHandle(normalizedHandle);
         if (cancelled) return;
-        if (existing) {
-          setHandleAvailability('taken');
-        } else {
-          setHandleAvailability('available');
-        }
+        setHandleAvailability(existing ? 'taken' : 'available');
       } catch {
         if (!cancelled) setHandleAvailability('idle');
       }
     }, 400);
-    return () => {
-      cancelled = true;
-      clearTimeout(id);
-    };
+    return () => { cancelled = true; clearTimeout(id); };
   }, [normalizedHandle]);
 
+  // Navigate once user is set
   useEffect(() => {
     if (!rootNavigationState?.key || !user) return;
     if (user.email && !user.emailVerified) {
@@ -429,6 +338,7 @@ export default function SignUp() {
     router.replace('/(tabs)/feed');
   }, [user, rootNavigationState?.key, router]);
 
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <ThemedView style={styles.container}>
       <Atmosphere />
@@ -452,287 +362,348 @@ export default function SignUp() {
           keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
+          {/* Header */}
           <View style={{ width: '100%', alignItems: 'center' }}>
             <Logo size={logoSize} variant="mark" label="Perched" />
-            <H1 style={{ color, marginTop: 10, ...(titleSize ? { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.2) } : null) }}>Create account</H1>
+            <H1
+              style={{
+                color,
+                marginTop: 10,
+                ...(titleSize
+                  ? { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.2) }
+                  : null),
+              }}
+            >
+              Create account
+            </H1>
           </View>
           {!compactHeader ? (
-            <Body style={{ color, marginTop: 12 }}>
-              {authMode === 'email'
-                ? 'We will email a verification link to confirm your address. It can take a minute — check spam just in case.'
-                : 'We will text a verification code to confirm your number.'}
+            <Body style={{ color, marginTop: 8, marginBottom: 4 }}>
+              Sign up with your email to get started.
             </Body>
           ) : null}
 
-          <View style={{ height: 18 }} />
+          <View style={{ height: 16 }} />
 
           {!fbAvailable ? (
-            <View style={{ padding: 12, borderRadius: 14, backgroundColor: withAlpha(accent, 0.14), borderWidth: 1, borderColor: withAlpha(accent, 0.3), marginBottom: 12 }}>
-              <Text style={{ color: accent, fontWeight: '600' }}>Server auth not configured — create account will save locally</Text>
+            <View style={[styles.infoBox, { backgroundColor: withAlpha(accent, 0.12), borderColor: withAlpha(accent, 0.3) }]}>
+              <Text style={{ color: accent, fontWeight: '600' }}>
+                Server auth not configured — account will save locally
+              </Text>
             </View>
           ) : null}
 
-        <View style={styles.modeRow}>
-          <Pressable
-            onPress={() => setAuthMode('email')}
-            style={[styles.modeButton, { borderColor: border }, authMode === 'email' ? { backgroundColor: primary } : null]}
-          >
-            <Text style={{ color: authMode === 'email' ? '#FFFFFF' : color, fontWeight: '700' }}>Email</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setAuthMode('phone')}
-            style={[styles.modeButton, { borderColor: border }, authMode === 'phone' ? { backgroundColor: primary } : null]}
-          >
-            <Text style={{ color: authMode === 'phone' ? '#FFFFFF' : color, fontWeight: '700' }}>Phone</Text>
-          </Pressable>
-        </View>
+          {/* ─── EMAIL ──────────────────────────────────────────────────────── */}
+          <Label>Email</Label>
+          <TextInput
+            placeholder="you@email.com"
+            placeholderTextColor={muted}
+            value={email}
+            onChangeText={setEmail}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {email.trim().length > 0 && !isEmailValid ? (
+            <Text style={[styles.hint, { color: danger }]}>Enter a valid email address.</Text>
+          ) : null}
 
-        {RecaptchaModal ? <RecaptchaModal ref={recaptchaVerifier} firebaseConfig={FIREBASE_CONFIG} /> : null}
-        {Platform.OS === 'web' ? (
-          <View nativeID="recaptcha-container-signup" id="recaptcha-container-signup" style={{ height: 0 }} />
-        ) : null}
+          {/* ─── PASSWORD ───────────────────────────────────────────────────── */}
+          <Label>Password</Label>
+          <TextInput
+            placeholder="At least 6 characters"
+            placeholderTextColor={muted}
+            value={password}
+            onChangeText={setPassword}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            secureTextEntry
+          />
+          {password.length > 0 && password.length < 6 ? (
+            <Text style={[styles.hint, { color: danger }]}>Use at least 6 characters.</Text>
+          ) : (
+            <Text style={[styles.hint, { color: muted }]}>Min 6 characters.</Text>
+          )}
 
-        {authMode === 'email' ? (
-          <>
-            <Label>Email</Label>
+          <Label>Confirm password</Label>
+          <TextInput
+            placeholder="Re-enter your password"
+            placeholderTextColor={muted}
+            value={passwordConfirm}
+            onChangeText={setPasswordConfirm}
+            style={[
+              styles.input,
+              {
+                borderColor:
+                  passwordConfirm.length > 0 && password !== passwordConfirm ? danger : border,
+                backgroundColor: card,
+                color,
+              },
+            ]}
+            secureTextEntry
+          />
+          {passwordConfirm.length > 0 && password !== passwordConfirm ? (
+            <Text style={[styles.hint, { color: danger }]}>Passwords don&apos;t match.</Text>
+          ) : passwordConfirm.length > 0 && password === passwordConfirm ? (
+            <Text style={[styles.hint, { color: success }]}>Passwords match.</Text>
+          ) : null}
+
+          {/* ─── USERNAME ───────────────────────────────────────────────────── */}
+          <Label>Username</Label>
+          <View
+            style={[
+              styles.handleRow,
+              {
+                borderColor:
+                  handleAvailability === 'available'
+                    ? success
+                    : handleAvailability === 'taken' || handleAvailability === 'invalid'
+                      ? danger
+                      : border,
+                backgroundColor: card,
+              },
+            ]}
+          >
+            <Text style={{ color: muted, fontWeight: '600', paddingLeft: 12, fontSize: 16 }}>
+              @
+            </Text>
             <TextInput
-              placeholder="you@school.edu"
+              placeholder="yourhandle"
               placeholderTextColor={muted}
-              value={email}
-              onChangeText={setEmail}
-              style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-              keyboardType="email-address"
+              value={handle}
+              onChangeText={(t) => setHandle(t.replace(/^@+/, '').toLowerCase())}
+              style={[styles.handleInput, { color }]}
               autoCapitalize="none"
+              autoCorrect={false}
+              maxLength={20}
             />
-
-            <Label>Password</Label>
-            <TextInput
-              placeholder="At least 6 characters"
-              placeholderTextColor={muted}
-              value={password}
-              onChangeText={setPassword}
-              style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-              secureTextEntry
-              onLayout={(e) => {
-                passwordYRef.current = e.nativeEvent.layout.y || 0;
-              }}
-              onFocus={() => scrollToField(passwordYRef.current)}
-            />
-            {!isPasswordValid && password.length > 0 ? (
-              <Text style={{ color: danger, marginBottom: 8 }}>Use at least 6 characters.</Text>
-            ) : (
-              <Text style={{ color: muted, marginBottom: 8 }}>Use at least 6 characters.</Text>
-            )}
-
-            <Label>Phone (optional)</Label>
-            <TextInput
-              placeholder="+1 555 123 4567"
-              placeholderTextColor={muted}
-              value={phone}
-              onChangeText={setPhone}
-              style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-              keyboardType="phone-pad"
-            />
-            <Text style={{ color: muted, marginBottom: 8 }}>Add your number so friends can find you.</Text>
-          </>
-        ) : (
-          <>
-            <Label>Phone number</Label>
-            <TextInput
-              placeholder="+1 555 123 4567"
-              placeholderTextColor={muted}
-              value={phone}
-              onChangeText={setPhone}
-              style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-              keyboardType="phone-pad"
-              autoCapitalize="none"
-            />
-            {!supportsPhoneAuth ? (
-              <Text style={{ color: muted, marginBottom: 8 }}>Phone verification is available on web for now.</Text>
-            ) : null}
-            <Pressable
-              onPress={sendCode}
-              style={[styles.inlineButton, { borderColor: border }, (sendingCode || !supportsPhoneAuth) ? { opacity: 0.6 } : null]}
-              disabled={sendingCode || !supportsPhoneAuth}
-            >
-              <Text style={{ color: primary, fontWeight: '700' }}>{sendingCode ? 'Sending...' : verificationId ? 'Resend code' : 'Send code'}</Text>
-            </Pressable>
-            {verificationId ? (
-              <>
-                <Label>Verification code</Label>
-                <TextInput
-                  placeholder="123456"
-                  placeholderTextColor={muted}
-                  value={smsCode}
-                  onChangeText={setSmsCode}
-                  style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-                  keyboardType="number-pad"
-                />
-              </>
-            ) : null}
-          </>
-        )}
-
-        {authError ? <Text style={{ color: danger, marginBottom: 8 }}>{authError}</Text> : null}
-
-        <Label>Username</Label>
-        <TextInput
-          placeholder="@handle"
-          placeholderTextColor={muted}
-          value={handle}
-          onChangeText={setHandle}
-          style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-          autoCapitalize="none"
-          autoCorrect={false}
-          maxLength={20}
-        />
-        {handleAvailability === 'checking' ? (
-          <Text style={{ color: muted, marginBottom: 8 }}>Checking handle...</Text>
-        ) : handleAvailability === 'available' ? (
-          <Text style={{ color: success, marginBottom: 8 }}>Handle available</Text>
-        ) : handleAvailability === 'taken' ? (
-          <Text style={{ color: danger, marginBottom: 8 }}>Handle taken</Text>
-        ) : handleAvailability === 'invalid' ? (
-          <Text style={{ color: danger, marginBottom: 8 }}>Use 3-20 letters, numbers, underscores, or periods.</Text>
-        ) : (
-          <Text style={{ color: muted, marginBottom: 8 }}>Looks like: @studyqueen</Text>
-        )}
-
-        <Label>Name</Label>
-        <TextInput
-          placeholder="Your full name (optional)"
-          placeholderTextColor={muted}
-          value={name}
-          onChangeText={setName}
-          style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-          maxLength={40}
-        />
-
-        <Label>City</Label>
-        <TextInput
-          placeholder="Search cities"
-          placeholderTextColor={muted}
-          value={cityQuery}
-          onChangeText={(text) => {
-            setCityTouched(true);
-            setCityQuery(text);
-          }}
-          style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-          onLayout={(e) => {
-            cityYRef.current = e.nativeEvent.layout.y || 0;
-          }}
-          onFocus={() => scrollToField(cityYRef.current)}
-        />
-        {detectingCity && !city ? <Text style={{ color: muted, marginBottom: 8 }}>Detecting your city...</Text> : null}
-        {cityLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-        {cityQuery.trim().length ? (
-          <View style={[styles.suggestionList, { borderColor: border, backgroundColor: card }]}>
-            {(cityResults.length ? cityResults : getLocationOptions('city', cityQuery).slice(0, 8)).map((option) => (
-              <Pressable
-                key={option}
-                onPress={() => {
-                  setCity(option);
-                  setCityQuery(option);
-                  setCityTouched(true);
-                }}
-                style={({ pressed }) => [
-                  styles.locationRow,
-                  { borderColor: border, backgroundColor: pressed ? highlight : 'transparent' },
-                ]}
-              >
-                <Text style={{ color, fontWeight: '600' }}>{option}</Text>
-              </Pressable>
-            ))}
-            {!cityResults.length && !cityLoading ? (
-              <Text style={{ color: muted, marginTop: 8 }}>No matches yet.</Text>
-            ) : null}
           </View>
-        ) : (
-          <Text style={{ color: muted, marginBottom: 8 }}>Start typing to see matches.</Text>
-        )}
-        {geoBias && !cityQuery.trim().length ? (
-          <Pressable
-            onPress={async () => {
-              setDetectingCity(true);
-              const detected = await reverseGeocodeCity(geoBias.lat, geoBias.lng);
-              setDetectingCity(false);
-              if (!detected) return;
-              setCityTouched(true);
-              setCity(detected);
-              setCityQuery(detected);
-            }}
-            style={[styles.inlineButton, { borderColor: border }]}
-          >
-            <Text style={{ color: primary, fontWeight: '600' }}>Use current city</Text>
-          </Pressable>
-        ) : null}
-        {!isCityValid ? (
-          <Text style={{ color: muted, marginBottom: 8 }}>Choose a city to personalize your feed.</Text>
-        ) : null}
+          {handleAvailability === 'checking' ? (
+            <Text style={[styles.hint, { color: muted }]}>Checking...</Text>
+          ) : handleAvailability === 'available' ? (
+            <Text style={[styles.hint, { color: success }]}>@{normalizedHandle} is available</Text>
+          ) : handleAvailability === 'taken' ? (
+            <Text style={[styles.hint, { color: danger }]}>@{normalizedHandle} is taken</Text>
+          ) : handleAvailability === 'invalid' ? (
+            <Text style={[styles.hint, { color: danger }]}>
+              3–20 letters, numbers, underscores, or periods only.
+            </Text>
+          ) : (
+            <Text style={[styles.hint, { color: muted }]}>e.g. @studyqueen</Text>
+          )}
 
-        <Label>Campus (optional)</Label>
-        <TextInput
-          placeholder="Search campuses"
-          placeholderTextColor={muted}
-          value={campusQuery}
-          onChangeText={(text) => {
-            setCampusTouched(true);
-            setCampusQuery(text);
-          }}
-          style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
-        />
-        {campusLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching...</Text> : null}
-        {campusQuery.trim().length ? (
-          <View style={[styles.suggestionList, { borderColor: border, backgroundColor: card }]}>
-            {(campusResults.length ? campusResults : getLocationOptions('campus', campusQuery).slice(0, 8)).map((option) => (
-              <Pressable
-                key={option}
-                onPress={() => {
-                  setCampus(option);
-                  setCampusQuery(option);
-                  setCampusTouched(true);
-                }}
-                style={({ pressed }) => [
-                  styles.locationRow,
-                  { borderColor: border, backgroundColor: pressed ? highlight : 'transparent' },
-                ]}
-              >
-                <Text style={{ color, fontWeight: '600' }}>{option}</Text>
-              </Pressable>
-            ))}
-            {!campusResults.length && !campusLoading ? (
-              <Text style={{ color: muted, marginTop: 8 }}>No matches yet.</Text>
-            ) : null}
-          </View>
-        ) : (
-          <Text style={{ color: muted, marginBottom: 8 }}>Add a campus to meet classmates.</Text>
-        )}
+          {/* ─── NAME (optional) ────────────────────────────────────────────── */}
+          <Label>
+            Name{' '}
+            <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
+          </Label>
+          <TextInput
+            placeholder="Your name"
+            placeholderTextColor={muted}
+            value={name}
+            onChangeText={setName}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            maxLength={40}
+          />
 
-        <Pressable
-          onPress={doRegister}
-          style={[styles.primaryButton, { backgroundColor: primary }, (!canSubmit || submitting) ? { opacity: 0.5 } : null]}
-          disabled={!canSubmit || submitting}
-        >
-          <Text style={styles.primaryText}>
-            {submitting
-              ? 'Creating...'
-              : !canSubmit
-                ? 'Complete details'
-                : authMode === 'phone'
-                  ? 'Verify & create'
-                  : 'Create account'}
+          {/* ─── PHONE (optional — for friend discovery) ────────────────────── */}
+          <Label>
+            Phone{' '}
+            <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
+          </Label>
+          <TextInput
+            placeholder="+1 (713) 555-0123"
+            placeholderTextColor={muted}
+            value={phone}
+            onChangeText={setPhone}
+            style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
+            keyboardType="phone-pad"
+          />
+          <Text style={[styles.hint, { color: muted }]}>
+            Lets friends find you by phone number.
           </Text>
-        </Pressable>
-        <View style={{ height: 12 }} />
-        <Text style={{ color: muted, fontSize: 12 }}>
-          By continuing you agree to our{' '}
-          <Text onPress={() => router.push('/terms')} style={{ color: primary, fontWeight: '600' }}>Terms</Text>
-          {' '}and{' '}
-          <Text onPress={() => router.push('/privacy')} style={{ color: primary, fontWeight: '600' }}>Privacy Policy</Text>.
-        </Text>
-        <View style={{ height: 12 }} />
+
+          {/* ─── CITY ───────────────────────────────────────────────────────── */}
+          <Label>City</Label>
+          <TextInput
+            placeholder="Search cities..."
+            placeholderTextColor={muted}
+            value={cityQuery}
+            onChangeText={(text) => {
+              setCityQuery(text);
+              setCityDropdownOpen(true);
+              setCity('');
+            }}
+            onFocus={() => {
+              if (cityQuery.trim()) setCityDropdownOpen(true);
+            }}
+            style={[
+              styles.input,
+              { borderColor: city ? success : border, backgroundColor: card, color },
+            ]}
+          />
+          {detectingCity && !city ? (
+            <Text style={[styles.hint, { color: muted }]}>Detecting your city...</Text>
+          ) : null}
+          {cityLoading ? (
+            <Text style={[styles.hint, { color: muted }]}>Searching...</Text>
+          ) : null}
+          {cityDropdownOpen && cityQuery.trim().length > 0 ? (
+            <View style={[styles.suggestionList, { borderColor: border, backgroundColor: card }]}>
+              {(cityResults.length
+                ? cityResults
+                : getLocationOptions('city', cityQuery).slice(0, 8)
+              ).map((option) => (
+                <Pressable
+                  key={option}
+                  onPress={() => {
+                    setCity(option);
+                    setCityQuery(option);
+                    setCityDropdownOpen(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.locationRow,
+                    { borderColor: border, backgroundColor: pressed ? highlight : 'transparent' },
+                  ]}
+                >
+                  <Text style={{ color, fontWeight: '600' }}>{option}</Text>
+                </Pressable>
+              ))}
+              {!cityResults.length &&
+              !cityLoading &&
+              getLocationOptions('city', cityQuery).length === 0 ? (
+                <Text style={{ color: muted, marginVertical: 8 }}>
+                  No matches — try a different city name.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+          {geoBias && !cityDropdownOpen ? (
+            <Pressable
+              onPress={async () => {
+                setDetectingCity(true);
+                const detected = await reverseGeocodeCity(geoBias.lat, geoBias.lng);
+                setDetectingCity(false);
+                if (!detected) return;
+                setCity(detected);
+                setCityQuery(detected);
+                setCityDropdownOpen(false);
+              }}
+              style={[styles.inlineButton, { borderColor: border }]}
+            >
+              <Text style={{ color: primary, fontWeight: '600' }}>Use my current city</Text>
+            </Pressable>
+          ) : null}
+          {!isCityValid && !cityDropdownOpen ? (
+            <Text style={[styles.hint, { color: muted }]}>
+              Select your city to personalize your feed.
+            </Text>
+          ) : null}
+
+          {/* ─── UNIVERSITY (optional) ──────────────────────────────────────── */}
+          <Label>
+            University{' '}
+            <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
+          </Label>
+          <TextInput
+            placeholder="Search universities..."
+            placeholderTextColor={muted}
+            value={campusQuery}
+            onChangeText={(text) => {
+              setCampusQuery(text);
+              setCampusDropdownOpen(true);
+              setCampus('');
+            }}
+            onFocus={() => {
+              if (campusQuery.trim()) setCampusDropdownOpen(true);
+            }}
+            style={[
+              styles.input,
+              { borderColor: campus ? success : border, backgroundColor: card, color },
+            ]}
+          />
+          {campusLoading ? (
+            <Text style={[styles.hint, { color: muted }]}>Searching...</Text>
+          ) : null}
+          {campusDropdownOpen && campusQuery.trim().length > 0 ? (
+            <View style={[styles.suggestionList, { borderColor: border, backgroundColor: card }]}>
+              {(campusResults.length
+                ? campusResults
+                : getLocationOptions('campus', campusQuery).slice(0, 8)
+              ).map((option) => (
+                <Pressable
+                  key={option}
+                  onPress={() => {
+                    setCampus(option);
+                    setCampusQuery(option);
+                    setCampusDropdownOpen(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.locationRow,
+                    { borderColor: border, backgroundColor: pressed ? highlight : 'transparent' },
+                  ]}
+                >
+                  <Text style={{ color, fontWeight: '600' }}>{option}</Text>
+                </Pressable>
+              ))}
+              {!campusResults.length &&
+              !campusLoading &&
+              getLocationOptions('campus', campusQuery).length === 0 ? (
+                <Text style={{ color: muted, marginVertical: 8 }}>
+                  No matches — try a different university name.
+                </Text>
+              ) : null}
+            </View>
+          ) : campus ? null : (
+            <Text style={[styles.hint, { color: muted }]}>
+              Add your campus to connect with classmates.
+            </Text>
+          )}
+
+          {/* ─── ERROR BOX ──────────────────────────────────────────────────── */}
+          {authError ? (
+            <View
+              style={[
+                styles.infoBox,
+                { backgroundColor: withAlpha(danger, 0.1), borderColor: withAlpha(danger, 0.3), marginTop: 4 },
+              ]}
+            >
+              <Text style={{ color: danger, fontWeight: '500' }}>{authError}</Text>
+            </View>
+          ) : null}
+
+          {/* ─── SUBMIT ─────────────────────────────────────────────────────── */}
+          <Pressable
+            onPress={doRegister}
+            style={[
+              styles.primaryButton,
+              { backgroundColor: primary },
+              !canSubmit || loading ? { opacity: 0.5 } : null,
+            ]}
+            disabled={!canSubmit || loading}
+          >
+            <Text style={styles.primaryText}>
+              {loading ? 'Creating account...' : 'Create account'}
+            </Text>
+          </Pressable>
+
+          <View style={{ height: 12 }} />
+          <Text style={{ color: muted, fontSize: 12 }}>
+            By continuing you agree to our{' '}
+            <Text onPress={() => router.push('/terms')} style={{ color: primary, fontWeight: '600' }}>
+              Terms
+            </Text>
+            {' '}and{' '}
+            <Text onPress={() => router.push('/privacy')} style={{ color: primary, fontWeight: '600' }}>
+              Privacy Policy
+            </Text>
+            .
+          </Text>
+          <View style={{ height: 12 }} />
           <Pressable onPress={() => router.push('/signin')}>
-            <Text style={{ color: primary, fontWeight: '600' }}>Already have an account? Sign in</Text>
+            <Text style={{ color: primary, fontWeight: '600' }}>
+              Already have an account? Sign in
+            </Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -743,7 +714,22 @@ export default function SignUp() {
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
   scroll: { paddingHorizontal: 20 },
-  input: { borderWidth: 1, padding: 12, borderRadius: 14, marginBottom: 12 },
+  input: { borderWidth: 1, padding: 12, borderRadius: 14, marginBottom: 4 },
+  hint: { fontSize: 13, marginBottom: 10 },
+  infoBox: { padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
+  handleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 14,
+    marginBottom: 4,
+    overflow: 'hidden',
+  },
+  handleInput: {
+    flex: 1,
+    padding: 12,
+    fontSize: 16,
+  },
   locationRow: {
     paddingVertical: 10,
     borderBottomWidth: 1,
@@ -755,20 +741,20 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     marginBottom: 10,
   },
-  modeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, ...gapStyle(10) },
-  modeButton: { flex: 1, paddingVertical: 10, borderRadius: 14, borderWidth: 1, alignItems: 'center' },
   inlineButton: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
     marginBottom: 10,
+    alignItems: 'center',
   },
   primaryButton: {
     height: 54,
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 8,
   },
-  primaryText: { color: '#FFFFFF', fontWeight: '700' },
+  primaryText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });

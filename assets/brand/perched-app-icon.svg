@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#EC4899;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="brandGradDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#DB2777;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="brandGradLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#A78BFA;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F472B6;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="steamGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#A78BFA;stop-opacity:0.6" />
+      <stop offset="100%" style="stop-color:#A78BFA;stop-opacity:0" />
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0A0A0A;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1a2e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Solid dark background - iOS will mask to rounded rect automatically -->
+  <rect width="1024" height="1024" fill="url(#bgGrad)"/>
+
+  <!-- Subtle glow -->
+  <ellipse cx="512" cy="480" rx="300" ry="260" fill="#8B5CF6" opacity="0.05"/>
+
+  <!-- Coffee cup body -->
+  <path d="M 310 500 L 340 720 Q 345 755, 380 755 L 620 755 Q 655 755, 660 720 L 690 500 Z" 
+        fill="url(#brandGrad)" opacity="0.15"/>
+  <path d="M 310 500 L 340 720 Q 345 755, 380 755 L 620 755 Q 655 755, 660 720 L 690 500 Z" 
+        fill="none" stroke="url(#brandGrad)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Cup handle -->
+  <path d="M 690 548 Q 770 548, 770 615 Q 770 680, 690 680" 
+        fill="none" stroke="url(#brandGrad)" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Coffee surface -->
+  <line x1="345" y1="550" x2="655" y2="550" stroke="url(#brandGradLight)" stroke-width="5" opacity="0.35" stroke-linecap="round"/>
+
+  <!-- Saucer -->
+  <ellipse cx="500" cy="768" rx="220" ry="24" fill="none" stroke="url(#brandGrad)" stroke-width="10" opacity="0.4"/>
+
+  <!-- Steam -->
+  <path d="M 430 485 Q 420 430, 435 370 Q 450 310, 430 250" 
+        fill="none" stroke="url(#steamGrad)" stroke-width="7" stroke-linecap="round" opacity="0.5"/>
+  <path d="M 505 475 Q 493 410, 510 340 Q 527 270, 505 200" 
+        fill="none" stroke="url(#steamGrad)" stroke-width="7" stroke-linecap="round" opacity="0.6"/>
+  <path d="M 580 480 Q 572 420, 585 355 Q 598 290, 580 225" 
+        fill="none" stroke="url(#steamGrad)" stroke-width="7" stroke-linecap="round" opacity="0.45"/>
+
+  <!-- Bird on LEFT rim, facing right -->
+  <!-- Body -->
+  <ellipse cx="355" cy="432" rx="72" ry="55" fill="url(#brandGrad)" transform="rotate(10, 355, 432)"/>
+  
+  <!-- Head -->
+  <circle cx="422" cy="380" r="40" fill="url(#brandGrad)"/>
+  
+  <!-- Eye -->
+  <circle cx="440" cy="372" r="10" fill="#FFFFFF"/>
+  <circle cx="443" cy="369" r="4" fill="#1a1a2e"/>
+  
+  <!-- Beak -->
+  <polygon points="462,376 498,388 462,399" fill="#FBBF24"/>
+  
+  <!-- Wing -->
+  <path d="M 295 418 Q 335 385, 378 405 Q 338 413, 306 445 Z" fill="#7C3AED" opacity="0.6"/>
+  <path d="M 285 433 Q 328 396, 372 418 Q 332 425, 296 455 Z" fill="#7C3AED" opacity="0.4"/>
+
+  <!-- Tail feathers -->
+  <path d="M 285 432 L 215 388 L 258 445 Z" fill="#EC4899" opacity="0.8"/>
+  <path d="M 285 444 L 205 416 L 252 460 Z" fill="#DB2777" opacity="0.65"/>
+  <path d="M 285 456 L 212 448 L 260 478 Z" fill="#8B5CF6" opacity="0.55"/>
+
+  <!-- Feet -->
+  <path d="M 340 484 L 335 500" stroke="#FBBF24" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 326 498 L 346 498" stroke="#FBBF24" stroke-width="4" stroke-linecap="round"/>
+  <path d="M 375 478 L 380 500" stroke="#FBBF24" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 370 498 L 392 498" stroke="#FBBF24" stroke-width="4" stroke-linecap="round"/>
+</svg>

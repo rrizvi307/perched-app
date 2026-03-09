@@ -1,19 +1,19 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import SegmentedControl from '@/components/ui/segmented-control';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
+import { formatCheckinTime, toMillis } from '@/services/checkinUtils';
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { getCheckinsForUserRemote } from '@/services/firebaseClient';
-import { getCheckins, seedDemoNetwork } from '@/storage/local';
+import { getCheckins } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
+import { resolvePhotoUri } from '@/services/photoSources';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
@@ -24,7 +24,7 @@ function createdAtMs(checkin: any) {
 }
 
 function resolvePhoto(checkin: any) {
-  return checkin?.photoUrl || checkin?.photoURL || checkin?.imageUrl || checkin?.imageURL || checkin?.image || null;
+  return resolvePhotoUri(checkin);
 }
 
 function formatWhen(createdAt: any) {
@@ -37,13 +37,20 @@ function formatWhen(createdAt: any) {
   }
 }
 
+function getPostKey(checkin: any, index = 0) {
+  return String(
+    checkin?.id ||
+    checkin?.clientId ||
+    `${checkin?.userId || 'anon'}-${createdAtMs(checkin)}-${checkin?.spotPlaceId || checkin?.spotName || checkin?.spot || index}`
+  );
+}
+
 export default function MyPostsScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const focusId = typeof params.focus === 'string' ? params.focus : '';
-  const sectionParam = typeof params.section === 'string' ? params.section : '';
 
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
@@ -55,7 +62,6 @@ export default function MyPostsScreen() {
   const listRef = useRef<FlatList<any> | null>(null);
   const didFocusRef = useRef(false);
 
-  const [segment, setSegment] = useState<'live' | 'expired'>(sectionParam === 'expired' ? 'expired' : 'live');
   const [items, setItems] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -63,14 +69,6 @@ export default function MyPostsScreen() {
     if (!user?.id) return;
     setRefreshing(true);
     try {
-      if (isDemoMode()) {
-        try {
-          await seedDemoNetwork(user.id);
-        } catch {}
-        const local = await getCheckins();
-        setItems(local.filter((c: any) => c?.userId === user.id));
-        return;
-      }
       const res = await getCheckinsForUserRemote(user.id, 240);
       const remote = Array.isArray(res) ? res : (res?.items ?? []);
       const local = await getCheckins();
@@ -80,6 +78,10 @@ export default function MyPostsScreen() {
       const merged = [...remote, ...mineLocal.filter((c: any) => !remoteKeys.has(keyOf(c)))];
       setItems(merged);
     } catch {
+      if (isDemoMode()) {
+        setItems([]);
+        return;
+      }
       const local = await getCheckins();
       setItems(local.filter((c: any) => c?.userId === user.id));
     } finally {
@@ -124,19 +126,8 @@ export default function MyPostsScreen() {
   }, [user?.id]);
 
   const sorted = useMemo(() => (items || []).slice().sort((a: any, b: any) => createdAtMs(b) - createdAtMs(a)), [items]);
-  const now = Date.now();
-  const live = useMemo(() => sorted.filter((c: any) => !isCheckinExpired(c, now)), [sorted, now]);
-  const expired = useMemo(() => sorted.filter((c: any) => isCheckinExpired(c, now)), [sorted, now]);
-  const data = segment === 'expired' ? expired : live;
-
-  useEffect(() => {
-    if (!focusId || didFocusRef.current) return;
-    const focusItem = sorted.find((c: any) => String(c?.id || '') === focusId);
-    if (!focusItem) return;
-    const focusExpired = isCheckinExpired(focusItem, now);
-    const nextSeg = focusExpired ? 'expired' : 'live';
-    if (segment !== nextSeg) setSegment(nextSeg);
-  }, [focusId, now, segment, sorted]);
+  // History is fully persistent; newest-first ordering is the only ranking.
+  const data = sorted;
 
   useEffect(() => {
     if (!focusId || didFocusRef.current) return;
@@ -161,6 +152,8 @@ export default function MyPostsScreen() {
         <Pressable
           onPress={() => router.back()}
           hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Back to profile"
           style={({ pressed }) => [styles.backButton, pressed ? { opacity: 0.7 } : null]}
         >
           <IconSymbol name="chevron.left" size={22} color={muted} />
@@ -173,27 +166,19 @@ export default function MyPostsScreen() {
           listRef.current = r;
         }}
         data={data}
-        keyExtractor={(item) => String(item?.id || item?.clientId || Math.random())}
+        keyExtractor={(item, index) => getPostKey(item, index)}
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} />}
         ListHeaderComponent={
           <View style={{ paddingBottom: 10 }}>
             <Label style={{ color: muted, marginBottom: 8 }}>Your check-ins</Label>
-            <H1 style={{ color: text, marginBottom: 12 }}>All posts</H1>
-            <SegmentedControl
-              value={segment}
-              onChange={(next) => setSegment(next === 'expired' ? 'expired' : 'live')}
-              options={[
-                { key: 'live', label: `Live${live.length ? ` (${live.length})` : ''}` },
-                { key: 'expired', label: `Expired${expired.length ? ` (${expired.length})` : ''}` },
-              ]}
-              maxWidth={420}
-            />
+            <H1 style={{ color: text, marginBottom: 4 }}>All posts</H1>
+            <Body style={{ color: muted }}>Newest first. Posts do not expire.</Body>
           </View>
         }
         ListEmptyComponent={
           <View style={{ paddingTop: 24 }}>
-            <Body style={{ color: muted }}>{segment === 'expired' ? 'No expired check-ins yet.' : 'No live check-ins yet.'}</Body>
+            <Body style={{ color: muted }}>No posts yet.</Body>
           </View>
         }
         onScrollToIndexFailed={(info) => {
@@ -205,7 +190,6 @@ export default function MyPostsScreen() {
         renderItem={({ item }) => {
           const photo = resolvePhoto(item);
           const isFocused = focusId && String(item?.id || '') === focusId;
-          const remaining = formatTimeRemaining(item);
           const when = formatWhen(item?.createdAt);
           const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).slice(0, 4) : [];
           const whereBits = [item?.city, item?.campus].filter(Boolean);
@@ -217,6 +201,8 @@ export default function MyPostsScreen() {
                 if (!cid) return;
                 router.push(`/checkin-detail?cid=${encodeURIComponent(cid)}` as any);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={`Open check-in at ${item?.spotName || item?.spot || 'this spot'}`}
               style={({ pressed }) => [
                 styles.card,
                 {
@@ -238,7 +224,6 @@ export default function MyPostsScreen() {
                   <Text style={{ color: text, fontWeight: '700', flex: 1 }} numberOfLines={1}>
                     {item?.spotName || item?.spot || 'Spot'}
                   </Text>
-                  {remaining ? <Text style={{ color: muted, fontWeight: '600' }}>{remaining}</Text> : null}
                 </View>
                 <View style={[styles.row, { marginTop: 6 }, gapStyle(10)]}>
                   {when ? <Text style={{ color: muted, fontWeight: '600' }}>{when}</Text> : null}

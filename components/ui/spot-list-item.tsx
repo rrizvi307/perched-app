@@ -1,6 +1,9 @@
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import type { PlaceIntelligence } from '@/services/placeIntelligence';
+import { getDiscoveryIntentMeta, type DiscoveryIntentFilter } from '@/services/discoveryIntents';
 import { withAlpha } from '@/utils/colors';
+import Constants from 'expo-constants';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -13,10 +16,29 @@ type SpotListItemProps = {
   mapKey: string | null;
   maxSpotCount: number;
   showRanks: boolean;
+  intelligence?: PlaceIntelligence | null;
+  activeIntent?: DiscoveryIntentFilter;
+  intentScore?: number | null;
+  intentReason?: string | null;
+  onScorePress?: () => void;
   onPress: () => void;
   describeSpot: (name?: string, address?: string) => string;
   formatDistance: (distanceKm?: number) => string;
 };
+
+function getProviderTone(source?: string) {
+  if (source === 'google') return '#2563EB';
+  if (source === 'yelp') return '#DC2626';
+  if (source === 'foursquare') return '#0891B2';
+  return '#64748B';
+}
+
+function getProviderLabel(source?: string) {
+  if (source === 'google') return 'Google';
+  if (source === 'yelp') return 'Yelp';
+  if (source === 'foursquare') return 'Foursquare';
+  return 'Source';
+}
 
 // Memoized component to prevent unnecessary re-renders
 const SpotListItem = React.memo<SpotListItemProps>(({
@@ -28,6 +50,11 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   mapKey,
   maxSpotCount,
   showRanks,
+  intelligence,
+  activeIntent = 'any',
+  intentScore = null,
+  intentReason = null,
+  onScorePress,
   onPress,
   describeSpot,
   formatDistance,
@@ -40,8 +67,37 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const accent = useThemeColor({}, 'accent');
   const highlight = withAlpha(primary, 0.12);
   const badgeFill = withAlpha(accent, 0.16);
+  const rawIntelFlag = (Constants.expoConfig as any)?.extra?.INTEL_V1_ENABLED;
+  const intelV1Enabled = rawIntelFlag === true || rawIntelFlag === 'true' || rawIntelFlag === 1 || rawIntelFlag === '1';
 
   const coords = item.example?.spotLatLng || item.example?.location;
+  const intelNoise = item?.display?.noise || item?.live?.noise || item?.intel?.inferredNoise;
+  const intelNoiseSource = item?.display?.noiseSource || (item?.live?.noise ? 'live' : item?.intel?.inferredNoise ? 'inferred' : null);
+  const intelRating = intelligence?.aggregateRating ?? item?.intel?.avgRating ?? item?.rating;
+  const intelPrice = intelligence?.priceLevel ?? item?.intel?.priceLevel;
+  const workScore = intelligence?.workScore;
+  const workScoreTone = typeof workScore === 'number'
+    ? workScore >= 78
+      ? '#22C55E'
+      : workScore >= 62
+        ? '#F59E0B'
+        : '#F97316'
+    : muted;
+  const smartHighlight = intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null;
+  const intentMeta = getDiscoveryIntentMeta(activeIntent);
+  const intentPercent = typeof intentScore === 'number' ? Math.round(intentScore * 100) : null;
+  const providerSignals = (intelligence?.externalSignals || [])
+    .slice()
+    .sort((a, b) => {
+      const order = (source?: string) =>
+        source === 'google' ? 0 :
+          source === 'yelp' ? 1 :
+            source === 'foursquare' ? 2 :
+              9;
+      return order(a?.source) - order(b?.source);
+    })
+    .filter((signal) => typeof signal?.rating === 'number')
+    .slice(0, 3);
 
   return (
     <Pressable
@@ -65,6 +121,56 @@ const SpotListItem = React.memo<SpotListItemProps>(({
       )}
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
+        {intelligence ? (
+          <View style={styles.smartRow}>
+            <Pressable
+              onPress={onScorePress}
+              disabled={!onScorePress}
+              style={[
+                styles.workScoreBadge,
+                {
+                  borderColor: withAlpha(workScoreTone, 0.4),
+                  backgroundColor: withAlpha(workScoreTone, 0.15),
+                },
+              ]}
+            >
+              <View style={[styles.workScoreDot, { backgroundColor: workScoreTone }]} />
+              <Text style={{ color: workScoreTone, fontSize: 11, fontWeight: '800' }}>
+                {Math.round(intelligence.workScore)} Work Score
+              </Text>
+            </Pressable>
+            {intelligence.bestTime !== 'anytime' ? (
+              <View style={[styles.bestTimeChip, { borderColor: border }]}>
+                <Text style={{ color: muted, fontSize: 10, fontWeight: '700', textTransform: 'capitalize' }}>
+                  Best {intelligence.bestTime}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {smartHighlight ? (
+          <View style={[styles.highlightChip, { borderColor: border, backgroundColor: withAlpha(primary, 0.08) }]}>
+            <Text style={{ color: text, fontSize: 11, fontWeight: '600' }} numberOfLines={1}>
+              {smartHighlight}
+            </Text>
+          </View>
+        ) : null}
+        {activeIntent !== 'any' ? (
+          <View style={styles.intentRow}>
+            {intentPercent !== null ? (
+              <View style={[styles.intentBadge, { backgroundColor: withAlpha(accent, 0.18), borderColor: withAlpha(accent, 0.45) }]}>
+                <Text style={{ color: accent, fontSize: 10, fontWeight: '800' }}>
+                  {intentMeta.emoji} {intentPercent}% {intentMeta.shortLabel.toLowerCase()} match
+                </Text>
+              </View>
+            ) : null}
+            {intentReason ? (
+              <Text style={{ color: muted, fontSize: 11 }} numberOfLines={1}>
+                {intentReason}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         {/* Distance and walk time - prominent display */}
         {item.distance !== undefined && item.distance !== Infinity && item.distance > 0 ? (
           <Text style={{ color: primary, fontSize: 12, fontWeight: '600', marginTop: 4 }}>
@@ -181,6 +287,58 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             ) : null}
           </View>
         )}
+        {intelV1Enabled && (intelNoise || intelRating || intelPrice) ? (
+          <View style={styles.metricsRow}>
+            {intelNoise ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha(intelNoiseSource === 'live' ? '#22C55E' : '#64748B', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>{intelNoiseSource === 'live' ? '🔴' : '📊'}</Text>
+                <Text style={{ color: intelNoiseSource === 'live' ? '#22C55E' : '#64748B', fontSize: 10, fontWeight: '700', marginLeft: 2 }}>
+                  {String(intelNoise)}
+                  {intelNoiseSource === 'inferred' ? ' (inferred)' : ''}
+                </Text>
+              </View>
+            ) : null}
+            {typeof intelRating === 'number' ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#F59E0B', 0.15) }]}>
+                <Text style={{ fontSize: 10 }}>⭐</Text>
+                <Text style={{ color: '#F59E0B', fontSize: 10, fontWeight: '700', marginLeft: 2 }}>
+                  {intelRating.toFixed(1)}
+                </Text>
+              </View>
+            ) : null}
+            {intelPrice ? (
+              <View style={[styles.metricBadge, { backgroundColor: withAlpha('#06B6D4', 0.15) }]}>
+                <Text style={{ color: '#0891B2', fontSize: 10, fontWeight: '700' }}>{intelPrice}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {providerSignals.length ? (
+          <View style={styles.providerRow}>
+            {providerSignals.map((signal) => (
+              <View
+                key={`${item.name}-${signal.source}`}
+                style={[
+                  styles.providerChip,
+                  {
+                    borderColor: withAlpha(getProviderTone(signal.source), 0.22),
+                    backgroundColor: withAlpha(getProviderTone(signal.source), 0.08),
+                  },
+                ]}
+              >
+                <Text style={{ color: getProviderTone(signal.source), fontSize: 10, fontWeight: '800' }}>
+                  {getProviderLabel(signal.source)}
+                </Text>
+                <Text style={{ color: text, fontSize: 10, fontWeight: '700' }}>
+                  {signal.rating?.toFixed(1)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+        {intelV1Enabled && !intelNoise && !intelRating && !intelPrice ? (
+          <Text style={{ color: muted, marginTop: 6, fontSize: 11 }}>No ratings yet</Text>
+        ) : null}
         {tags.length > 0 && (
           <View style={styles.tagRow}>
             {tags.map((tag) => (
@@ -214,9 +372,25 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     prevProps.item.name === nextProps.item.name &&
     prevProps.item.count === nextProps.item.count &&
     prevProps.item.hereNowCount === nextProps.item.hereNowCount &&
+    prevProps.item.intel?.avgRating === nextProps.item.intel?.avgRating &&
+    prevProps.item.intel?.priceLevel === nextProps.item.intel?.priceLevel &&
+    prevProps.item.display?.noise === nextProps.item.display?.noise &&
+    prevProps.item.display?.noiseSource === nextProps.item.display?.noiseSource &&
     prevProps.friendCount === nextProps.friendCount &&
     prevProps.index === nextProps.index &&
     prevProps.showRanks === nextProps.showRanks &&
+    prevProps.intelligence?.workScore === nextProps.intelligence?.workScore &&
+    prevProps.intelligence?.bestTime === nextProps.intelligence?.bestTime &&
+    prevProps.intelligence?.aggregateRating === nextProps.intelligence?.aggregateRating &&
+    prevProps.intelligence?.priceLevel === nextProps.intelligence?.priceLevel &&
+    prevProps.intelligence?.openNow === nextProps.intelligence?.openNow &&
+    JSON.stringify(prevProps.intelligence?.externalSignals || []) === JSON.stringify(nextProps.intelligence?.externalSignals || []) &&
+    (prevProps.intelligence?.highlights?.[0] || '') === (nextProps.intelligence?.highlights?.[0] || '') &&
+    (prevProps.intelligence?.useCases?.[0] || '') === (nextProps.intelligence?.useCases?.[0] || '') &&
+    prevProps.activeIntent === nextProps.activeIntent &&
+    prevProps.intentScore === nextProps.intentScore &&
+    prevProps.intentReason === nextProps.intentReason &&
+    prevProps.onScorePress === nextProps.onScorePress &&
     prevProps.tags.length === nextProps.tags.length &&
     prevProps.item.openNow === nextProps.item.openNow
   );
@@ -238,6 +412,53 @@ const styles = StyleSheet.create({
     width: 100,
     height: 80,
     borderRadius: 10,
+  },
+  smartRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  workScoreBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  workScoreDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  bestTimeChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  highlightChip: {
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    maxWidth: '100%',
+  },
+  intentRow: {
+    marginTop: 6,
+    gap: 4,
+  },
+  intentBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   metricsRow: {
     flexDirection: 'row',
@@ -262,6 +483,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+    borderWidth: 1,
+  },
+  providerRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  providerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
     borderWidth: 1,
   },
   countBar: {
@@ -310,3 +546,4 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 });
+

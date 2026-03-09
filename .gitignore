@@ -9,6 +9,7 @@ spot-checkin-app
 
 # Expo
 .expo/
+.firebase/
 dist/
 web-build/
 expo-env.d.ts
@@ -36,6 +37,7 @@ firebase-debug.log
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -47,3 +49,17 @@ app-example
 /ios
 /android
 serviceAccountKey.json
+
+# Firebase admin service accounts
+perched-service-account.json
+spot-app-*-firebase-adminsdk-*.json
+
+# local build artifacts
+.expo-export/
+# local logs
+logs/
+
+# local/process docs (keep README if present)
+docs/*
+!docs/README.md
+!docs/*.md

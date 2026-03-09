@@ -5,17 +5,29 @@ import { ensureFirebase } from './firebaseClient';
 import { createDeepLink } from './deepLinking';
 import Constants from 'expo-constants';
 
-const APP_NAME = 'Perched';
+export const APP_NAME = 'Perched';
 const extra = ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-const APP_STORE_URL = (extra.APP_STORE_URL as string) || 'https://apps.apple.com/app/perched/id6739514696';
-const PLAY_STORE_URL = (extra.PLAY_STORE_URL as string) || 'https://play.google.com/store/apps/details?id=com.perched.app';
-const WEB_URL = 'https://perched.app';
+export const APP_STORE_URL =
+  (extra.APP_STORE_URL as string) || 'https://apps.apple.com/app/perched/id6739514696';
+export const PLAY_STORE_URL =
+  (extra.PLAY_STORE_URL as string) || 'https://play.google.com/store/apps/details?id=com.perched.app';
+export const WEB_URL = 'https://perched.app';
 
 interface ShareOptions {
   title?: string;
   message: string;
   url?: string;
   context?: string;
+}
+
+export function getPrimaryAppUrl(platform: string = Platform.OS): string {
+  if (platform === 'ios') return APP_STORE_URL;
+  if (platform === 'android') return PLAY_STORE_URL;
+  return WEB_URL;
+}
+
+export function getInviteLandingUrl(referralCode: string): string {
+  return createDeepLink('invite', { referralCode: normalizeReferralCode(referralCode) });
 }
 
 /**
@@ -25,6 +37,10 @@ export function generateReferralCode(userId: string, handle?: string): string {
   // Use handle if available, otherwise use first 6 chars of userId
   const base = handle || userId.substring(0, 6);
   return base.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizeReferralCode(code: string): string {
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 /**
@@ -42,7 +58,7 @@ export function getInviteLink(referralCode: string): string {
   const appStoreId = '6739514696';
 
   // Build the deep link that will open in the app
-  const deepLink = encodeURIComponent(`${WEB_URL}/invite?ref=${referralCode}`);
+  const deepLink = encodeURIComponent(getInviteLandingUrl(referralCode));
 
   // Construct Firebase Dynamic Link
   // Note: For full functionality, configure in Firebase Console > Dynamic Links
@@ -238,10 +254,12 @@ export async function trackReferralSignup(
   referralCode?: string
 ): Promise<void> {
   if (!referralCode) return;
+  const normalizedReferralCode = normalizeReferralCode(referralCode);
+  if (!normalizedReferralCode) return;
 
   track('referral_signup', {
     new_user_id: newUserId,
-    referral_code: referralCode,
+    referral_code: normalizedReferralCode,
   });
 
   const fb = ensureFirebase();
@@ -250,16 +268,16 @@ export async function trackReferralSignup(
   try {
     const db = fb.firestore();
 
-    // Store referral info on the new user's profile
-    await db.collection('users').doc(newUserId).set({
-      referredBy: referralCode.toUpperCase(),
+    // Store referral info on the new user's private account doc
+    await db.collection('userPrivate').doc(newUserId).set({
+      referredBy: normalizedReferralCode,
       referredAt: fb.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
     // Create a referral record for tracking and Cloud Function processing
     // Cloud Function should watch this collection to credit premium time
     await db.collection('referrals').add({
-      referralCode: referralCode.toUpperCase(),
+      referralCode: normalizedReferralCode,
       newUserId,
       status: 'pending', // Will be updated to 'credited' by Cloud Function
       createdAt: fb.firestore.FieldValue.serverTimestamp(),
@@ -267,7 +285,7 @@ export async function trackReferralSignup(
 
     track('referral_recorded', {
       new_user_id: newUserId,
-      referral_code: referralCode,
+      referral_code: normalizedReferralCode,
     });
   } catch (error) {
     console.error('Failed to track referral signup:', error);
@@ -297,23 +315,18 @@ export async function getInviteStats(userId: string): Promise<InviteStats> {
 
   try {
     const db = fb.firestore();
-    const referralCode = generateReferralCode(userId);
+    const [processedReferralsSnap, rewardsSnap] = await Promise.all([
+      db.collection('referrals').where('referrerId', '==', userId).get().catch(() => null),
+      db.collection('referralRewards')
+        .where('referrerId', '==', userId)
+        .where('type', '==', 'referrer_reward')
+        .where('status', '==', 'claimed')
+        .get()
+        .catch(() => null),
+    ]);
 
-    // Query users who signed up with this referral code
-    const referralsSnap = await db.collection('users')
-      .where('referredBy', '==', referralCode)
-      .get();
-
-    const totalInvites = referralsSnap.size;
-    let acceptedInvites = 0;
-
-    // Count accepted invites (users who completed onboarding)
-    referralsSnap.forEach((doc: any) => {
-      const data = doc.data();
-      if (data.onboardingComplete) {
-        acceptedInvites++;
-      }
-    });
+    const totalInvites = processedReferralsSnap?.size || 0;
+    const acceptedInvites = rewardsSnap?.size || 0;
 
     // Each accepted invite = 1 week of premium
     const premiumWeeksEarned = acceptedInvites;
@@ -344,8 +357,6 @@ export function generateStoryCardUrl(
   photoUrl?: string,
   userName?: string
 ): string {
-  // TODO: Implement with Cloud Function or Cloudinary
-  // For now, return placeholder
   const params = new URLSearchParams({
     spot: spotName,
     photo: photoUrl || '',

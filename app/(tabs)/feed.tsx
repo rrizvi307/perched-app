@@ -6,34 +6,41 @@ import StatusBanner from '@/components/ui/status-banner';
 import { PolishedCard } from '@/components/ui/polished-card';
 import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
 import { EmptyState } from '@/components/ui/empty-state';
-import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins, seedDemoNetwork } from '@/storage/local';
+import { ReactionBar } from '@/components/ui/reaction-bar';
+import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportUserRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
+import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportCheckinRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { spotKey } from '@/services/spotUtils';
-import { formatCheckinTime, formatTimeRemaining, isCheckinExpired, toMillis } from '@/services/checkinUtils';
+import { formatCheckinTime, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
+import { getReactions, getReactionsForCheckins, type ReactionType } from '@/services/social';
+import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
+import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'expo-router';
+import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { trackScreenLoad } from '@/services/perfMonitor';
+import { getWeeklyRaffleProgress, type WeeklyRaffleProgress } from '@/services/earlyAdopterRaffle';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
-
 type Checkin = {
 	id: string;
 	spot?: string;
 	spotName?: string;
 	spotPlaceId?: string;
-	image?: string;
-	photoUrl?: string;
+	image?: string | null;
+	photoUrl?: string | null;
+	photoPath?: string | null;
 	photoPending?: boolean;
 	caption?: string;
 	createdAt: string;
@@ -45,7 +52,30 @@ type Checkin = {
 	city?: string;
 	campusOrCity?: string;
 	expiresAt?: string;
+	noiseLevel?: number | string | null;
+	busyness?: number | string | null;
+	drinkPrice?: number | null;
+	drinkQuality?: number | null;
 };
+
+type ReactionSummary = {
+	counts: Record<ReactionType, number>;
+	userReaction: ReactionType | null;
+};
+
+function toReactionSummary(reactions: any[], userId?: string | null): ReactionSummary {
+	const counts = {} as Record<ReactionType, number>;
+	let userReaction: ReactionType | null = null;
+	reactions.forEach((reaction: any) => {
+		const type = reaction?.type as ReactionType | undefined;
+		if (!type) return;
+		counts[type] = (counts[type] || 0) + 1;
+		if (userId && reaction?.userId === userId) {
+			userReaction = type;
+		}
+	});
+	return { counts, userReaction };
+}
 
 function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems = 600): Checkin[] {
 	const keyFor = (item: any) => {
@@ -73,36 +103,150 @@ function mergeUniqueCheckins(existing: Checkin[], incoming: Checkin[], maxItems 
 		.slice(0, maxItems);
 }
 
-const FeedPhoto = memo(function FeedPhoto({
+function toNoiseLabel(value: unknown): string | null {
+	if (typeof value === 'number') {
+		if (value <= 1) return 'Very quiet';
+		if (value <= 2) return 'Quiet';
+		if (value <= 3) return 'Moderate';
+		if (value <= 4) return 'Lively';
+		return 'Loud';
+	}
+	if (typeof value === 'string') {
+		const next = value.trim().toLowerCase();
+		if (!next) return null;
+		if (next === 'quiet') return 'Quiet';
+		if (next === 'moderate') return 'Moderate';
+		if (next === 'lively' || next === 'loud') return 'Loud';
+		return null;
+	}
+	return null;
+}
+
+function toBusynessLabel(value: unknown): string | null {
+	if (typeof value === 'number') {
+		if (value <= 2) return 'Not crowded';
+		if (value <= 3) return 'Some people';
+		if (value <= 4) return 'Busy';
+		return 'Packed';
+	}
+	if (typeof value === 'string') {
+		const next = value.trim().toLowerCase();
+		if (!next) return null;
+		if (next === 'empty') return 'Not crowded';
+		if (next === 'some') return 'Some people';
+		if (next === 'packed') return 'Packed';
+		return null;
+	}
+	return null;
+}
+
+function toDrinkPriceLabel(value: unknown): string | null {
+	if (value === 1) return '$';
+	if (value === 2) return '$$';
+	if (value === 3) return '$$$';
+	return null;
+}
+
+function toDrinkQualityLabel(value: unknown): string | null {
+	if (value === 1) return '😐 Poor';
+	if (value === 2) return '🙂 Below avg';
+	if (value === 3) return '😊 Decent';
+	if (value === 4) return '😋 Great';
+	if (value === 5) return '🤩 Exceptional';
+	return null;
+}
+
+function FeedPhoto({
 	uri,
+	itemId,
 	background,
 	muted,
 	pending,
 }: {
 	uri?: string | null;
+	itemId?: string;
 	background: string;
 	muted: string;
 	pending?: boolean;
 }) {
+	const MAX_AUTO_RETRIES = 2;
+	const [attempt, setAttempt] = useState(0);
 	const [failed, setFailed] = useState(false);
-	const handleError = useCallback(() => setFailed(true), []);
+	const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	if (!uri || failed) {
+	useEffect(() => {
+		setAttempt(0);
+		setFailed(false);
+		if (retryTimerRef.current) {
+			clearTimeout(retryTimerRef.current);
+			retryTimerRef.current = null;
+		}
+	}, [uri, itemId]);
+
+	useEffect(() => {
+		return () => {
+			if (retryTimerRef.current) {
+				clearTimeout(retryTimerRef.current);
+				retryTimerRef.current = null;
+			}
+		};
+	}, []);
+
+	const resolvedUri = useMemo(() => {
+		if (!uri) return null;
+		if (attempt <= 0) return uri;
+		const join = uri.includes('?') ? '&' : '?';
+		return `${uri}${join}_r=${attempt}`;
+	}, [uri, attempt]);
+
+	const scheduleAutoRetry = () => {
+		if (retryTimerRef.current) return;
+		retryTimerRef.current = setTimeout(() => {
+			retryTimerRef.current = null;
+			setAttempt((prev) => prev + 1);
+		}, 1000);
+	};
+
+	const handleImageError = () => {
+		devLog('feed photo load failed', { id: itemId || null, uri: uri || null, attempt });
+		if (pending) return;
+		if (attempt < MAX_AUTO_RETRIES) {
+			scheduleAutoRetry();
+			return;
+		}
+		setFailed(true);
+	};
+
+	if (!resolvedUri || failed) {
 		return (
 			<View style={[styles.cardImage, { backgroundColor: background, alignItems: 'center', justifyContent: 'center' }]}>
-				<Text style={{ color: muted, fontWeight: '600' }}>{pending ? 'Photo uploading…' : 'Photo unavailable'}</Text>
+				{pending ? (
+					<Text style={{ color: muted, fontWeight: '600' }}>Photo uploading…</Text>
+				) : (
+					<Pressable
+						onPress={() => {
+							setFailed(false);
+							setAttempt((prev) => prev + 1);
+						}}
+						hitSlop={8}
+						style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+					>
+						<Text style={{ color: muted, fontWeight: '600' }}>Photo unavailable</Text>
+						<Text style={{ color: muted, fontSize: 12, marginTop: 4, textAlign: 'center' }}>Tap to retry</Text>
+					</Pressable>
+				)}
 			</View>
 		);
 	}
 	return (
 		<SpotImage
-			source={uri}
+			source={resolvedUri}
 			contentFit="cover"
 			style={[styles.cardImage, { backgroundColor: background }]}
-			onError={handleError}
+			onError={handleImageError}
 		/>
 	);
-});
+}
 
 	export default function FeedScreen() {
 		const spotQuery = (() => {
@@ -128,8 +272,11 @@ const FeedPhoto = memo(function FeedPhoto({
 	const localCacheRef = useRef<Checkin[]>([]);
 	const [remoteCursor, setRemoteCursor] = useState<any | null>(null);
 	const [hasMoreRemote, setHasMoreRemote] = useState(true);
-	const PAGE = 20;
+	const PAGE = 16;
 	const realtimeEnabled = isFirebaseConfigured();
+	const screenLoadStopRef = useRef<(() => Promise<void>) | null>(null);
+	const firstItemMarkedRef = useRef(false);
+	const firstScrollMarkedRef = useRef(false);
 
 	// call theme hooks once at top-level of component to avoid calling hooks inside renderItem
 	const text = useThemeColor({}, 'text');
@@ -146,22 +293,24 @@ const FeedPhoto = memo(function FeedPhoto({
 
 	const resolvePhotoSrc = useCallback(
 		(item: any) => {
-			const candidate = item?.photoUrl || item?.photoURL || item?.imageUrl || item?.imageURL || item?.image;
-			if (typeof candidate === 'string' && isWeb) {
-				if (candidate.startsWith('file:') || candidate.startsWith('blob:')) {
-					return item?.image || null;
-				}
+			const resolved = resolvePhotoUri(item);
+			if (!resolved) return null;
+			if (isWeb && (resolved.startsWith('file:') || resolved.startsWith('blob:'))) {
+				return isPhotoUriRenderable(item?.image) ? item.image : resolved;
 			}
-			return candidate;
+			return resolved;
 		},
 		[isWeb]
 	);
+	const shouldInlinePhotoUrl = useCallback((value: string | null) => !!value && !value.startsWith('gs://'), []);
 
 	const { user } = useAuth();
 	const router = useRouter();
+	const [isFocused, setIsFocused] = useState(true);
 	const [feedScope, setFeedScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
 		const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
 		const [blockedIds, setBlockedIds] = useState<string[]>([]);
+	const [weeklyRaffle, setWeeklyRaffle] = useState<WeeklyRaffleProgress | null>(null);
 
 		const summarizePending = useCallback(
 			(pending: any[]) => {
@@ -181,18 +330,100 @@ const FeedPhoto = memo(function FeedPhoto({
 	const [incomingRequests, setIncomingRequests] = useState<any[]>([]);
 	const [outgoingRequests, setOutgoingRequests] = useState<any[]>([]);
 	const [lastSelfCheckinAt, setLastSelfCheckinAt] = useState<string | null>(null);
+	const [reactionByCheckin, setReactionByCheckin] = useState<Record<string, ReactionSummary>>({});
+	const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
+	const actionLocksRef = useRef<Record<string, true>>({});
 	const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
 	const blockedIdSet = useMemo(() => new Set(blockedIds), [blockedIds]);
 	const incomingById = useMemo(() => new Set(incomingRequests.map((r) => r.fromId)), [incomingRequests]);
 	const outgoingById = useMemo(() => new Set(outgoingRequests.map((r) => r.toId)), [outgoingRequests]);
 	const onlyCampus = feedScope === 'campus';
 	const onlyFriends = feedScope === 'friends';
+	const beginAction = useCallback((key: string): boolean => {
+		if (!key || actionLocksRef.current[key]) return false;
+		actionLocksRef.current[key] = true;
+		setPendingActions((prev) => ({ ...prev, [key]: true }));
+		return true;
+	}, []);
+	const endAction = useCallback((key: string) => {
+		if (!key) return;
+		delete actionLocksRef.current[key];
+		setPendingActions((prev) => {
+			if (!prev[key]) return prev;
+			const next = { ...prev };
+			delete next[key];
+			return next;
+		});
+	}, []);
+	const viewabilityConfigRef = useRef({ itemVisiblePercentThreshold: 50 });
+	const onViewableItemsChangedRef = useRef((info: any) => {
+		if (firstItemMarkedRef.current) return;
+		const visibleCount = Array.isArray(info?.viewableItems) ? info.viewableItems.length : 0;
+		if (!visibleCount) return;
+		firstItemMarkedRef.current = true;
+		void markPerfEvent('feed_first_item_rendered', { visibleCount });
+		const stop = screenLoadStopRef.current;
+		screenLoadStopRef.current = null;
+		if (stop) void stop();
+	});
+
+	useEffect(() => {
+		const markId = startPerfMark('screen_home_mount');
+		let active = true;
+		void trackScreenLoad('feed').then((stop) => {
+			if (active) {
+				screenLoadStopRef.current = stop;
+			} else {
+				void stop();
+			}
+		});
+		void markPerfEvent('screen_home_mounted');
+		return () => {
+			active = false;
+			void endPerfMark(markId, true);
+			const stop = screenLoadStopRef.current;
+			screenLoadStopRef.current = null;
+			if (stop) void stop();
+		};
+	}, []);
 
 	useEffect(() => {
 		if (feedScope === 'campus' && !user?.campus) {
 			setFeedScope('everyone');
 		}
 	}, [feedScope, user?.campus]);
+
+	useFocusEffect(
+		useCallback(() => {
+			setIsFocused(true);
+			return () => {
+				setIsFocused(false);
+			};
+		}, [])
+	);
+
+	useEffect(() => {
+		let active = true;
+		if (!isFocused || !user?.id) {
+			setWeeklyRaffle(null);
+			return () => {
+				active = false;
+			};
+		}
+		(async () => {
+			try {
+				const progress = await getWeeklyRaffleProgress(user.id);
+				if (!active) return;
+				setWeeklyRaffle(progress);
+			} catch {
+				if (!active) return;
+				setWeeklyRaffle(null);
+			}
+		})();
+		return () => {
+			active = false;
+		};
+	}, [isFocused, user?.id, items.length]);
 
 	useEffect(() => {
 		(async () => {
@@ -230,22 +461,58 @@ const FeedPhoto = memo(function FeedPhoto({
 		} catch {}
 	}, [user]);
 
+	const loadReactionsForCheckin = useCallback(async (checkinId: string) => {
+		if (!checkinId) return;
+		try {
+			const reactions = await getReactions(checkinId);
+			setReactionByCheckin((prev) => ({
+				...prev,
+				[checkinId]: toReactionSummary(reactions, user?.id),
+			}));
+		} catch {}
+	}, [user?.id]);
+
+	const loadReactionSummariesForCheckins = useCallback(async (checkinIds: string[]) => {
+		const uniqueIds = Array.from(new Set((checkinIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+		if (!uniqueIds.length) return;
+		try {
+			const grouped = await getReactionsForCheckins(uniqueIds);
+			setReactionByCheckin((prev) => {
+				const next = { ...prev };
+				uniqueIds.forEach((id) => {
+					next[id] = toReactionSummary(grouped[id] || [], user?.id);
+				});
+				return next;
+			});
+		} catch {}
+	}, [user?.id]);
+
 	// Feed shows full history; "live" is a 24h status indicated with a dot.
 	const filterExpired = useCallback((list: Checkin[]) => list, []);
 
-	const needsDailyCheckin = useMemo(() => {
-		if (!lastSelfCheckinAt) return true;
-		const last = new Date(lastSelfCheckinAt);
-		if (Number.isNaN(last.getTime())) return true;
-		const now = new Date();
-		return last.getFullYear() !== now.getFullYear()
-			|| last.getMonth() !== now.getMonth()
-			|| last.getDate() !== now.getDate();
-	}, [lastSelfCheckinAt]);
-	const selfCheckinCount = useMemo(() => {
-		if (!user?.id) return 0;
-		return items.reduce((sum, it) => sum + (it.userId === user.id ? 1 : 0), 0);
-	}, [items, user?.id]);
+	const hasCheckedInToday = useMemo(() => {
+		if (!items?.length && lastSelfCheckinAt) {
+			const last = new Date(lastSelfCheckinAt);
+			if (!Number.isNaN(last.getTime())) {
+				const today = new Date();
+				return (
+					last.getFullYear() === today.getFullYear() &&
+					last.getMonth() === today.getMonth() &&
+					last.getDate() === today.getDate()
+				);
+			}
+		}
+		if (!items?.length || !user?.id) return false;
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const todayMs = today.getTime();
+		return items.some((item: any) => {
+			const createdAt = item?.createdAt;
+			if (!createdAt) return false;
+			const ms = typeof createdAt === 'number' ? createdAt : toMillis(createdAt) || new Date(createdAt).getTime();
+			return ms >= todayMs && item?.userId === user.id;
+		});
+	}, [items, user?.id, lastSelfCheckinAt]);
 
 	const mergeRemoteWithLocal = useCallback(async (remoteItems: any[]) => {
 		try {
@@ -270,7 +537,7 @@ const FeedPhoto = memo(function FeedPhoto({
 			};
 			const normalizedRemote = remoteItems.map((r: any) => {
 				const resolved = resolvePhotoSrc(r);
-				if (resolved && !r.photoUrl) return { ...r, photoUrl: resolved };
+				if (resolved && !r.photoUrl && shouldInlinePhotoUrl(resolved)) return { ...r, photoUrl: resolved };
 				return r;
 			});
 			normalizedRemote.forEach((r: any) => {
@@ -309,7 +576,7 @@ const FeedPhoto = memo(function FeedPhoto({
 				if (!next.image && localMatch.image) next.image = localMatch.image;
 				if (!next.photoUrl) {
 					const fallback = resolvePhotoSrc(localMatch);
-					if (fallback) next.photoUrl = fallback;
+					if (fallback && shouldInlinePhotoUrl(fallback)) next.photoUrl = fallback;
 				}
 				if (!next.userName && localMatch.userName) next.userName = localMatch.userName;
 				if (!next.userHandle && localMatch.userHandle) next.userHandle = localMatch.userHandle;
@@ -323,7 +590,7 @@ const FeedPhoto = memo(function FeedPhoto({
 				const toTs = (it: any) => toMillis(it?.createdAt) || 0;
 			const normalizedCombined = combined.map((it: any) => {
 				const resolved = resolvePhotoSrc(it);
-				if (resolved && !it.photoUrl) return { ...it, photoUrl: resolved };
+				if (resolved && !it.photoUrl && shouldInlinePhotoUrl(resolved)) return { ...it, photoUrl: resolved };
 				return it;
 			});
 			const sorted = normalizedCombined.sort((a: any, b: any) => toTs(b) - toTs(a));
@@ -332,29 +599,24 @@ const FeedPhoto = memo(function FeedPhoto({
 		} catch {
 			return remoteItems;
 		}
-		}, [resolvePhotoSrc]);
+		}, [resolvePhotoSrc, shouldInlinePhotoUrl]);
 
-		const loadLatest = useCallback(async () => {
-			setRefreshing(true);
-			try {
-				const demo = isDemoMode();
-				await pruneInvalidPendingCheckins().catch(() => {});
-				const pendingPromise = getPendingCheckins().catch(() => []);
-					if (demo) {
-						try { await seedDemoNetwork(user?.id); } catch {}
-						const pending = await pendingPromise;
-						const pendingSummary = summarizePending(pending);
-					setPendingCount(pendingSummary.count);
-					setPendingUploading(pendingSummary.uploading);
-					setPendingError(pendingSummary.error);
-					const data = await getCheckins().catch(() => []);
-					setItems(filterExpired(data as any));
-					setRemoteCursor(null);
-					setHasMoreRemote(false);
-						setStatus(null);
-						return;
-					}
-					const res = await getCheckinsRemote(PAGE);
+			const loadLatest = useCallback(async () => {
+				const loadMarkId = startPerfMark('feed_load_latest');
+				let ok = true;
+				setRefreshing(true);
+				try {
+					await pruneInvalidPendingCheckins().catch(() => {});
+					const pendingPromise = getPendingCheckins().catch(() => []);
+					const fetchMarkId = startPerfMark('feed_fetch');
+					let res: any;
+				try {
+					res = await getCheckinsRemote(PAGE);
+					void endPerfMark(fetchMarkId, true, { limit: PAGE });
+				} catch (error) {
+					void endPerfMark(fetchMarkId, false, { limit: PAGE, error: String(error) });
+					throw error;
+				}
 				const pending = await pendingPromise;
 				const pendingSummary = summarizePending(pending);
 				setPendingCount(pendingSummary.count);
@@ -370,15 +632,16 @@ const FeedPhoto = memo(function FeedPhoto({
 							setPendingError(nextSummary.error);
 						} catch {}
 					});
-				}
+					}
+				const remoteFallback = res?.source === 'fallback';
 				const cleaned = filterExpired(res.items as any);
-				let merged = await mergeRemoteWithLocal(cleaned);
-				if (merged.length < 2 && process.env.NODE_ENV !== 'production') {
-					try {
-						await seedDemoNetwork(user?.id);
-					merged = await mergeRemoteWithLocal(cleaned);
-				} catch {}
-			}
+				const normalized = await normalizeCheckins(cleaned as any);
+				let merged = await mergeRemoteWithLocal(normalized as any);
+				merged = applySeededFallback(merged as any, 3);
+				merged = merged.filter((item: any) => {
+					if (!isSeededCheckin(item)) return true;
+					return !!resolvePhotoUri(item) || !!item?.photoPending;
+				});
 			setItems(mergeUniqueCheckins([], merged as any));
 			if (user) {
 				const selfRemote = merged.filter((c: any) => c.userId === user.id);
@@ -387,15 +650,26 @@ const FeedPhoto = memo(function FeedPhoto({
 					setLastSelfCheckinAt(sorted[0]?.createdAt || null);
 				}
 			}
-			setRemoteCursor(res.lastCursor || null);
-			setHasMoreRemote(cleaned.length >= PAGE);
+			setRemoteCursor(remoteFallback ? null : (res.lastCursor || null));
+			setHasMoreRemote(!remoteFallback && cleaned.length >= PAGE);
 			void logEvent('feed_viewed', user?.id);
-			setStatus(null);
-			if (wasOfflineRef.current) {
+			if (remoteFallback) {
+				setStatus({
+					message: merged.length
+						? 'Live feed unavailable. Showing saved check-ins until the network recovers.'
+						: 'Unable to load the live feed right now. Pull to retry.',
+					tone: 'warning',
+				});
+				wasOfflineRef.current = true;
+			} else {
+				setStatus(null);
+			}
+			if (!remoteFallback && wasOfflineRef.current) {
 				showToast('Back online. Feed updated.', 'success');
 				wasOfflineRef.current = false;
 			}
-			} catch {
+				} catch {
+					ok = false;
 				try {
 					const pending = await getPendingCheckins();
 					const pendingSummary = summarizePending(pending);
@@ -403,10 +677,19 @@ const FeedPhoto = memo(function FeedPhoto({
 					setPendingUploading(pendingSummary.uploading);
 					setPendingError(pendingSummary.error);
 				} catch {}
-				const data = await getCheckins();
-				setItems(mergeUniqueCheckins([], filterExpired(data as any) as any));
-				setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
-				wasOfflineRef.current = true;
+					const data = await getCheckins();
+					let fallback = mergeUniqueCheckins([], filterExpired(data as any) as any);
+					if (!isDemoMode()) {
+						fallback = fallback.filter((item: any) => !isSeededCheckin(item));
+					}
+					if (isDemoMode()) {
+						setItems([]);
+						setStatus({ message: 'Demo feed requires cloud data. Check network or reseed cloud demo posts.', tone: 'warning' });
+					} else {
+						setItems(fallback);
+						setStatus({ message: 'Offline right now. Showing saved check-ins.', tone: 'warning' });
+					}
+					wasOfflineRef.current = true;
 				try {
 					const init = getFirebaseInitError();
 					if (init) {
@@ -416,38 +699,54 @@ const FeedPhoto = memo(function FeedPhoto({
 		} finally {
 				setRefreshing(false);
 				setInitialLoading(false);
+				void endPerfMark(loadMarkId, ok);
 			}
 			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
 
-		const loadMore = useCallback(async () => {
-			if (loadingMore || !hasMoreRemote) return;
-			setLoadingMore(true);
-			try {
-				const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
-				if (res.items && res.items.length) {
+	const loadMore = useCallback(async () => {
+		if (loadingMore || !hasMoreRemote) return;
+		setLoadingMore(true);
+		const markId = startPerfMark('feed_fetch_more');
+		let ok = true;
+		try {
+			const res = await getCheckinsRemote(PAGE, remoteCursor || undefined);
+			if (res?.source === 'fallback') {
+				setHasMoreRemote(false);
+				return;
+			}
+			if (res.items && res.items.length) {
 					const cleaned = filterExpired(res.items as any);
-					setItems((prev) => mergeUniqueCheckins(prev, cleaned as any));
+					const normalized = await normalizeCheckins(cleaned as any);
+					setItems((prev) => {
+						const result = applySeededFallback(mergeUniqueCheckins(prev, normalized as any), 3) as Checkin[];
+						return result;
+					});
 					setRemoteCursor(res.lastCursor || null);
 				setHasMoreRemote(cleaned.length >= PAGE);
 			}
 		} catch {
+			ok = false;
 			// no-op for local fallback
 		} finally {
 			setLoadingMore(false);
+			void endPerfMark(markId, ok, { limit: PAGE });
 		}
 	}, [loadingMore, remoteCursor, hasMoreRemote, filterExpired]);
 
 	useEffect(() => {
 		(async () => {
-			// show local items first for instant UX
-			const local = await getCheckins();
-			localCacheRef.current = local as Checkin[];
-			setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
-			if (user) {
-				const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
-				if (selfLocal.length) {
-					const sorted = [...selfLocal].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
-					setLastSelfCheckinAt(sorted[0]?.createdAt || null);
+			const demoMode = isDemoMode();
+			if (!demoMode) {
+				// show local items first for instant UX
+				const local = await getCheckins();
+				localCacheRef.current = local as Checkin[];
+				setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
+				if (user) {
+					const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
+					if (selfLocal.length) {
+						const sorted = [...selfLocal].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
+						setLastSelfCheckinAt(sorted[0]?.createdAt || null);
+					}
 				}
 			}
 			// defer network refresh to keep first paint fast
@@ -550,6 +849,7 @@ const FeedPhoto = memo(function FeedPhoto({
 
 		// subscribe to global remote feed when not in friends-only mode
 		useEffect(() => {
+			if (!isFocused) return;
 			// cleanup previous
 			if (remoteUnsubRef.current) {
 				try { remoteUnsubRef.current(); } catch {}
@@ -564,7 +864,9 @@ const FeedPhoto = memo(function FeedPhoto({
 					const unsub = subscribeCheckins((remoteItems: any[]) => {
 						const cleaned = filterExpired(remoteItems as any);
 						void (async () => {
-							const merged = await mergeRemoteWithLocal(cleaned);
+							const normalized = await normalizeCheckins(cleaned as any);
+							const seededApplied = applySeededFallback(normalized as any, 3);
+							const merged = await mergeRemoteWithLocal(seededApplied as any);
 							setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 						if (cleaned.length) {
 							setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
@@ -581,10 +883,11 @@ const FeedPhoto = memo(function FeedPhoto({
 					remoteUnsubRef.current = null;
 				}
 			};
-		}, [onlyFriends, filterExpired, mergeRemoteWithLocal]);
+		}, [isFocused, onlyFriends, filterExpired, mergeRemoteWithLocal]);
 
 	// subscribe to friends-only feed when toggled on
 	useEffect(() => {
+		if (!isFocused) return;
 		if (!onlyFriends) return;
 		if (user && friendIds.length === 0) {
 			(async () => {
@@ -611,7 +914,9 @@ const FeedPhoto = memo(function FeedPhoto({
 				const unsub = subscribeCheckinsForUsers(friendIds, (remoteItems: any[]) => {
 					const cleaned = filterExpired(remoteItems as any);
 					void (async () => {
-						const merged = await mergeRemoteWithLocal(cleaned);
+						const normalized = await normalizeCheckins(cleaned as any);
+						const seededApplied = applySeededFallback(normalized as any, 3);
+						const merged = await mergeRemoteWithLocal(seededApplied as any);
 						setItems((prev) => mergeUniqueCheckins(prev, merged as any));
 					if (cleaned.length) {
 						setRemoteCursor(cleaned[cleaned.length - 1].createdAt || null);
@@ -627,7 +932,7 @@ const FeedPhoto = memo(function FeedPhoto({
 					friendsUnsubRef.current = null;
 				}
 			};
-		}, [onlyFriends, friendIds, user, filterExpired, mergeRemoteWithLocal]);
+		}, [isFocused, onlyFriends, friendIds, user, filterExpired, mergeRemoteWithLocal]);
 
 	const visibleItems = useMemo(() => {
 		let out = items;
@@ -650,9 +955,10 @@ const FeedPhoto = memo(function FeedPhoto({
 
 			// filter expired posts (live window)
 			// sanitize items for privacy: exact locations visible only to friends/owner
-			const sanitized = out.map((it: any) => {
-				if (user && blockedIdSet.has(it.userId)) return null;
-			if (!it.visibility) return it;
+				const sanitized = out.map((it: any) => {
+					if (user && blockedIdSet.has(it.userId)) return null;
+					if (isSeededCheckin(it) && !it?.photoPending && !resolvePhotoUri(it)) return null;
+				if (!it.visibility) return it;
 			if (it.visibility === 'friends') {
 				const allowed = user && (friendIdSet.has(it.userId) || it.userId === user.id);
 				if (!allowed) return null; // hide entirely
@@ -667,15 +973,14 @@ const FeedPhoto = memo(function FeedPhoto({
 			return it;
 		}).filter(Boolean);
 
-		return sanitized.filter(Boolean) as Checkin[];
-	}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet]);
+			return sanitized.filter(Boolean) as Checkin[];
+		}, [items, spotQuery, onlyCampus, onlyFriends, user, friendIdSet, blockedIdSet]);
 
 		const collapsedItems = useMemo(() => {
 			const toTs = (value: any) => toMillis(value) || 0;
 			const now = Date.now();
 			const hasRenderablePhoto = (it: any) => {
-				const candidate = it?.photoUrl || it?.photoURL || it?.imageUrl || it?.imageURL || it?.image;
-				return typeof candidate === 'string' && candidate.trim().length > 0;
+				return !!resolvePhotoUri(it);
 			};
 			const map: Record<string, { item: Checkin; total: number; live: number }> = {};
 			visibleItems.forEach((it) => {
@@ -710,15 +1015,54 @@ const FeedPhoto = memo(function FeedPhoto({
 			});
 			return Object.values(map).map((v) => ({ ...v.item, groupCount: v.live, totalCount: v.total })) as any[];
 			}, [visibleItems]);
+		const feedItems = useMemo(() => visibleItems as any[], [visibleItems]);
 
-		const liveCount = collapsedItems.reduce((sum, it) => sum + ((it as any).groupCount || 0), 0);
+		const trendingSpots = useMemo(() => {
+			return [...collapsedItems]
+				.filter((item: any) => ((item as any).groupCount || 0) > 0)
+				.sort((a: any, b: any) => ((b as any).groupCount || 0) - ((a as any).groupCount || 0))
+				.slice(0, 3);
+		}, [collapsedItems]);
+
+		const feedCount = feedItems.length;
 		const demoMode = isDemoMode();
+		const raffleProgressPct = weeklyRaffle
+			? Math.max(0, Math.min(100, Math.round((weeklyRaffle.postsThisWeek / Math.max(1, weeklyRaffle.target)) * 100)))
+			: 0;
+
+		useEffect(() => {
+			const ids = feedItems
+				.map((item: any) => String((item as any).id || (item as any).clientId || ''))
+				.filter(Boolean)
+				.slice(0, 12)
+				.filter((id) => !reactionByCheckin[id]);
+			if (!ids.length) return;
+			let active = true;
+			const task = InteractionManager.runAfterInteractions(() => {
+				void (async () => {
+					if (!active) return;
+					await loadReactionSummariesForCheckins(ids);
+				})();
+			});
+			return () => {
+				active = false;
+				task.cancel();
+			};
+		}, [feedItems, reactionByCheckin, loadReactionSummariesForCheckins]);
+
+	useEffect(() => {
+		if (initialLoading || firstItemMarkedRef.current) return;
+		const stop = screenLoadStopRef.current;
+		screenLoadStopRef.current = null;
+		if (stop) void stop();
+		void markPerfEvent('feed_initial_data_ready', { itemCount: feedItems.length });
+	}, [initialLoading, feedItems.length]);
 
 	return (
 		<ThemedView style={styles.container}>
 			<Atmosphere />
 			<FlatList
-				data={collapsedItems}
+				data={feedItems}
 				keyExtractor={(i, index) => i.id || (i as any).clientId || `${(i as any).userId || 'anon'}-${toMillis((i as any).createdAt) || index}-${(i as any).spotPlaceId || (i as any).spotName || 'spot'}`}
 				contentContainerStyle={styles.listContent}
 				initialNumToRender={6}
@@ -726,20 +1070,27 @@ const FeedPhoto = memo(function FeedPhoto({
 				windowSize={7}
 				updateCellsBatchingPeriod={40}
 				removeClippedSubviews={Platform.OS !== 'web'}
+				onViewableItemsChanged={onViewableItemsChangedRef.current}
+				viewabilityConfig={viewabilityConfigRef.current}
+				onScrollBeginDrag={() => {
+					if (firstScrollMarkedRef.current) return;
+					firstScrollMarkedRef.current = true;
+					void markPerfEvent('feed_scroll_session_start');
+				}}
 				ListHeaderComponent={
 					<View style={styles.header}>
 						<View style={[styles.heroCard, { backgroundColor: card, borderColor: border }]}>
 						<View style={[styles.heroBadge, { backgroundColor: badgeFill }]}>
-								<Label style={{ marginBottom: 0, color: accent }}>Live now</Label>
+								<Label style={{ marginBottom: 0, color: accent }}>Community feed</Label>
 							</View>
 							<H1 style={{ color: text }}>Your friends are out there.</H1>
 							<Body style={{ color: muted }}>
 								See where people are studying and working, then tap in with a photo and a quick note.
 							</Body>
 									<Text style={{ color: muted, marginTop: 6 }}>
-									{liveCount
-										? `${liveCount} check-in${liveCount === 1 ? '' : 's'} in the last 24h`
-										: 'No check-ins in the last 24h yet.'}
+									{feedCount
+										? `${feedCount} check-in${feedCount === 1 ? '' : 's'} in your feed`
+										: 'No check-ins in your feed yet.'}
 									</Text>
 							<Text style={{ color: muted, marginTop: 6 }}>
 								Use the + button above to share where you are.
@@ -779,7 +1130,7 @@ const FeedPhoto = memo(function FeedPhoto({
 										actionLabel="Retry"
 										onAction={loadLatest}
 									/>
-									{status.tone === 'warning' && !demoMode ? (
+									{__DEV__ && status.tone === 'warning' && !demoMode ? (
 										<View style={[styles.debugCard, { borderColor: border, backgroundColor: card, marginTop: 10, padding: 10, borderRadius: 10 }]}> 
 											<Text style={{ color: muted, marginBottom: 6 }}>Diagnostics:</Text>
 											<Text style={{ color: muted, fontSize: 12 }}>Firebase configured: {isFirebaseConfigured() ? 'yes' : 'no'}</Text>
@@ -802,10 +1153,32 @@ const FeedPhoto = memo(function FeedPhoto({
 								</>
 							) : null}
 						</View>
+						{user && weeklyRaffle ? (
+							<View style={[styles.raffleCard, { borderColor: border, backgroundColor: withAlpha(primary, 0.06) }]}>
+								<View style={styles.raffleHeaderRow}>
+									<Text style={{ color: text, fontWeight: '700' }}>Early adopter raffle</Text>
+									<Text style={{ color: primary, fontWeight: '700', fontSize: 12 }}>
+										{weeklyRaffle.postsThisWeek}/{weeklyRaffle.target}
+									</Text>
+								</View>
+								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+									{weeklyRaffle.entered
+										? 'Entry locked for this week. Keep posting to seed the feed.'
+										: weeklyRaffle.remaining > 0
+										? `${weeklyRaffle.remaining} more post${weeklyRaffle.remaining === 1 ? '' : 's'} to enter this week.`
+										: 'You qualify this week. Entry is being confirmed.'}
+								</Text>
+								<View style={[styles.raffleProgressTrack, { backgroundColor: withAlpha(primary, 0.16) }]}>
+									<View style={[styles.raffleProgressFill, { backgroundColor: primary, width: `${raffleProgressPct}%` }]} />
+								</View>
+							</View>
+						) : null}
 						<View style={[styles.softDivider, { backgroundColor: border }]} />
 						<View style={styles.quickActions}>
 							<Pressable
 								onPress={() => router.push('/(tabs)/explore')}
+								accessibilityRole="button"
+								accessibilityLabel="Explore spots"
 								style={({ pressed }) => [
 									styles.quickButton,
 									{ borderColor: border, backgroundColor: pressed ? highlight : card },
@@ -813,24 +1186,86 @@ const FeedPhoto = memo(function FeedPhoto({
 							>
 								<Text style={{ color: text, fontWeight: '600' }}>Explore</Text>
 							</Pressable>
-                            
-								<Pressable
-									onPress={async () => {
-											await Share.share({ message: 'Join me on Perched. Download: https://perched.app' });
-									}}
-									style={({ pressed }) => [
-										styles.quickButton,
-										{ borderColor: border, backgroundColor: pressed ? highlight : card },
+							<Pressable
+								onPress={async () => {
+									await Share.share({ message: 'Join me on Perched. Download: https://perched.app' });
+								}}
+								accessibilityRole="button"
+								accessibilityLabel="Invite friends to Perched"
+								style={({ pressed }) => [
+									styles.quickButton,
+									{ borderColor: border, backgroundColor: pressed ? highlight : card },
 								]}
 							>
 								<Text style={{ color: text, fontWeight: '600' }}>Invite</Text>
 							</Pressable>
 						</View>
-							{user && needsDailyCheckin ? (
-								<Text style={{ color: muted, marginTop: 10 }}>
-									{selfCheckinCount === 0 ? 'Get your streak going — tap in today.' : 'Keep your streak going — tap in today.'}
-								</Text>
-							) : null}
+						{trendingSpots.length ? (
+							<View style={[styles.trendingCard, { borderColor: border, backgroundColor: card }]}>
+								<View style={styles.trendingHeader}>
+									<Text style={{ color: muted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.7 }}>
+										Trending now
+									</Text>
+									<Text style={{ color: muted, fontSize: 11 }}>Live hotspots in your network</Text>
+								</View>
+								<View style={styles.trendingList}>
+									{trendingSpots.map((spot: any, index) => {
+										const placeId = (spot as any).spotPlaceId || '';
+										const name = spot.spotName || spot.spot || 'Unknown spot';
+										const count = Math.max(1, (spot as any).groupCount || 0);
+										return (
+											<Pressable
+												key={`${placeId || name}-${index}`}
+												accessibilityRole="button"
+												accessibilityLabel={`Open trending spot ${name}`}
+												onPress={() => {
+													startPerfMark('spot_navigation');
+													void markPerfEvent('spot_nav_start', { source: 'feed_trending' });
+													router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(name)}`);
+												}}
+												style={({ pressed }) => [
+													styles.trendingRow,
+													{
+														borderColor: border,
+														backgroundColor: pressed ? highlight : 'transparent',
+													},
+												]}
+											>
+												<Text style={{ color: text, fontWeight: '700' }}>{index + 1}. {name}</Text>
+												<Text style={{ color: muted, fontSize: 12 }}>{count} check-ins today</Text>
+											</Pressable>
+										);
+									})}
+								</View>
+							</View>
+						) : null}
+						{user && !hasCheckedInToday ? (
+							<Pressable
+								onPress={() => router.push('/checkin')}
+								accessibilityRole="button"
+								accessibilityLabel="Create a new check-in"
+								style={({ pressed }) => [
+									{
+										marginHorizontal: 16,
+										marginBottom: 12,
+										padding: 14,
+										borderRadius: 16,
+										borderWidth: 1,
+										borderColor: border,
+										backgroundColor: pressed ? withAlpha(primary, 0.08) : withAlpha(primary, 0.04),
+										flexDirection: 'row',
+										alignItems: 'center',
+									},
+								]}
+							>
+								<Text style={{ fontSize: 24, marginRight: 10 }}>📍</Text>
+								<View style={{ flex: 1 }}>
+									<Text style={{ color: text, fontWeight: '700', fontSize: 14 }}>Where are you working today?</Text>
+									<Text style={{ color: muted, fontSize: 12, marginTop: 2 }}>Tap to check in and keep your streak going</Text>
+								</View>
+								<Text style={{ color: primary, fontWeight: '700', fontSize: 13 }}>Check in</Text>
+							</Pressable>
+						) : null}
 						<View style={styles.filterRow}>
 							{user ? (
 								<View style={{ alignItems: 'center' }}>
@@ -890,12 +1325,21 @@ const FeedPhoto = memo(function FeedPhoto({
 						const now = Date.now();
 						const time = formatCheckinTime(item.createdAt);
 						const isLive = !isCheckinExpired(item, now);
-						const remaining = isLive ? formatTimeRemaining(item) : '';
 						const groupCount = ((item as any).groupCount ?? 0) as number;
-						const isFriend = !!(item.userId && friendIdSet.has(item.userId));
-						const isIncoming = !!(item.userId && incomingById.has(item.userId));
-						const isOutgoing = !!(item.userId && outgoingById.has(item.userId));
-					const photo = resolvePhotoSrc(item);
+						const probableSelf =
+							!item.userId &&
+							!!user &&
+							(
+								(!!user.handle && typeof item.userHandle === 'string' && item.userHandle === user.handle) ||
+								(!!user.name && typeof item.userName === 'string' && item.userName === user.name)
+							);
+						const targetUserId = item.userId || (probableSelf && user?.id ? user.id : '');
+						const isFriend = !!(targetUserId && friendIdSet.has(targetUserId));
+						const isIncoming = !!(targetUserId && incomingById.has(targetUserId));
+						const isOutgoing = !!(targetUserId && outgoingById.has(targetUserId));
+						const photo = resolvePhotoSrc(item);
+						const reactionCheckinId = String(item.id || (item as any).clientId || '');
+						const reactionSummary = reactionByCheckin[reactionCheckinId];
 						const selfFallback = user && item.userId === user.id
 							? (user.name || (user.handle ? `@${user.handle}` : user.email ? user.email.split('@')[0] : null))
 							: null;
@@ -905,9 +1349,28 @@ const FeedPhoto = memo(function FeedPhoto({
 								? null
 								: rawUserName;
 						const effectiveHandle = item.userHandle || (user && item.userId === user.id ? user.handle : null);
-						const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
-						const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
-						return (
+							const displayName = userName || selfFallback || (effectiveHandle ? `@${effectiveHandle}` : 'Someone');
+							const initials = displayName.replace('@', '').split(' ').map((s: any) => s[0]).slice(0, 2).join('').toUpperCase();
+							const noiseLabel = toNoiseLabel((item as any).noiseLevel);
+							const crowdLabel = toBusynessLabel((item as any).busyness);
+							const drinkPriceLabel = toDrinkPriceLabel((item as any).drinkPrice);
+							const drinkQualityLabel = toDrinkQualityLabel((item as any).drinkQuality);
+							const metricChips = [
+								noiseLabel ? `Noise: ${noiseLabel}` : null,
+								crowdLabel ? `Crowd: ${crowdLabel}` : null,
+								drinkPriceLabel ? `Price: ${drinkPriceLabel}` : null,
+								drinkQualityLabel ? `Quality: ${drinkQualityLabel}` : null,
+							].filter(Boolean) as string[];
+							const profileActionKey = `profile:${targetUserId || 'none'}:${reactionCheckinId}`;
+							const closeActionKey = `close:${targetUserId || 'none'}:${reactionCheckinId}`;
+							const reportActionKey = `report:${reactionCheckinId || 'none'}`;
+							const blockActionKey = `block:${targetUserId || 'none'}`;
+							const profilePending = !!pendingActions[profileActionKey];
+							const closePending = !!pendingActions[closeActionKey];
+							const reportPending = !!pendingActions[reportActionKey];
+							const blockPending = !!pendingActions[blockActionKey];
+							const targetIsBlocked = !!(targetUserId && blockedIds.includes(targetUserId));
+							return (
 							<PolishedCard
 								variant="elevated"
 								animated
@@ -915,8 +1378,34 @@ const FeedPhoto = memo(function FeedPhoto({
 								pressable={false}
 								style={styles.card}
 							>
-							<View style={styles.cardHeader}>
-								<View style={styles.avatarRow}>
+								<View style={styles.cardHeader}>
+									<Pressable
+										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={`Open ${displayName}'s profile`}
+										style={({ pressed }) => [styles.avatarRow, pressed ? { opacity: 0.75 } : null]}
+										onPress={() => {
+											if (profilePending) return;
+											if (!targetUserId) {
+												showToast('Profile unavailable for this check-in.', 'warning');
+												return;
+											}
+											if (!beginAction(profileActionKey)) return;
+											try {
+												if (user?.id && targetUserId === user.id) {
+													router.push('/(tabs)/profile');
+												} else {
+													router.push(`/profile-view?uid=${encodeURIComponent(targetUserId)}`);
+												}
+											} catch (error) {
+												devLog('profile open failed', error);
+												showToast('Unable to open profile right now.', 'error');
+											} finally {
+												endAction(profileActionKey);
+											}
+										}}
+										disabled={profilePending}
+									>
 									{item.userPhotoUrl ? (
 										<SpotImage source={{ uri: item.userPhotoUrl }} style={styles.avatar} />
 									) : (
@@ -935,18 +1424,27 @@ const FeedPhoto = memo(function FeedPhoto({
 													<Text style={{ color: muted, fontSize: 12 }}>@{effectiveHandle}</Text>
 												) : null}
 												<Text style={{ color: muted, fontSize: 12 }}>{time}</Text>
-											{remaining ? <Text style={{ color: muted, fontSize: 11 }}>{remaining}</Text> : null}
 										</View>
-								</View>
-								{user && item.userId && item.userId !== user.id ? (
+								</Pressable>
+								{user && targetUserId && targetUserId !== user.id ? (
 									<View style={styles.cardActions}>
 										<Pressable
+											accessibilityRole="button"
+											accessibilityLabel={
+												isFriend
+													? `Manage friendship with ${displayName}`
+													: isIncoming
+														? `Accept ${displayName}'s friend request`
+														: isOutgoing
+															? `Friend request pending for ${displayName}`
+															: `Add ${displayName} as a friend`
+											}
 											onPress={async () => {
 												try {
-													const targetId = item.userId!;
+													const targetId = targetUserId;
 													if (isFriend) {
 														await unfollowUserRemote(user.id, targetId);
-														await logEvent('user_unfollowed', user.id, { target: item.userId });
+														await logEvent('user_unfollowed', user.id, { target: targetId });
 													} else if (isIncoming) {
 														const req = incomingRequests.find((r) => r.fromId === targetId);
 														if (!req?.id || !req?.fromId || !req?.toId) {
@@ -986,51 +1484,112 @@ const FeedPhoto = memo(function FeedPhoto({
 													: 'Add'}
 											</Text>
 										</Pressable>
-										<Pressable
-											onPress={async () => {
-												if (!user) return;
-												try {
-													const targetId = item.userId!;
-													const isClose = (await getCloseFriends(user.id)).includes(targetId);
-													await setCloseFriendRemote(user.id, targetId, !isClose);
-													await logEvent('user_closefriend_toggled', user.id, { target: targetId, close: !isClose });
-												} catch (e) {
-													devLog('toggle close friend failed', e);
-												}
-											}}
-											style={styles.closeButton}
-										>
-											<Text style={{ color: muted, fontSize: 12 }}>Close</Text>
-										</Pressable>
-									</View>
-								) : null}
+											<Pressable
+												hitSlop={8}
+												accessibilityRole="button"
+												accessibilityLabel={`${closePending ? 'Saving close friend status for' : 'Toggle close friend for'} ${displayName}`}
+												onPress={async () => {
+													if (!user) return;
+													if (!beginAction(closeActionKey)) return;
+													try {
+														const targetId = targetUserId;
+														const isClose = (await getCloseFriends(user.id)).includes(targetId);
+														await setCloseFriendRemote(user.id, targetId, !isClose);
+														await logEvent('user_closefriend_toggled', user.id, { target: targetId, close: !isClose });
+														showToast(!isClose ? 'Added to close friends.' : 'Removed from close friends.', 'success');
+													} catch (e) {
+														devLog('toggle close friend failed', e);
+														showToast('Unable to update close friend right now.', 'error');
+													} finally {
+														endAction(closeActionKey);
+													}
+												}}
+												style={({ pressed }) => [
+													styles.closeButton,
+													pressed ? { opacity: 0.6 } : null,
+												]}
+												disabled={closePending}
+											>
+												<Text style={{ color: muted, fontSize: 12 }}>{closePending ? 'Saving…' : 'Close'}</Text>
+											</Pressable>
+										</View>
+									) : null}
 							</View>
 
-							<FeedPhoto uri={photo} background={background} muted={muted} pending={item.photoPending} />
+							<Pressable
+								accessibilityRole="button"
+								accessibilityLabel={`Open check-in details for ${item.spotName || item.spot || 'this spot'}`}
+								onPress={() => {
+									if (!reactionCheckinId) return;
+									router.push(`/checkin-detail?cid=${encodeURIComponent(reactionCheckinId)}` as any);
+								}}
+							>
+								<FeedPhoto
+									uri={photo}
+									itemId={String((item as any).id || (item as any).clientId || '')}
+									background={background}
+									muted={muted}
+									pending={item.photoPending}
+								/>
+							</Pressable>
 							<View style={styles.cardContent}>
 								<Pressable
+									accessibilityRole="button"
+									accessibilityLabel={`Open spot details for ${item.spotName || item.spot || 'this spot'}`}
 									onPress={() => {
 										const placeId = (item as any).spotPlaceId;
 										const name = item.spotName || item.spot || '';
+										startPerfMark('spot_navigation');
+										void markPerfEvent('spot_nav_start', { source: 'feed_card' });
 										router.push(`/spot?placeId=${encodeURIComponent(placeId || '')}&name=${encodeURIComponent(name)}`);
 									}}
 								>
 									<Text style={[styles.spot, { color: text }]}>{item.spotName || item.spot}</Text>
 								</Pressable>
 								{groupCount > 1 ? (
-									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here in the last 24h</Text>
+									<Text style={{ color: muted, marginTop: 4 }}>{groupCount} check-ins here</Text>
 								) : null}
-							{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
-								<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
-							)}
+									{(item.caption || '').length ? <Body style={{ color: text, marginTop: 6 }}>{item.caption}</Body> : (
+										<Text style={{ color: muted, marginTop: 6 }}>Tap in and drop a quick vibe note.</Text>
+									)}
+									{metricChips.length ? (
+										<View style={styles.metricChipRow}>
+											{metricChips.map((chip) => (
+												<View key={`${reactionCheckinId}-${chip}`} style={[styles.metricChip, { borderColor: border, backgroundColor: badgeFill }]}>
+													<Text style={{ color: text, fontSize: 11, fontWeight: '600' }}>{chip}</Text>
+												</View>
+											))}
+										</View>
+									) : null}
+									{user?.id && reactionCheckinId ? (
+										<ReactionBar
+										checkinId={reactionCheckinId}
+										userId={user.id}
+										userName={user.name || user.handle || user.email || 'Someone'}
+										userHandle={user.handle}
+										initialCounts={reactionSummary?.counts}
+										userReaction={reactionSummary?.userReaction}
+										onReactionChange={() => {
+											void loadReactionsForCheckin(reactionCheckinId);
+										}}
+									/>
+								) : null}
 								<Text style={[styles.date, { color: muted }]}>{time}</Text>
-								{remaining ? <Text style={{ color: muted, marginTop: 4 }}>{remaining}</Text> : null}
 								<View style={[styles.cardDivider, { backgroundColor: border }]} />
 								<View style={styles.cardFooter}>
 									<Pressable
+										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={`Share check-in from ${item.spotName || item.spot || 'this spot'}`}
 										onPress={async () => {
 											try {
-													const message = `${item.spot}${(item as any).caption ? '\n' + (item as any).caption : ''}\nSee on Perched.`;
+													const spotTitle = (item as any).spotName || item.spot || 'Check this spot';
+						const posterHandle = (item as any).userHandle ? `@${(item as any).userHandle}` : null;
+						const selfHandle = user?.handle ? `@${user.handle}` : null;
+						const addMeLine = selfHandle ? `Add me on Perched: ${selfHandle}` : 'Check out Perched';
+						const creditLine = posterHandle && posterHandle !== selfHandle ? `${posterHandle} checked in at ${spotTitle}` : `Checked in at ${spotTitle}`;
+						const captionLine = (item as any).caption ? `\n${(item as any).caption}` : '';
+						const message = `${creditLine}${captionLine}\n\n${addMeLine}`;
 												await Share.share({ message });
 												await logEvent('checkin_shared', user?.id, { id: item.id });
 											} catch {
@@ -1045,47 +1604,69 @@ const FeedPhoto = memo(function FeedPhoto({
 										<Text style={{ color: muted }}>Share</Text>
 									</Pressable>
 									<Pressable
+										hitSlop={8}
+										accessibilityRole="button"
+										accessibilityLabel={reportPending ? 'Reporting check-in' : 'Report this check-in'}
 										onPress={async () => {
+											if (!user?.id || !reactionCheckinId) {
+												showToast('You need to be signed in to report this check-in.', 'warning');
+												return;
+											}
+											if (!beginAction(reportActionKey)) return;
 											try {
-												await logEvent('checkin_reported', user?.id, { id: item.id });
-												try {
-													const { reportCheckinRemote } = await import('@/services/moderation');
-													await reportCheckinRemote(item.id, user?.id as any, undefined, item.userId, item.spotName || item.spot);
-												} catch {}
-												if (user && item.userId) {
-													await reportUserRemote(user.id, item.userId, 'reported_from_feed');
-												}
-												setItems((prev) => prev.filter((p: any) => p.id !== item.id));
-											} catch {
-												// ignore
+												await reportCheckinRemote(user.id, reactionCheckinId, 'feed_report', targetUserId || undefined);
+												setItems((prev) => prev.filter((candidate: any) => String(candidate?.id || candidate?.clientId || '') !== String(reactionCheckinId)));
+												showToast('Report submitted. This check-in was hidden from your feed.', 'success');
+											} catch (error) {
+												devLog('report action failed', error);
+												showToast('Unable to report this check-in right now.', 'error');
+											} finally {
+												endAction(reportActionKey);
 											}
 										}}
 										style={({ pressed }) => [
 											styles.footerButton,
 											pressed ? { opacity: 0.6 } : null,
 										]}
+										disabled={reportPending}
 									>
-										<Text style={{ color: muted }}>Report</Text>
+										<Text style={{ color: muted }}>{reportPending ? 'Saving…' : 'Report'}</Text>
 									</Pressable>
-									{user && item.userId && item.userId !== user.id ? (
+									{user && targetUserId && targetUserId !== user.id ? (
 										<Pressable
+											hitSlop={8}
+											accessibilityRole="button"
+											accessibilityLabel={targetIsBlocked ? `Unblock ${displayName}` : `Block ${displayName}`}
 											onPress={async () => {
+												if (!beginAction(blockActionKey)) return;
 												try {
-													if (blockedIds.includes(item.userId)) {
-														await unblockUserRemote(user.id, item.userId);
+													if (targetIsBlocked) {
+														await unblockUserRemote(user.id, targetUserId);
+														setBlockedIds((prev) => prev.filter((id) => id !== targetUserId));
+														showToast('User unblocked.', 'success');
 													} else {
-														await blockUserRemote(user.id, item.userId);
+														await blockUserRemote(user.id, targetUserId);
+														setBlockedIds((prev) => (prev.includes(targetUserId) ? prev : [...prev, targetUserId]));
+														setItems((prev) => prev.filter((p: any) => p.userId !== targetUserId));
+														showToast('User blocked and hidden from your feed.', 'success');
 													}
 													await refreshFriendRequests();
-													setItems((prev) => prev.filter((p: any) => p.userId !== item.userId));
-												} catch {}
+												} catch (error) {
+													devLog('block action failed', error);
+													showToast('Unable to update block status right now.', 'error');
+												} finally {
+													endAction(blockActionKey);
+												}
 											}}
 											style={({ pressed }) => [
 												styles.footerButton,
 												pressed ? { opacity: 0.6 } : null,
 											]}
+											disabled={blockPending}
 										>
-											<Text style={{ color: muted }}>{blockedIds.includes(item.userId) ? 'Unblock' : 'Block'}</Text>
+											<Text style={{ color: muted }}>
+												{blockPending ? 'Saving…' : targetIsBlocked ? 'Unblock' : 'Block'}
+											</Text>
 										</Pressable>
 									) : null}
 								</View>
@@ -1124,19 +1705,9 @@ const FeedPhoto = memo(function FeedPhoto({
 				onEndReachedThreshold={0.5}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadLatest} />}
 			/>
-			<Pressable
-				onPress={() => router.push('/checkin')}
-				accessibilityLabel="New check-in"
-				style={({ pressed }) => [
-					styles.fab,
-					{ backgroundColor: pressed ? muted : primary, borderColor: border },
-				]}
-			>
-				<IconSymbol name="plus" size={24} color="#FFFFFF" />
-			</Pressable>
-		</ThemedView>
-	);
-}
+			</ThemedView>
+		);
+	}
 
 const styles = StyleSheet.create({
 	container: { flex: 1, position: 'relative' },
@@ -1160,11 +1731,53 @@ const styles = StyleSheet.create({
 		marginBottom: tokens.space.s12,
 	},
 	quickActions: { flexDirection: 'row', marginTop: tokens.space.s12, ...gapStyle(10) },
+	raffleCard: {
+		marginTop: tokens.space.s12,
+		borderWidth: 1,
+		borderRadius: tokens.radius.r16,
+		padding: tokens.space.s12,
+	},
+	raffleHeaderRow: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		justifyContent: 'space-between',
+	},
+	raffleProgressTrack: {
+		height: 8,
+		borderRadius: 999,
+		marginTop: tokens.space.s10,
+		overflow: 'hidden',
+	},
+	raffleProgressFill: {
+		height: '100%',
+		borderRadius: 999,
+	},
 	quickButton: {
 		paddingHorizontal: tokens.space.s14,
 		paddingVertical: tokens.space.s10,
 		borderRadius: 999,
 		borderWidth: 1,
+	},
+	trendingCard: {
+		marginTop: tokens.space.s12,
+		borderWidth: 1,
+		borderRadius: tokens.radius.r16,
+		padding: tokens.space.s12,
+	},
+	trendingHeader: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		justifyContent: 'space-between',
+	},
+	trendingList: {
+		marginTop: tokens.space.s8,
+		gap: 8,
+	},
+	trendingRow: {
+		borderWidth: 1,
+		borderRadius: tokens.radius.r12,
+		paddingHorizontal: tokens.space.s10,
+		paddingVertical: tokens.space.s8,
 	},
 	filterRow: { marginTop: tokens.space.s16, alignItems: 'center', justifyContent: 'center' },
 	card: {
@@ -1181,7 +1794,7 @@ const styles = StyleSheet.create({
 	cardImage: { width: '100%', aspectRatio: 1 },
 	cardContent: { padding: tokens.space.s18 },
 	cardHeader: { padding: tokens.space.s16, paddingBottom: tokens.space.s10 },
-		avatarRow: { flexDirection: 'row', alignItems: 'center' },
+		avatarRow: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
 		nameRow: { flexDirection: 'row', alignItems: 'center' },
 		liveDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
 		avatar: { width: 46, height: 46, borderRadius: 23 },
@@ -1193,11 +1806,18 @@ const styles = StyleSheet.create({
 		borderWidth: 1,
 		marginRight: tokens.space.s10,
 	},
-	closeButton: { padding: tokens.space.s8 },
+		closeButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
 	spot: { fontSize: tokens.type.body.fontSize, fontWeight: '700' as any },
+	metricChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+	metricChip: {
+		borderWidth: 1,
+		borderRadius: 999,
+		paddingHorizontal: tokens.space.s8,
+		paddingVertical: 4,
+	},
 	date: { fontSize: tokens.type.small.fontSize, opacity: 0.6, marginTop: 8 },
 	cardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
-	footerButton: { marginLeft: tokens.space.s12 },
+	footerButton: { marginLeft: tokens.space.s12, minWidth: 44, minHeight: 44, paddingHorizontal: 8, justifyContent: 'center', alignItems: 'center' },
 	empty: { marginTop: tokens.space.s20, alignItems: 'flex-start' },
 	emptyCta: {
 		paddingHorizontal: tokens.space.s16,
@@ -1233,22 +1853,6 @@ const styles = StyleSheet.create({
 		opacity: 0.35,
 	},
 	debugCard: {},
-	fab: {
-		position: 'absolute',
-		right: tokens.space.s20,
-		bottom: 90,
-		width: 56,
-		height: 56,
-		borderRadius: 28,
-		alignItems: 'center',
-		justifyContent: 'center',
-		borderWidth: 1,
-		shadowColor: '#000',
-		shadowOffset: { width: 0, height: 10 },
-		shadowOpacity: 0.2,
-		shadowRadius: 16,
-		elevation: 6,
-	},
 });
 
  

@@ -1,4 +1,5 @@
 import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
+import { findInvalidPhotoSeeds, resolvePhotoUri } from '@/services/photoSources';
 const KEY = 'spot_checkins_v1';
 const CHECKIN_COOLDOWN_KEY = 'spot_checkin_last_v1';
 const DEMO_SEED_KEY = 'spot_demo_seeded_v1';
@@ -17,8 +18,9 @@ type Checkin = {
   spotName?: string;
   spotPlaceId?: string;
   spotLatLng?: { lat: number; lng: number };
-  image?: string;
-  photoUrl?: string;
+  image?: string | null;
+  photoUrl?: string | null;
+  photoPath?: string | null;
   photoPending?: boolean;
   clientId?: string;
   caption?: string;
@@ -31,11 +33,28 @@ type Checkin = {
   expiresAt?: string;
   createdAt: string;
   tags?: string[];
+  photoTags?: string[];
+  ambiance?: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic';
+  visitIntent?: (
+    | 'hangout_friends'
+    | 'date_night'
+    | 'coffee_quality'
+    | 'pastry_snack'
+    | 'aesthetic_photos'
+    | 'quick_pickup'
+    | 'deep_work'
+    | 'quiet_reading'
+    | 'group_study'
+    | 'late_night_open'
+  )[];
   // Utility metrics
   wifiSpeed?: 1 | 2 | 3 | 4 | 5; // 1=unusable, 5=blazing fast
   noiseLevel?: 'quiet' | 'moderate' | 'lively' | 1 | 2 | 3 | 4 | 5; // Legacy string or new 1-5 scale (1=silent, 5=loud)
   busyness?: 1 | 2 | 3 | 4 | 5; // 1=empty, 5=packed
   outletAvailability?: 'plenty' | 'some' | 'few' | 'none'; // power outlet availability
+  laptopFriendly?: boolean; // good for laptop work
+  drinkPrice?: 1 | 2 | 3; // 1=$, 2=$$, 3=$$$
+  drinkQuality?: 1 | 2 | 3 | 4 | 5; // 1=poor, 5=exceptional
 };
 
 type DemoCustomPhoto = { uri: string; fileName?: string | null };
@@ -166,13 +185,9 @@ async function writeNativeJson<T>(key: string, value: T): Promise<void> {
   } catch {}
 }
 
-function pruneHistory(list: Checkin[], maxDays = 30) {
-  const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
-  return list.filter((c) => {
-    const ms = c?.createdAt ? new Date(c.createdAt).getTime() : 0;
-    if (!ms || Number.isNaN(ms)) return true;
-    return ms >= cutoff;
-  });
+function pruneHistory(list: Checkin[], _maxDays = 30) {
+  // Preserve full local history for now; no age-based trimming.
+  return list;
 }
 
 export async function saveCheckin(item: Omit<Checkin, 'id' | 'createdAt' | 'expiresAt'>) {
@@ -740,6 +755,7 @@ export async function removePendingCheckin(clientId: string) {
 
 export async function seedDemoNetwork(currentUserId?: string) {
   try {
+    const demoFallbackPhoto = 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=1400&q=80';
     const now = Date.now();
     const SEED_TTL_MS = 6 * 60 * 60 * 1000;
     if (isWeb()) {
@@ -1064,8 +1080,21 @@ export async function seedDemoNetwork(currentUserId?: string) {
       // ignore
     }
 
+    const rawSeedEntries = [...selfSeed, ...demoCheckins] as any[];
+    if (__DEV__) {
+      const invalid = findInvalidPhotoSeeds(rawSeedEntries);
+      if (invalid.length) {
+        console.warn('[demo-seed] Invalid photo URL(s) detected:', invalid.slice(0, 8));
+      }
+    }
+    const normalizeSeedPhoto = (entry: any) => {
+      const resolved = resolvePhotoUri(entry);
+      if (resolved) return { ...entry, photoUrl: resolved };
+      return { ...entry, photoUrl: demoFallbackPhoto, image: demoFallbackPhoto };
+    };
+    const normalizedSeedEntries = rawSeedEntries.map(normalizeSeedPhoto);
     const filtered = checkins.filter((c: any) => !isDemoSeedId(c?.id));
-    const next = [...selfSeed, ...demoCheckins, ...filtered];
+    const next = [...normalizedSeedEntries, ...filtered];
     if (isWeb()) {
       window.localStorage.setItem(KEY, JSON.stringify(next));
       try { window.localStorage.setItem(DEMO_SEED_KEY, String(now)); } catch {}
@@ -1089,9 +1118,9 @@ export async function seedDemoNetwork(currentUserId?: string) {
           'demo-u15': ['demo-u9', 'demo-u10', 'demo-u11'],
           'demo-u16': ['demo-u1', 'demo-u6', 'demo-u12'],
         };
-        // If current user is not a demo account, connect them to demo users for demo purposes.
+        // Only connect demo accounts to each other — skip real user IDs.
         const demoIds = Object.keys(friendsMap);
-        if (currentUserId && !friendsMap[currentUserId]) {
+        if (currentUserId && currentUserId.startsWith('demo-') && !friendsMap[currentUserId]) {
           friendsMap[currentUserId] = demoIds.slice();
           demoIds.forEach((d) => {
             friendsMap[d] = Array.from(new Set([...(friendsMap[d] || []), currentUserId]));
@@ -1132,7 +1161,7 @@ export async function seedDemoNetwork(currentUserId?: string) {
               'demo-u16': ['demo-u1', 'demo-u6', 'demo-u12'],
             };
             const demoIds = Object.keys(friendsMap);
-            if (currentUserId && !friendsMap[currentUserId]) {
+            if (currentUserId && currentUserId.startsWith('demo-') && !friendsMap[currentUserId]) {
               friendsMap[currentUserId] = demoIds.slice();
               demoIds.forEach((d) => {
                 friendsMap[d] = Array.from(new Set([...(friendsMap[d] || []), currentUserId]));
@@ -1150,7 +1179,8 @@ export async function seedDemoNetwork(currentUserId?: string) {
           }
         } catch {}
         // Seed comprehensive demo data (stats, achievements, saved spots, friend requests, impact)
-        if (currentUserId) {
+        // Only seed for demo user IDs — never pollute real user accounts.
+        if (currentUserId && currentUserId.startsWith('demo-')) {
           try {
             const { seedComprehensiveDemoData } = await import('./seed-comprehensive-demo');
             await seedComprehensiveDemoData(currentUserId);
@@ -1199,6 +1229,107 @@ export async function resetDemoNetwork() {
     });
   } catch {
     // ignore
+  }
+}
+
+const DEMO_CLEANUP_KEY = 'spot_demo_cleaned_v1';
+const CLEANUP_VERSION = '2';
+
+/**
+ * One-time cleanup: remove all demo-seeded data from local storage for a real user.
+ * Called once per real user on app launch; idempotent via a "cleaned" flag.
+ */
+export async function cleanupDemoDataForRealUser(userId: string) {
+  // Always clear the demo flag first, regardless of storage state (BUG A fix)
+  try { (global as any).__PERCHED_DEMO = false; } catch {}
+  try { if (typeof window !== 'undefined') (window as any).__PERCHED_DEMO = false; } catch {}
+
+  try {
+    const store = await getAsyncStorage();
+    const getItem = (key: string) => {
+      if (isWeb()) return window.localStorage.getItem(key);
+      return store ? store.getItem(key) : null;
+    };
+    const setItem = async (key: string, value: string) => {
+      if (isWeb()) { window.localStorage.setItem(key, value); return; }
+      if (store) await store.setItem(key, value);
+    };
+    const removeItem = async (key: string) => {
+      if (isWeb()) { window.localStorage.removeItem(key); return; }
+      if (store) await store.removeItem(key);
+    };
+
+    // Check if already cleaned
+    const cleaned = await getItem(DEMO_CLEANUP_KEY);
+    if (cleaned === `${userId}:${CLEANUP_VERSION}`) return;
+
+    // Remove demo checkins from checkins array (keep real ones)
+    const rawCheckins = await getItem(KEY);
+    if (rawCheckins) {
+      const arr = JSON.parse(rawCheckins);
+      const filtered = arr.filter((c: any) => {
+        const id = String(c?.id || '');
+        return !id.startsWith('demo-c') && !id.startsWith('demo-self-');
+      });
+      await setItem(KEY, JSON.stringify(filtered));
+    }
+
+    // Always purge demo entries from in-memory array (BUG D fix)
+    memory = memory.filter((c: any) => {
+      const id = String(c?.id || '');
+      return !id.startsWith('demo-c') && !id.startsWith('demo-self-');
+    });
+
+    // Remove demo keys
+    await removeItem(DEMO_SEED_KEY);
+    await removeItem('spot_users_v1');
+
+    // Clean demo friends from friends graph
+    const rawFriends = await getItem('spot_friends_v1');
+    if (rawFriends) {
+      const friendsMap = JSON.parse(rawFriends);
+      // Remove all demo-* keys and remove demo IDs from any user's friend list
+      const cleanedMap: Record<string, string[]> = {};
+      for (const [key, value] of Object.entries(friendsMap)) {
+        if (key.startsWith('demo-')) continue;
+        cleanedMap[key] = (value as string[]).filter((id: string) => !id.startsWith('demo-'));
+      }
+      await setItem('spot_friends_v1', JSON.stringify(cleanedMap));
+    }
+
+    // Remove demo-seeded stats/metrics keys
+    const demoKeys = [
+      '@perched_user_stats',
+      '@perched_saved_spots',
+      '@perched_achievements',
+    ];
+    for (const key of demoKeys) {
+      await removeItem(key);
+    }
+
+    // Remove pattern-matched keys (metrics, friend requests, comprehensive demo)
+    const prefixes = [
+      '@perched_metrics_impact_',
+      '@perched_friend_requests_',
+      '@perched_demo_comprehensive_last_seeded_at_',
+    ];
+    if (isWeb() && typeof window !== 'undefined') {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && prefixes.some((p) => k.startsWith(p))) keysToRemove.push(k);
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    } else if (store && typeof store.getAllKeys === 'function') {
+      const allKeys: string[] = await store.getAllKeys();
+      const toRemove = allKeys.filter((k: string) => prefixes.some((p) => k.startsWith(p)));
+      if (toRemove.length) await store.multiRemove(toRemove);
+    }
+
+    // Mark cleanup complete
+    await setItem(DEMO_CLEANUP_KEY, `${userId}:${CLEANUP_VERSION}`);
+  } catch {
+    // ignore — best effort
   }
 }
 
@@ -1349,11 +1480,148 @@ const ONBOARDING_KEY = 'spot_onboarding_complete_v1';
 const ONBOARDING_PROFILE_KEY = 'spot_onboarding_profile_v1';
 const NOTIF_KEY = 'spot_notifications_v1';
 const LOCATION_ENABLED_KEY = 'spot_location_enabled_v1';
+const LAST_KNOWN_LOCATION_KEY = 'spot_last_known_location_v1';
 const SAVED_SPOTS_KEY = 'spot_saved_spots_v1';
 const PLACE_EVENTS_KEY = 'spot_place_events_v1';
 const PLACE_PREFS_KEY = 'spot_place_prefs_v1';
 const PLACE_TAGS_KEY = 'spot_place_tags_v1';
 const savedSpotListeners = new Set<(spots: any[]) => void>();
+const SESSION_STORAGE_KEYS = [
+  KEY,
+  CHECKIN_COOLDOWN_KEY,
+  PENDING_CHECKIN_KEY,
+  PENDING_PROFILE_KEY,
+  CHECKIN_DRAFT_KEY,
+  USER_PROFILE_KEY,
+  STATS_KEY,
+  STATS_META_KEY,
+  NOTIF_KEY,
+  LAST_KNOWN_LOCATION_KEY,
+  SAVED_SPOTS_KEY,
+  PLACE_EVENTS_KEY,
+  PLACE_PREFS_KEY,
+  PLACE_TAGS_KEY,
+  'spot_user_v1',
+  'spot_users_v1',
+  'spot_friends_v1',
+  'spot_friend_requests_v1',
+  'spot_blocked_v1',
+  'spot_push_tokens_v1',
+  'spot_tag_votes_v1',
+  'spot_tag_variant_v1',
+  'perched_referral_code',
+  '@perched_notification_prefs',
+  '@perched_last_notification',
+  '@perched_scheduled_notification_ids',
+  '@perched_user_stats',
+  '@perched_saved_spots',
+  '@perched_achievements',
+  '@perched_sync_queue',
+  '@perched_sync_conflicts',
+  '@perched_last_sync',
+  '@perched_cache_stats',
+] as const;
+const SESSION_STORAGE_PREFIXES = [
+  '@perched_metrics_impact_',
+  '@perched_friend_requests_',
+  '@perched_demo_comprehensive_last_seeded_at_',
+  '@last_friend_check_',
+  '@offline_cache_',
+  '@perched_recommendations_',
+  '@perched_user_preferences_',
+  '@perched_challenge_progress_',
+  '@perched_challenge_rewards_',
+  '@perched_weekly_raffle_entry_',
+  '@perched_premium_status_',
+  '@perched_onboarding_progress_',
+  '@perched_referral_rewards_',
+  '@perched_referral_stats_',
+  '@perched_ambassador_application_',
+  '@perched_ambassador_profile_',
+  '@perched_campus_preferences_',
+  '@business_analytics_',
+  '@promotions_',
+  '@perched_cache_',
+] as const;
+
+async function removeKeysFromStore(store: any, keys: string[]) {
+  const uniqueKeys = Array.from(new Set(keys.filter(Boolean)));
+  if (uniqueKeys.length === 0) return;
+
+  if (isWeb()) {
+    uniqueKeys.forEach((key) => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch {}
+    });
+    return;
+  }
+
+  if (!store) return;
+  if (typeof store.multiRemove === 'function') {
+    try {
+      await store.multiRemove(uniqueKeys);
+      return;
+    } catch {
+      // Fall through to per-key removal.
+    }
+  }
+
+  await Promise.all(uniqueKeys.map(async (key) => {
+    try {
+      await store.removeItem(key);
+    } catch {}
+  }));
+}
+
+export async function clearAuthenticatedSessionState(userId?: string) {
+  const store = isWeb() ? null : await getAsyncStorage();
+  const exactKeys = new Set<string>(SESSION_STORAGE_KEYS);
+  if (userId) {
+    exactKeys.add(`@last_friend_check_${userId}`);
+    exactKeys.add(`@perched_metrics_impact_${userId}`);
+    exactKeys.add(`@perched_premium_status_${userId}`);
+    exactKeys.add(`@perched_onboarding_progress_${userId}`);
+    exactKeys.add(`@perched_referral_rewards_${userId}`);
+    exactKeys.add(`@perched_referral_stats_${userId}`);
+    exactKeys.add(`@perched_campus_preferences_${userId}`);
+    exactKeys.add(`@perched_demo_comprehensive_last_seeded_at_${userId}`);
+  }
+
+  const keysToRemove = new Set<string>(exactKeys);
+  if (isWeb()) {
+    try {
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i);
+        if (!key) continue;
+        if (SESSION_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+          keysToRemove.add(key);
+        }
+      }
+    } catch {}
+  } else if (store && typeof store.getAllKeys === 'function') {
+    try {
+      const allKeys: string[] = await store.getAllKeys();
+      allKeys.forEach((key) => {
+        if (SESSION_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+          keysToRemove.add(key);
+        }
+      });
+    } catch {}
+  }
+
+  await removeKeysFromStore(store, Array.from(keysToRemove));
+
+  memory = [];
+  pendingMemory = [];
+  pendingMemoryPreferred = false;
+  pendingProfileMemory = [];
+  try { delete (global as any)._spot_last_checkin; } catch {}
+  try { delete (global as any)._spot_stats; } catch {}
+  try { delete (global as any)._spot_stats_meta; } catch {}
+  try { delete (global as any)._spot_place_events; } catch {}
+  try { delete (global as any)._spot_place_tags; } catch {}
+}
 
 export async function recordSpotVisit(spotName: string, spotPlaceId?: string) {
   if (!spotName && !spotPlaceId) return;
@@ -1677,7 +1945,26 @@ export async function getOnboardingComplete() {
   return await readNativeJson<boolean>(ONBOARDING_KEY, false);
 }
 
-export async function setOnboardingProfile(profile: { name?: string; city?: string; campus?: string; campusOrCity?: string; campusType?: 'campus' | 'city' }) {
+export async function setOnboardingProfile(profile: {
+  name?: string;
+  city?: string;
+  campus?: string;
+  campusOrCity?: string;
+  campusType?: 'campus' | 'city';
+  coffeeIntents?: (
+    | 'hangout_friends'
+    | 'date_night'
+    | 'coffee_quality'
+    | 'pastry_snack'
+    | 'aesthetic_photos'
+    | 'quick_pickup'
+    | 'deep_work'
+    | 'quiet_reading'
+    | 'group_study'
+    | 'late_night_open'
+  )[];
+  ambiancePreference?: 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null;
+}) {
   if (isWeb()) {
     window.localStorage.setItem(ONBOARDING_PROFILE_KEY, JSON.stringify(profile || {}));
     return;
@@ -1803,4 +2090,36 @@ export async function getLocationEnabled() {
     return raw ? JSON.parse(raw) : true;
   }
   return await readNativeJson<boolean>(LOCATION_ENABLED_KEY, true);
+}
+
+export async function saveLastKnownLocation(location: { lat: number; lng: number }) {
+  if (!location) return;
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  const payload = { lat, lng, ts: Date.now() };
+  if (isWeb()) {
+    window.localStorage.setItem(LAST_KNOWN_LOCATION_KEY, JSON.stringify(payload));
+    return;
+  }
+  await writeNativeJson(LAST_KNOWN_LOCATION_KEY, payload);
+}
+
+export async function getLastKnownLocation(maxAgeMs = 90 * 24 * 60 * 60 * 1000): Promise<{ lat: number; lng: number } | null> {
+  let payload: any = null;
+  if (isWeb()) {
+    const raw = window.localStorage.getItem(LAST_KNOWN_LOCATION_KEY);
+    payload = raw ? JSON.parse(raw) : null;
+  } else {
+    payload = await readNativeJson<any>(LAST_KNOWN_LOCATION_KEY, null);
+  }
+
+  if (!payload || typeof payload !== 'object') return null;
+  const lat = Number(payload.lat);
+  const lng = Number(payload.lng);
+  const ts = typeof payload.ts === 'number' ? payload.ts : Date.now();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (maxAgeMs > 0 && Date.now() - ts > maxAgeMs) return null;
+  return { lat, lng };
 }

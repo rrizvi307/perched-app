@@ -1,8 +1,9 @@
 import { getMapsKey } from '@/services/googleMaps';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import SpotImage from '@/components/ui/spot-image';
 import { withAlpha } from '@/utils/colors';
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 type MapContextValue = {
   map: any;
@@ -32,7 +33,7 @@ function centerFromRegion(initialRegion: any) {
   if (initialRegion?.latitude && initialRegion?.longitude) {
     return { lat: initialRegion.latitude, lng: initialRegion.longitude };
   }
-  return { lat: 29.7604, lng: -95.3698 };
+  return { lat: 39.83, lng: -98.58 };
 }
 
 function toLatLng(input: any) {
@@ -51,7 +52,7 @@ export default function MapView({ children, style, initialRegion, onRegionChange
     [mapStyle],
   );
   const center = useMemo(() => centerFromRegion(initialRegion), [initialRegion]);
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<any>(null);
   const [ready, setReady] = useState(false);
 
@@ -66,7 +67,11 @@ export default function MapView({ children, style, initialRegion, onRegionChange
           center,
           zoom: 13,
           gestureHandling: 'greedy',
-          disableDefaultUI: true,
+          disableDefaultUI: false,
+          zoomControl: true,
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
         });
         nextMap.addListener('idle', () => {
           if (!onRegionChangeComplete) return;
@@ -106,14 +111,14 @@ export default function MapView({ children, style, initialRegion, onRegionChange
 
   return (
     <View style={containerStyle}>
-      <View ref={mapRef} style={StyleSheet.absoluteFill} />
-      {!ready && fallbackUri ? <Image source={{ uri: fallbackUri }} style={StyleSheet.absoluteFill} /> : null}
+      <div ref={mapRef} style={{ position: 'absolute', inset: 0 }} />
+      {!ready && fallbackUri ? <SpotImage source={fallbackUri} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}
       <MapContext.Provider value={{ map }}>{children}</MapContext.Provider>
     </View>
   );
 }
 
-export function Marker({ coordinate, title, description, pinColor, onPress }: any) {
+export function Marker({ coordinate, title, description, pinColor, onPress, label }: any) {
   const ctx = useContext(MapContext);
   const surface = useThemeColor({}, 'surface');
   const primary = useThemeColor({}, 'primary');
@@ -126,11 +131,19 @@ export function Marker({ coordinate, title, description, pinColor, onPress }: an
       position: pos,
       map: ctx.map,
       title: title || undefined,
+      label: label
+        ? {
+            text: String(label),
+            color: '#FFFFFF',
+            fontSize: '12px',
+            fontWeight: '700',
+          }
+        : undefined,
     });
     if (pinColor || primary) {
       marker.setIcon({
         path: g.maps.SymbolPath.CIRCLE,
-        scale: 6,
+        scale: label ? 10 : 6,
         fillColor: pinColor || primary,
         fillOpacity: 1,
         strokeColor: surface,
@@ -142,7 +155,7 @@ export function Marker({ coordinate, title, description, pinColor, onPress }: an
       if (listener?.remove) listener.remove();
       marker.setMap(null);
     };
-  }, [ctx?.map, coordinate, title, description, pinColor, onPress, primary, surface]);
+  }, [ctx?.map, coordinate, title, description, pinColor, onPress, label, primary, surface]);
   return null;
 }
 
