@@ -74,28 +74,34 @@ export const processReferral = functions.firestore
         return null;
       }
 
-      // Credit the referrer with 1 week of premium
+      // Credit the referrer with 1 week of premium (atomic transaction to prevent race conditions)
       const PREMIUM_WEEKS_PER_REFERRAL = 1;
       const premiumDays = PREMIUM_WEEKS_PER_REFERRAL * 7;
 
-      const referrerDoc = await db.collection('users').doc(referrerId).get();
-      const referrerData = referrerDoc.data() || {};
+      const referrerRef = db.collection('users').doc(referrerId);
+      let referrerPushToken: string | null = null;
 
-      // Calculate new premium expiration
-      const currentPremiumUntil = referrerData.premiumUntil?.toDate() || new Date();
-      const now = new Date();
-      const baseDate = currentPremiumUntil > now ? currentPremiumUntil : now;
-      const newPremiumUntil = new Date(baseDate.getTime() + premiumDays * 24 * 60 * 60 * 1000);
+      await db.runTransaction(async (transaction) => {
+        const referrerDoc = await transaction.get(referrerRef);
+        const referrerData = referrerDoc.data() || {};
+        referrerPushToken = referrerData.pushToken || null;
 
-      // Update referrer's premium status
-      await db.collection('users').doc(referrerId).update({
-        premiumUntil: admin.firestore.Timestamp.fromDate(newPremiumUntil),
-        totalReferrals: admin.firestore.FieldValue.increment(1),
-        premiumWeeksEarned: admin.firestore.FieldValue.increment(PREMIUM_WEEKS_PER_REFERRAL),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        // Calculate new premium expiration
+        const currentPremiumUntil = referrerData.premiumUntil?.toDate() || new Date();
+        const now = new Date();
+        const baseDate = currentPremiumUntil > now ? currentPremiumUntil : now;
+        const newPremiumUntil = new Date(baseDate.getTime() + premiumDays * 24 * 60 * 60 * 1000);
+
+        // Update referrer's premium status atomically
+        transaction.update(referrerRef, {
+          premiumUntil: admin.firestore.Timestamp.fromDate(newPremiumUntil),
+          totalReferrals: admin.firestore.FieldValue.increment(1),
+          premiumWeeksEarned: admin.firestore.FieldValue.increment(PREMIUM_WEEKS_PER_REFERRAL),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       });
 
-      // Update referral status
+      // Update referral status (outside transaction - idempotent)
       await snap.ref.update({
         status: 'credited',
         referrerId,
@@ -104,7 +110,6 @@ export const processReferral = functions.firestore
       });
 
       // Send notification to referrer
-      const referrerPushToken = referrerData.pushToken;
       if (referrerPushToken) {
         await sendPushNotification(
           referrerPushToken,
