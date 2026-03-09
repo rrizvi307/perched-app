@@ -74,14 +74,26 @@ export const processReferral = functions.firestore
         return null;
       }
 
-      // Credit the referrer with 1 week of premium (atomic transaction to prevent race conditions)
+      // Credit the referrer with 1 week of premium (atomic + idempotent transaction)
       const PREMIUM_WEEKS_PER_REFERRAL = 1;
       const premiumDays = PREMIUM_WEEKS_PER_REFERRAL * 7;
 
       const referrerRef = db.collection('users').doc(referrerId);
+      const referralRef = snap.ref;
       let referrerPushToken: string | null = null;
+      let alreadyProcessed = false;
 
       await db.runTransaction(async (transaction) => {
+        // Re-read the referral doc to ensure idempotency (at-least-once delivery protection)
+        const referralDoc = await transaction.get(referralRef);
+        const referralData = referralDoc.data();
+
+        if (!referralData || referralData.status !== 'pending') {
+          // Already processed by a previous invocation
+          alreadyProcessed = true;
+          return;
+        }
+
         const referrerDoc = await transaction.get(referrerRef);
         const referrerData = referrerDoc.data() || {};
         referrerPushToken = referrerData.pushToken || null;
@@ -99,15 +111,20 @@ export const processReferral = functions.firestore
           premiumWeeksEarned: admin.firestore.FieldValue.increment(PREMIUM_WEEKS_PER_REFERRAL),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        // Update referral status within same transaction
+        transaction.update(referralRef, {
+          status: 'credited',
+          referrerId,
+          premiumWeeksAwarded: PREMIUM_WEEKS_PER_REFERRAL,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       });
 
-      // Update referral status (outside transaction - idempotent)
-      await snap.ref.update({
-        status: 'credited',
-        referrerId,
-        premiumWeeksAwarded: PREMIUM_WEEKS_PER_REFERRAL,
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      if (alreadyProcessed) {
+        console.log(`Referral ${context.params.referralId} already processed, skipping`);
+        return null;
+      }
 
       // Send notification to referrer
       if (referrerPushToken) {

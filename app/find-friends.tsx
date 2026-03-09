@@ -95,10 +95,10 @@ export default function FindFriendsScreen() {
     }
   };
 
-  // Load campus suggestions on mount
+  // Load campus suggestions on mount and when campus fields change
   useEffect(() => {
     loadCampusSuggestions();
-  }, [user?.id]);
+  }, [user?.id, user?.campus, user?.campusOrCity]);
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !user?.id) return;
