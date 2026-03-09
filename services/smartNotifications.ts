@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserStats } from './gamification';
 import { track } from './analytics';
+import { haversineDistance } from '@/utils/geo';
 
 const NOTIF_PREFS_KEY = '@perched_notification_prefs';
 const LAST_NOTIF_KEY = '@perched_last_notification';
@@ -485,32 +486,6 @@ export async function getNotificationStats(): Promise<{
     console.error('Failed to get notification stats:', error);
     return {};
   }
-}
-
-// Helper function
-function haversineDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
-function toRad(degrees: number): number {
-  return degrees * (Math.PI / 180);
 }
 
 export default {

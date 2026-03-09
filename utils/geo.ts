@@ -23,6 +23,14 @@ export function haversine(a: LatLng, b: LatLng): number {
 }
 
 /**
+ * Calculate distance between two coordinates (alternate interface)
+ * @returns Distance in kilometers
+ */
+export function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  return haversine({ lat: lat1, lng: lng1 }, { lat: lat2, lng: lng2 });
+}
+
+/**
  * Format distance for display
  */
 export function formatDistance(km: number): string {

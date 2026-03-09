@@ -32,21 +32,9 @@ import * as Linking from 'expo-linking';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, InteractionManager, Platform, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { withAlpha } from '@/utils/colors';
+import { haversine } from '@/utils/geo';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
 import { formatIntentChips, parsePerchedQuery } from '@/services/perchedAssistant';
-
-function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  const toRad = (v: number) => (v * Math.PI) / 180;
-  const R = 6371; // km
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const sinDlat = Math.sin(dLat / 2) * Math.sin(dLat / 2);
-  const sinDlon = Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon), Math.sqrt(1 - (sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon)));
-  return R * c;
-}
 
 // Aggregate utility metrics from check-ins for a spot
 function aggregateSpotMetrics(checkins: any[]) {

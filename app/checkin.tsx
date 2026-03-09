@@ -18,6 +18,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useKeyboardHeight } from '@/hooks/use-keyboard-visible';
 import { withAlpha } from '@/utils/colors';
+import { haversine } from '@/utils/geo';
 import { gapStyle } from '@/utils/layout';
 import { publishCheckin } from '@/services/feedEvents';
 import { recordPlaceEventRemote, recordPlaceTagRemote } from '@/services/firebaseClient';
@@ -395,20 +396,7 @@ export default function CheckinScreen() {
 		return () => clearTimeout(timer);
 	}, [spot, caption, image, selectedTags, placeInfo, detectedPlace, wifiSpeed, noiseLevel, busyness, outletAvailability]);
 
-	function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-		const toRad = (v: number) => (v * Math.PI) / 180;
-		const R = 6371;
-		const dLat = toRad(b.lat - a.lat);
-		const dLon = toRad(b.lng - a.lng);
-		const lat1 = toRad(a.lat);
-		const lat2 = toRad(b.lat);
-		const sinDlat = Math.sin(dLat / 2) * Math.sin(dLat / 2);
-		const sinDlon = Math.sin(dLon / 2) * Math.sin(dLon / 2);
-		const c = 2 * Math.atan2(Math.sqrt(sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon), Math.sqrt(1 - (sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon)));
-		return R * c;
-	}
-
-		const autoDetectPlace = useCallback(async () => {
+	const autoDetectPlace = useCallback(async () => {
 			if (!image || detecting) return;
 			if (lastDetectRef.current === image) return;
 			lastDetectRef.current = image;
@@ -457,7 +445,7 @@ export default function CheckinScreen() {
 			}
 			const ranked = results
 				.map((r) => {
-					const dist = r.location ? haversineKm(loc, r.location) : Infinity;
+					const dist = r.location ? haversine(loc, r.location) : Infinity;
 					return { ...r, distanceKm: dist };
 				})
 				.sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
