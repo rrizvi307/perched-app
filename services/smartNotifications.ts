@@ -524,10 +524,12 @@ export async function getNotificationStats(): Promise<{
     const stats: { [type: string]: { sent: number; opened: number; openRate: number } } = {};
 
     for (const key of analyticsKeys) {
-      const parts = key.split('_');
-      if (parts.length >= 4) {
-        const type = parts[2];
-        const action = parts[3];
+      const prefix = '@notif_analytics_';
+      const suffix = key.slice(prefix.length);
+      const lastUnderscore = suffix.lastIndexOf('_');
+      if (lastUnderscore > 0) {
+        const type = suffix.slice(0, lastUnderscore);
+        const action = suffix.slice(lastUnderscore + 1);
         const countStr = await AsyncStorage.getItem(key);
         const count = countStr ? parseInt(countStr, 10) : 0;
 

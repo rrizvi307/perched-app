@@ -5,21 +5,9 @@ import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { getRecentSpots, getTopSpotsLocal } from '@/storage/local';
 import { requestForegroundLocation } from '@/services/location';
+import { haversine } from '@/utils/geo';
 import React, { useEffect, useState } from 'react';
 import { FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-
-function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  const toRad = (v: number) => (v * Math.PI) / 180;
-  const R = 6371;
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lng - a.lng);
-  const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
-  const sinDlat = Math.sin(dLat / 2) * Math.sin(dLat / 2);
-  const sinDlon = Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon), Math.sqrt(1 - (sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon)));
-  return R * c;
-}
 
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
