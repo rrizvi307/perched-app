@@ -905,6 +905,7 @@ export async function createUserRemote({ userId, name, city, campus, campusOrCit
 
   const db = fb.firestore();
   const normalizedPhone = normalizePhone(phone || '');
+  const normalizedHandle = handle ? handle.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
   const payload = sanitizeFields({
     name,
     city: city || null,
@@ -912,6 +913,7 @@ export async function createUserRemote({ userId, name, city, campus, campusOrCit
     campusOrCity: campusOrCity || city || null,
     campusType: campusType || null,
     handle: handle || null,
+    handleNormalized: normalizedHandle,
     email: email || null,
     phone: phone || null,
     phoneNormalized: normalizedPhone || null,
@@ -929,9 +931,11 @@ export async function updateUserRemote(userId: string, fields: any) {
     Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
   const db = fb.firestore();
   const normalizedPhone = fields?.phone ? normalizePhone(fields.phone) : undefined;
+  const normalizedHandle = fields?.handle ? fields.handle.toLowerCase().replace(/[^a-z0-9]/g, '') : undefined;
   const payload = sanitizeFields({
     ...fields,
     phoneNormalized: normalizedPhone ?? fields?.phoneNormalized,
+    handleNormalized: normalizedHandle ?? fields?.handleNormalized,
     updatedAt: fb.firestore.FieldValue.serverTimestamp(),
   });
   await db.collection('users').doc(userId).set(payload, { merge: true });

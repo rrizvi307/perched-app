@@ -31,39 +31,30 @@ export const processReferral = functions.firestore
 
     try {
       // Find the referrer by their referral code
-      // Referral codes are based on user handles or user IDs, normalized (uppercase, alphanumeric only)
+      // Referral codes are based on user handles or user IDs, normalized (lowercase, alphanumeric only)
       const normalizedCode = referralCode.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-      // First try exact handle match
-      let usersSnapshot = await db.collection('users')
-        .where('handle', '==', referralCode.toLowerCase())
-        .limit(1)
-        .get();
 
       let referrerId: string | null = null;
 
-      if (!usersSnapshot.empty) {
-        referrerId = usersSnapshot.docs[0].id;
+      // Query by normalized handle field (handles with _ or . get stripped in referral codes)
+      const normalizedSnapshot = await db.collection('users')
+        .where('handleNormalized', '==', normalizedCode)
+        .limit(1)
+        .get();
+
+      if (!normalizedSnapshot.empty) {
+        referrerId = normalizedSnapshot.docs[0].id;
       } else {
-        // Try finding by normalized handle (handles with _ or . get stripped in referral codes)
-        // Query users and filter by normalized handle matching
-        const allUsersSnapshot = await db.collection('users')
-          .limit(100) // Reasonable limit for matching
+        // Fallback: try exact handle match (for older users without handleNormalized)
+        const exactSnapshot = await db.collection('users')
+          .where('handle', '==', referralCode.toLowerCase())
+          .limit(1)
           .get();
 
-        for (const doc of allUsersSnapshot.docs) {
-          const userData = doc.data();
-          if (userData.handle) {
-            const normalizedHandle = userData.handle.toLowerCase().replace(/[^a-z0-9]/g, '');
-            if (normalizedHandle === normalizedCode) {
-              referrerId = doc.id;
-              break;
-            }
-          }
-        }
-
-        // Fallback: try finding by partial user ID match
-        if (!referrerId) {
+        if (!exactSnapshot.empty) {
+          referrerId = exactSnapshot.docs[0].id;
+        } else {
+          // Fallback: try finding by partial user ID match
           const usersByIdSnapshot = await db.collection('users')
             .orderBy(admin.firestore.FieldPath.documentId())
             .startAt(referralCode)

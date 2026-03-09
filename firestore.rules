@@ -257,6 +257,20 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Referrals collection (for tracking signup referrals)
+    match /referrals/{referralId} {
+      // Only Cloud Functions should read referrals
+      allow read: if false;
+
+      // Authenticated users can create referrals for themselves
+      allow create: if isAuthenticated() &&
+                      request.resource.data.newUserId == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['referralCode', 'newUserId', 'status', 'createdAt']);
+
+      // Only Cloud Functions update referrals (to mark as credited)
+      allow update, delete: if false;
+    }
+
     // Default deny
     match /{document=**} {
       allow read, write: if false;
