@@ -1,5 +1,5 @@
 import { View, StyleSheet, ViewStyle } from 'react-native';
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -22,7 +22,7 @@ interface SkeletonLoaderProps {
 /**
  * Smooth shimmer skeleton loader - feels like Notion/Linear
  */
-export function SkeletonLoader({
+export const SkeletonLoader = memo(function SkeletonLoader({
   width = '100%',
   height = 20,
   borderRadius = 8,
@@ -80,12 +80,12 @@ export function SkeletonLoader({
       />
     </View>
   );
-}
+});
 
 /**
  * Pre-built skeleton card for feed items
  */
-export function SkeletonFeedCard() {
+export const SkeletonFeedCard = memo(function SkeletonFeedCard() {
   return (
     <View style={styles.feedCard}>
       {/* Header */}
@@ -107,12 +107,12 @@ export function SkeletonFeedCard() {
       </View>
     </View>
   );
-}
+});
 
 /**
  * Profile skeleton
  */
-export function SkeletonProfile() {
+export const SkeletonProfile = memo(function SkeletonProfile() {
   return (
     <View style={styles.profileSkeleton}>
       <SkeletonLoader width={80} height={80} variant="circular" style={{ alignSelf: 'center' }} />
@@ -129,7 +129,7 @@ export function SkeletonProfile() {
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

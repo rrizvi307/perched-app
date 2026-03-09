@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet } from 'react-native';
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -28,7 +28,7 @@ interface EmptyStateProps {
  * Beautiful empty state with smooth entrance animation
  * Inspired by Linear and Notion
  */
-export function EmptyState({
+export const EmptyState = memo(function EmptyState({
   icon,
   title,
   description,
@@ -116,12 +116,12 @@ export function EmptyState({
       </Animated.View>
     </View>
   );
-}
+});
 
 /**
  * Pre-built empty states for common scenarios
  */
-export function EmptyFeed({ onCheckin }: { onCheckin: () => void }) {
+export const EmptyFeed = memo(function EmptyFeed({ onCheckin }: { onCheckin: () => void }) {
   return (
     <EmptyState
       icon="photo.on.rectangle.angled"
@@ -133,9 +133,9 @@ export function EmptyFeed({ onCheckin }: { onCheckin: () => void }) {
       onSecondary={() => {/* Navigate to explore */}}
     />
   );
-}
+});
 
-export function EmptySearch() {
+export const EmptySearch = memo(function EmptySearch() {
   return (
     <EmptyState
       icon="magnifyingglass"
@@ -143,9 +143,9 @@ export function EmptySearch() {
       description="Try adjusting your search or filters to find what you're looking for."
     />
   );
-}
+});
 
-export function EmptySpots({ onExplore }: { onExplore: () => void }) {
+export const EmptySpots = memo(function EmptySpots({ onExplore }: { onExplore: () => void }) {
   return (
     <EmptyState
       icon="map.fill"
@@ -155,7 +155,7 @@ export function EmptySpots({ onExplore }: { onExplore: () => void }) {
       onAction={onExplore}
     />
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
