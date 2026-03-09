@@ -1,22 +1,18 @@
 # Perched
 
-Discover work-friendly cafes and third places through community check-ins, live signals, and Firebase-backed social features.
+Discover work friendly cafes and third places through community checkins, live signals, and Firebase backed social features.
 
 [Website](https://perched.app)
-
----
 
 ## Overview
 
 Perched is an Expo + React Native app with Firebase Auth, Firestore, Storage, and Cloud Functions.
 Core product areas include:
 
-- Check-ins with work-quality metrics (wifi, noise, busyness, outlets, laptop friendliness)
-- Feed, explore, and profile flows with social graph features
-- Spot intelligence and external provider enrichment
-- Offline-first queueing for pending check-ins and background sync
-
----
+1. Checkins with work quality metrics (wifi, noise, busyness, outlets, laptop friendliness)
+2. Feed, explore, and profile flows with social graph features
+3. Spot intelligence and external provider enrichment
+4. Offline first queueing for pending checkins and background sync
 
 ## Project Structure
 
@@ -30,17 +26,13 @@ storage/        Local persistence and pending queue management
 functions/      Firebase Cloud Functions (TypeScript)
 ```
 
----
-
 ## Tech Stack
 
-- React Native 0.81 + Expo SDK 54
-- Expo Router
-- TypeScript
-- Firebase (Auth, Firestore, Cloud Functions, Storage)
-- Reanimated 4
-
----
+1. React Native 0.81 + Expo SDK 54
+2. Expo Router
+3. TypeScript
+4. Firebase (Auth, Firestore, Cloud Functions, Storage)
+5. Reanimated 4
 
 ## Getting Started
 
@@ -60,8 +52,6 @@ npm run android
 # Web run
 npm run web
 ```
-
----
 
 ## Environment Setup
 
@@ -91,7 +81,7 @@ OPENAI_API_KEY=
 YELP_API_KEY=
 FOURSQUARE_API_KEY=
 
-# Optional client-side provider calls in dev only
+# Optional client side provider calls in dev only
 EXPO_PUBLIC_YELP_API_KEY=
 EXPO_PUBLIC_FOURSQUARE_API_KEY=
 EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS=false
@@ -102,10 +92,8 @@ FIREBASE_ACTION_URL=
 
 Notes:
 
-- `EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS` should stay `false` for production builds.
-- Provider keys should be stored in Firebase/Cloud secrets for deployed backends.
-
----
+1. `EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS` should stay `false` for production builds.
+2. Provider keys should be stored in Firebase/Cloud secrets for deployed backends.
 
 ## Quality and Testing
 
@@ -114,8 +102,9 @@ Notes:
 npm run check:app
 
 # Cloud Functions build + tests
-npm --prefix functions run build
-npm --prefix functions test -- --runInBand
+cd functions
+npm run build
+npm test
 
 # Full gate
 npm run check:all
@@ -124,10 +113,7 @@ npm run check:all
 npm run preflight
 ```
 
----
-
 ## Firebase Ops Notes
 
-- Firebase setup and launch TODOs are tracked in [FIREBASE_SETUP_TODO.md](./FIREBASE_SETUP_TODO.md).
-- Current hosting and backend config is defined in `firebase.json` and `functions/`.
-
+1. Firebase setup and launch TODOs are tracked in [FIREBASE_SETUP_TODO.md](./FIREBASE_SETUP_TODO.md).
+2. Current hosting and backend config is defined in `firebase.json` and `functions/`.
