@@ -12,7 +12,7 @@ import * as winston from 'winston';
 import * as Joi from 'joi';
 import { validateSpotLive } from '../../services/spotSchema';
 import { normalizePhone } from '../../utils/phone';
-import { normalizeProviderError, resolveSendgridFailure, shouldThrottleSigninAlert } from './signinAlertUtils';
+import { normalizeProviderError, shouldThrottleSigninAlert } from './signinAlertUtils';
 
 admin.initializeApp();
 
@@ -78,6 +78,7 @@ const API_KEY_CACHE_TTL_MS = 60 * 1000;
 const apiKeyCache = new Map<string, { ts: number; docId: string; data: any }>();
 const LOGIN_NOTIFICATION_COLLECTION = 'login_notifications';
 const LOGIN_NOTIFICATION_STATE_COLLECTION = 'login_notification_state';
+const VERIFICATION_EMAIL_COLLECTION = 'verification_emails';
 const SIGNIN_ALERT_THROTTLE_MS = 2 * 60 * 1000;
 
 const B2B_SPOT_CHECKIN_LIMIT = 60;
@@ -722,69 +723,151 @@ async function resolveSigninAlertEmail(userId: string, fallbackEmail?: string): 
   return asId(fallbackEmail).toLowerCase();
 }
 
-async function sendSigninAlertEmail(email: string, ip?: string | null): Promise<{ sent: boolean; provider: 'sendgrid' | 'log_only'; error?: string | null }> {
+type EmailDeliveryResult = {
+  sent: boolean;
+  provider: 'resend' | 'log_only';
+  error?: string | null;
+};
+
+function escapeHtml(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildEmailActionCodeSettings(actionUrl?: string) {
+  const fallbackUrl = readFirstNonEmpty(
+    actionUrl,
+    process.env.FIREBASE_ACTION_URL,
+    runtimeConfig?.auth?.action_url,
+    runtimeConfig?.auth?.verification_action_url,
+    runtimeConfig?.email?.action_url,
+    runtimeConfig?.email?.verification_action_url,
+  );
+  return fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
+}
+
+async function resolveResendConfig(): Promise<{ apiKey: string; fromEmail: string; fromName: string } | null> {
+  let resendKey = readFirstNonEmpty(
+    process.env.RESEND_API_KEY,
+    runtimeConfig?.notifications?.resend_api_key,
+    runtimeConfig?.resend_api_key,
+  );
+  if (!resendKey) {
+    resendKey = await getCachedSecret('RESEND_API_KEY');
+  }
+  if (!resendKey) {
+    return null;
+  }
+
+  const fromEmail = readFirstNonEmpty(
+    process.env.RESEND_FROM_EMAIL,
+    runtimeConfig?.notifications?.from_email,
+    runtimeConfig?.resend_from_email,
+    'perchedappteam@gmail.com',
+  );
+  const fromName = readFirstNonEmpty(
+    process.env.RESEND_FROM_NAME,
+    runtimeConfig?.notifications?.from_name,
+    runtimeConfig?.resend_from_name,
+    'Perched',
+  );
+  return { apiKey: resendKey, fromEmail, fromName };
+}
+
+async function sendTransactionalEmail({
+  email,
+  subject,
+  text,
+  html,
+}: {
+  email: string;
+  subject: string;
+  text: string;
+  html?: string;
+}): Promise<EmailDeliveryResult> {
   const normalizedEmail = asId(email).toLowerCase();
   if (!normalizedEmail) {
     return { sent: false, provider: 'log_only', error: 'missing_email' };
   }
 
-  let sendgridKey = readFirstNonEmpty(
-    process.env.SENDGRID_API_KEY,
-    runtimeConfig?.notifications?.sendgrid_api_key,
-    runtimeConfig?.sendgrid_api_key,
-  );
-  if (!sendgridKey) {
-    sendgridKey = await getCachedSecret('SENDGRID_API_KEY');
+  const resend = await resolveResendConfig();
+  if (!resend) {
+    return { sent: false, provider: 'log_only', error: 'missing_resend_key' };
   }
-  if (!sendgridKey) {
-    return { sent: false, provider: 'log_only', error: 'missing_sendgrid_key' };
-  }
-
-  const fromEmail = readFirstNonEmpty(
-    process.env.SENDGRID_FROM_EMAIL,
-    runtimeConfig?.notifications?.from_email,
-    runtimeConfig?.sendgrid_from_email,
-    'perchedappteam@gmail.com',
-  );
-  const fromName = readFirstNonEmpty(
-    process.env.SENDGRID_FROM_NAME,
-    runtimeConfig?.notifications?.from_name,
-    runtimeConfig?.sendgrid_from_name,
-    'Perched',
-  );
-  const subject = 'New sign-in to your Perched account';
-  const text = `We detected a sign-in to your account${ip ? ` from IP ${ip}.` : '.'}
-
-If this was you, no action is needed. If you did not sign in, please reset your password.`;
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeout = setTimeout(() => controller?.abort(), 3500);
   try {
-    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${sendgridKey}`,
+        Authorization: `Bearer ${resend.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: normalizedEmail }], subject }],
-        from: { email: fromEmail, name: fromName },
-        content: [{ type: 'text/plain', value: text }],
+        from: `${resend.fromName} <${resend.fromEmail}>`,
+        to: [normalizedEmail],
+        subject,
+        text,
+        ...(html ? { html } : {}),
       }),
       signal: controller?.signal,
     });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      return { sent: false, provider: 'sendgrid', error: resolveSendgridFailure(response.status, errorText) };
+      return { sent: false, provider: 'resend', error: errorText || `resend_${response.status}` };
     }
 
-    return { sent: true, provider: 'sendgrid', error: null };
+    return { sent: true, provider: 'resend', error: null };
   } catch (error: any) {
-    return { sent: false, provider: 'sendgrid', error: normalizeProviderError(error) };
+    return { sent: false, provider: 'resend', error: normalizeProviderError(error) };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function sendSigninAlertEmail(email: string, ip?: string | null): Promise<EmailDeliveryResult> {
+  const subject = 'New sign-in to your Perched account';
+  const text = `We detected a sign-in to your account${ip ? ` from IP ${ip}.` : '.'}
+
+If this was you, no action is needed. If you did not sign in, please reset your password.`;
+  return sendTransactionalEmail({ email, subject, text });
+}
+
+async function sendVerificationEmailViaResend(
+  email: string,
+  verificationLink: string,
+  displayName?: string,
+): Promise<EmailDeliveryResult> {
+  const safeName = asId(displayName);
+  const greeting = safeName ? `Hi ${safeName},` : 'Hi,';
+  const safeLink = escapeHtml(verificationLink);
+  const subject = 'Verify your Perched email';
+  const text = `${greeting}
+
+Verify your email to finish setting up your Perched account:
+
+${verificationLink}
+
+If you did not create a Perched account, you can ignore this email.`;
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; line-height: 1.5;">
+      <p>${escapeHtml(greeting)}</p>
+      <p>Verify your email to finish setting up your Perched account.</p>
+      <p style="margin: 24px 0;">
+        <a href="${safeLink}" style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 600;">Verify email</a>
+      </p>
+      <p style="font-size: 14px; color: #4b5563;">If the button does not open, copy and paste this link into your browser:</p>
+      <p style="font-size: 14px; word-break: break-all;"><a href="${safeLink}">${safeLink}</a></p>
+      <p style="font-size: 14px; color: #4b5563;">If you did not create a Perched account, you can ignore this email.</p>
+    </div>
+  `;
+  return sendTransactionalEmail({ email, subject, text, html });
 }
 
 function normalizeIdList(value: unknown): string[] {
@@ -2269,7 +2352,7 @@ export const getCollaborativeRecommendations = functions.https.onCall(async (dat
 });
 
 export const sendSigninAlert = functions
-  .runWith({ secrets: ['SENDGRID_API_KEY'] })
+  .runWith({ secrets: ['RESEND_API_KEY'] })
   .https.onCall(async (data, context) => {
     const userId = context.auth?.uid;
     if (!userId) {
@@ -2326,6 +2409,55 @@ export const sendSigninAlert = functions
     }, { merge: true });
 
     return { ok: true, sent: delivery.sent, skipped: false, provider: delivery.provider };
+  });
+
+export const sendVerificationEmailCustom = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .https.onCall(async (data, context) => {
+    const userId = context.auth?.uid;
+    if (!userId) {
+      throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    }
+
+    const userRecord = await admin.auth().getUser(userId);
+    const email = asId(userRecord.email).toLowerCase();
+    if (!email) {
+      throw new functions.https.HttpsError('failed-precondition', 'Authenticated user does not have an email');
+    }
+    if (userRecord.emailVerified) {
+      return { ok: true, sent: false, skipped: true, reason: 'already_verified' };
+    }
+
+    const displayName = readFirstNonEmpty(
+      asId(data?.displayName),
+      asId(userRecord.displayName),
+    );
+    const actionCodeSettings = buildEmailActionCodeSettings(asId(data?.actionUrl));
+    const verificationLink = await admin.auth().generateEmailVerificationLink(
+      email,
+      actionCodeSettings,
+    );
+    const delivery = await sendVerificationEmailViaResend(email, verificationLink, displayName);
+    const now = Date.now();
+
+    await db.collection(VERIFICATION_EMAIL_COLLECTION).add({
+      userId,
+      email,
+      provider: delivery.provider,
+      status: delivery.sent ? 'sent' : 'logged',
+      error: delivery.error || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtMs: now,
+      sentAtMs: delivery.sent ? now : null,
+    });
+
+    return {
+      ok: true,
+      sent: delivery.sent,
+      skipped: false,
+      provider: delivery.provider,
+      reason: delivery.error || null,
+    };
   });
 
 /**

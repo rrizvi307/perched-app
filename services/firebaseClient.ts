@@ -2630,15 +2630,7 @@ export async function createAccountWithEmail({
   const uid = res.user.uid;
   // send verification email (non-blocking)
   try {
-    if (typeof res.user.sendEmailVerification === 'function') {
-      const actionUrl =
-        (process.env.FIREBASE_ACTION_URL as string) ||
-        ((global as any)?.FIREBASE_ACTION_URL as string) ||
-        undefined;
-      const actionCodeSettings = actionUrl ? { url: actionUrl, handleCodeInApp: true } : undefined;
-      // @ts-ignore
-      void res.user.sendEmailVerification(actionCodeSettings);
-    }
+    void sendVerificationEmail(undefined, name || res.user.displayName || undefined);
   } catch (e) {
     // ignore
   }
@@ -2695,13 +2687,29 @@ export async function confirmPhoneAuth(verificationId: string, code: string) {
   return res.user;
 }
 
-export async function sendVerificationEmail(actionUrl?: string) {
+export async function sendVerificationEmail(actionUrl?: string, displayName?: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
   const auth = fb.auth();
   const user = auth.currentUser;
   if (!user) throw new Error('No authenticated user to send verification to');
   try {
+    const callableResult = await callFirebaseCallable<{
+      ok?: boolean;
+      sent?: boolean;
+      skipped?: boolean;
+      reason?: string | null;
+    }>('sendVerificationEmailCustom', {
+      ...(actionUrl ? { actionUrl } : {}),
+      ...(displayName ? { displayName } : {}),
+    });
+    if (callableResult?.sent) {
+      return;
+    }
+    if (callableResult?.skipped && callableResult?.reason === 'already_verified') {
+      return;
+    }
+
     const fallbackUrl =
       actionUrl ||
       (process.env.FIREBASE_ACTION_URL as string) ||
