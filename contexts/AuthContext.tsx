@@ -1,4 +1,5 @@
 import { clearPushToken, createAccountWithEmail, deleteCurrentUser, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, resetFirebaseClientCaches, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
+import { buildPasswordResetTelemetry } from '@/services/analyticsPrivacy';
 import { devLog } from '@/services/logger';
 import { cleanupDemoDataForRealUser, clearAuthenticatedSessionState, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
@@ -97,15 +98,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
     return { publicData, privateData };
   };
-  const buildPasswordResetTelemetry = (email: string) => {
-    const normalized = String(email || '').trim().toLowerCase();
-    const domain = normalized.includes('@') ? normalized.split('@')[1] || '' : '';
-    return {
-      email_present: Boolean(normalized),
-      email_domain: domain || undefined,
-    };
-  };
-
   // initialize firebase auth listener when possible
   React.useEffect(() => {
     // If Firebase is configured, subscribe to its auth state.

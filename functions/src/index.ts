@@ -12,6 +12,7 @@ import * as winston from 'winston';
 import * as Joi from 'joi';
 import { validateSpotLive } from '../../services/spotSchema';
 import { normalizePhone } from '../../utils/phone';
+import { normalizeProviderError, resolveSendgridFailure, shouldThrottleSigninAlert } from './signinAlertUtils';
 
 admin.initializeApp();
 
@@ -775,12 +776,12 @@ If this was you, no action is needed. If you did not sign in, please reset your 
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      return { sent: false, provider: 'sendgrid', error: errorText || `sendgrid_${response.status}` };
+      return { sent: false, provider: 'sendgrid', error: resolveSendgridFailure(response.status, errorText) };
     }
 
     return { sent: true, provider: 'sendgrid', error: null };
   } catch (error: any) {
-    return { sent: false, provider: 'sendgrid', error: error?.message || String(error) };
+    return { sent: false, provider: 'sendgrid', error: normalizeProviderError(error) };
   } finally {
     clearTimeout(timeout);
   }
@@ -2301,7 +2302,7 @@ export const sendSigninAlert = functions
     const stateDoc = await stateRef.get();
     const lastSentAtMs = typeof stateDoc.data()?.lastSentAtMs === 'number' ? stateDoc.data()?.lastSentAtMs : 0;
     const now = Date.now();
-    if (lastSentAtMs && now - lastSentAtMs < SIGNIN_ALERT_THROTTLE_MS) {
+    if (shouldThrottleSigninAlert(lastSentAtMs, now, SIGNIN_ALERT_THROTTLE_MS)) {
       return { ok: true, sent: false, skipped: true, reason: 'throttled' };
     }
 
