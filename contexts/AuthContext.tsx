@@ -1,9 +1,8 @@
-import { clearPushToken, createAccountWithEmail, deleteCurrentUser, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, resetFirebaseClientCaches, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
+import { createAccountWithEmail, deleteAccountAndData, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
 import { buildPasswordResetTelemetry } from '@/services/analyticsPrivacy';
 import { devLog } from '@/services/logger';
-import { cleanupDemoDataForRealUser, clearAuthenticatedSessionState, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
+import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
-import { clearNotificationHandlers } from '@/services/notifications';
 import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import React, { createContext, useContext, useState } from 'react';
@@ -519,23 +518,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut() {
-    const currentUserId = user?.id;
     const fb = ensureFirebase();
-    try {
-      if (currentUserId) {
-        await clearPushToken(currentUserId);
-      }
-    } catch {}
-    try {
-      await clearNotificationHandlers();
-    } catch {}
     try {
       if (fb) await fb.auth().signOut();
     } catch {}
-    await clearAuthenticatedSessionState(currentUserId || undefined).catch(() => {});
-    resetFirebaseClientCaches();
+    // keep local user cache so local/demo accounts can sign back in
     setUser(null);
-    await logEvent('user_signed_out', currentUserId);
+    await logEvent('user_signed_out', user?.id);
   }
 
   async function changePassword(newPassword: string, currentPassword?: string) {
@@ -558,16 +547,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function deleteAccount(currentPassword?: string) {
-    try {
-      const fb = getFirebaseOrThrow();
-      if (currentPassword && user?.email) {
-        try {
-          await reauthenticateCurrentUser({ email: user.email, password: currentPassword } as any);
-        } catch (reauthErr) {
-          throw reauthErr;
+    if (!isFirebaseConfigured()) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.removeItem('spot_user_v1');
         }
-      }
-      await deleteCurrentUser();
+      } catch {}
+      setUser(null);
+      await logEvent('user_deleted_local', user?.id);
+      return;
+    }
+
+    try {
+      getFirebaseOrThrow();
+      await deleteAccountAndData({ password: currentPassword });
     } catch (e) {
       devLog('deleteAccount error', e);
       throw e;

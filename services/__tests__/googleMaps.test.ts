@@ -1,6 +1,11 @@
 import Constants from 'expo-constants';
 import { ensureFirebase } from '../firebaseClient';
-import { getPlaceDetails, searchPlacesNearby } from '../googleMaps';
+import {
+  getGoogleMapsCacheStats,
+  getPlaceDetails,
+  resetGoogleMapsCacheStats,
+  searchPlacesNearby,
+} from '../googleMaps';
 
 jest.mock('expo-constants', () => ({
   __esModule: true,
@@ -21,6 +26,7 @@ function mkFetchResponse(payload: any, ok = true) {
 describe('googleMaps transport', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetGoogleMapsCacheStats();
     (global as any).fetch = jest.fn();
     (global as any).GOOGLE_MAPS_API_KEY = undefined;
     process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'true';
@@ -211,5 +217,35 @@ describe('googleMaps transport', () => {
         }),
       })
     );
+  });
+
+  it('tracks details cache counters for misses, sets, and hits', async () => {
+    (ensureFirebase as jest.Mock).mockReturnValue({
+      auth: jest.fn(() => ({
+        currentUser: {
+          getIdToken: jest.fn(async () => 'token-789'),
+        },
+      })),
+    });
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        place: {
+          placeId: 'counter-place',
+          name: 'Counter Cafe',
+        },
+      })
+    );
+
+    const first = await getPlaceDetails('counter-place');
+    const second = await getPlaceDetails('counter-place');
+
+    expect(first?.name).toBe('Counter Cafe');
+    expect(second?.name).toBe('Counter Cafe');
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+
+    const stats = getGoogleMapsCacheStats();
+    expect(stats.details.misses).toBeGreaterThanOrEqual(1);
+    expect(stats.details.sets).toBeGreaterThanOrEqual(1);
+    expect(stats.details.hits).toBeGreaterThanOrEqual(1);
   });
 });

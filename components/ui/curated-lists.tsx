@@ -66,7 +66,6 @@ export default function CuratedLists({ onSelectList, compact = false }: CuratedL
 // Mood selector for quick discovery
 export function MoodSelector({ onSelectMood }: { onSelectMood: (mood: string) => void }) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const surface = useThemeColor({}, 'surface');
   const border = useThemeColor({}, 'border');
 
@@ -109,7 +108,6 @@ export function LifestyleQuickFilters({ onSelectFilter, activeFilters }: {
   activeFilters: string[];
 }) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
 

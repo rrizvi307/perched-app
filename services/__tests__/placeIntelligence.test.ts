@@ -1,6 +1,10 @@
 import Constants from 'expo-constants';
 import { ensureFirebase } from '../firebaseClient';
-import { buildPlaceIntelligence } from '../placeIntelligence';
+import {
+  buildPlaceIntelligence,
+  getPlaceIntelligenceCacheStats,
+  resetPlaceIntelligenceCacheStats,
+} from '../placeIntelligence';
 
 jest.mock('../firebaseClient', () => ({
   ensureFirebase: jest.fn(() => ({
@@ -38,6 +42,7 @@ function mkFetchResponse(payload: any, ok = true) {
 describe('buildPlaceIntelligence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetPlaceIntelligenceCacheStats();
     process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'true';
     (global as any).PLACE_INTEL_ENDPOINT = 'https://intel.test/proxy';
     (global as any).FIREBASE_APP_CHECK_TOKEN = undefined;
@@ -658,6 +663,23 @@ describe('buildPlaceIntelligence', () => {
 
     expect(second).toEqual(first);
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks intelligence cache counters for misses, sets, and hits', async () => {
+    const input = {
+      placeName: 'Cache Counter Spot',
+      placeId: 'cache-counter-1',
+      location: { lat: 10, lng: 11 },
+      checkins: [mkCheckin()],
+    };
+
+    await buildPlaceIntelligence(input);
+    await buildPlaceIntelligence(input);
+
+    const stats = getPlaceIntelligenceCacheStats();
+    expect(stats.intelligence.misses).toBeGreaterThanOrEqual(1);
+    expect(stats.intelligence.sets).toBeGreaterThanOrEqual(1);
+    expect(stats.intelligence.hits).toBeGreaterThanOrEqual(1);
   });
 
   it('deduplicates in-flight proxy requests for same key', async () => {

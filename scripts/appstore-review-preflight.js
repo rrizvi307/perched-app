@@ -74,6 +74,7 @@ function main() {
   check(exists(['services', 'mapsLinks.ts']), 'maps link service exists', 'services/mapsLinks.ts missing');
   check(exists(['app', 'settings.tsx']), 'settings screen exists', 'app/settings.tsx missing');
   check(exists(['app', 'support.tsx']), 'support screen exists', 'app/support.tsx missing');
+  check(exists(['app', 'delete-account.tsx']), 'delete account screen exists', 'app/delete-account.tsx missing');
 
   let appJson = null;
   try {
@@ -187,6 +188,18 @@ function main() {
       contains(settings, "router.push('/support')"),
     'Settings links route to Privacy/Terms/Support screens',
     'One or more Settings legal/support routes are missing'
+  );
+  check(
+    contains(settings, "/delete-account"),
+    'Settings exposes an in-app delete account route',
+    'Settings must expose an in-app delete account route'
+  );
+
+  const authContext = readText(['contexts', 'AuthContext.tsx']);
+  check(
+    contains(authContext, 'deleteAccountAndData('),
+    'AuthContext uses full account deletion cleanup',
+    'AuthContext deleteAccount must call deleteAccountAndData()'
   );
 
   const resubmissionDocPath = firstExisting([

@@ -162,6 +162,24 @@ const weatherInflight = new Map<string, Promise<ContextSignal[]>>();
 const reviewNlpCache = new Map<string, { ts: number; payload: ReviewNLPResult | null }>();
 const reviewNlpInflight = new Map<string, Promise<ReviewNLPResult | null>>();
 const telemetryThrottle = new Map<string, number>();
+type PlaceIntelCacheBucket = 'intelligence' | 'proxySignals' | 'weatherSignals' | 'reviewNlp' | 'telemetryThrottle';
+type PlaceIntelCacheCounter = { hits: number; misses: number; sets: number; evictions: number };
+const placeIntelCacheCounters: Record<PlaceIntelCacheBucket, PlaceIntelCacheCounter> = {
+  intelligence: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  proxySignals: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  weatherSignals: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  reviewNlp: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  telemetryThrottle: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+};
+
+function getPlaceIntelCacheBucket(map: unknown): PlaceIntelCacheBucket | null {
+  if (map === intelligenceCache) return 'intelligence';
+  if (map === proxySignalCache) return 'proxySignals';
+  if (map === weatherSignalCache) return 'weatherSignals';
+  if (map === reviewNlpCache) return 'reviewNlp';
+  if (map === telemetryThrottle) return 'telemetryThrottle';
+  return null;
+}
 
 function touchMapEntry<T>(map: Map<string, T>, key: string, value: T) {
   map.delete(key);
@@ -169,27 +187,37 @@ function touchMapEntry<T>(map: Map<string, T>, key: string, value: T) {
 }
 
 function pruneMap<T>(map: Map<string, T>, maxEntries: number) {
+  const bucket = getPlaceIntelCacheBucket(map);
   while (map.size > maxEntries) {
     const oldestKey = map.keys().next().value;
     if (!oldestKey) break;
     map.delete(oldestKey);
+    if (bucket) placeIntelCacheCounters[bucket].evictions += 1;
   }
 }
 
 function getFreshCacheEntry<T extends { ts: number }>(map: Map<string, T>, key: string, ttlMs: number) {
+  const bucket = getPlaceIntelCacheBucket(map);
   const cached = map.get(key);
-  if (!cached) return null;
+  if (!cached) {
+    if (bucket) placeIntelCacheCounters[bucket].misses += 1;
+    return null;
+  }
   if (Date.now() - cached.ts >= ttlMs) {
     map.delete(key);
+    if (bucket) placeIntelCacheCounters[bucket].misses += 1;
     return null;
   }
   touchMapEntry(map, key, cached);
+  if (bucket) placeIntelCacheCounters[bucket].hits += 1;
   return cached;
 }
 
 function setBoundedMapEntry<T>(map: Map<string, T>, key: string, value: T, maxEntries: number) {
+  const bucket = getPlaceIntelCacheBucket(map);
   map.delete(key);
   map.set(key, value);
+  if (bucket) placeIntelCacheCounters[bucket].sets += 1;
   pruneMap(map, maxEntries);
 }
 
@@ -2058,5 +2086,41 @@ export async function buildPlaceIntelligence(input: BuildIntelligenceInput): Pro
     async () => buildPlaceIntelligenceCore(input),
     getFallbackPlaceIntelligence()
   );
+}
+
+export function getPlaceIntelligenceCacheStats() {
+  return {
+    intelligence: {
+      ...placeIntelCacheCounters.intelligence,
+      size: intelligenceCache.size,
+      max: INTELLIGENCE_CACHE_MAX,
+    },
+    proxySignals: {
+      ...placeIntelCacheCounters.proxySignals,
+      size: proxySignalCache.size,
+      max: PROXY_SIGNAL_CACHE_MAX,
+    },
+    weatherSignals: {
+      ...placeIntelCacheCounters.weatherSignals,
+      size: weatherSignalCache.size,
+      max: WEATHER_SIGNAL_CACHE_MAX,
+    },
+    reviewNlp: {
+      ...placeIntelCacheCounters.reviewNlp,
+      size: reviewNlpCache.size,
+      max: REVIEW_NLP_CACHE_MAX,
+    },
+    telemetryThrottle: {
+      ...placeIntelCacheCounters.telemetryThrottle,
+      size: telemetryThrottle.size,
+      max: TELEMETRY_THROTTLE_MAX,
+    },
+  };
+}
+
+export function resetPlaceIntelligenceCacheStats() {
+  (Object.keys(placeIntelCacheCounters) as PlaceIntelCacheBucket[]).forEach((key) => {
+    placeIntelCacheCounters[key] = { hits: 0, misses: 0, sets: 0, evictions: 0 };
+  });
 }
 

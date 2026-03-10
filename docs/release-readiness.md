@@ -20,6 +20,8 @@ This is the public-safe release tracker for the current push toward App Store su
 
 - Functions build and test gate is part of the release workflow.
 - App Store preflight checks for feed actions and iOS maps flow are passing.
+- In-app account deletion now exists and routes through the full cleanup path.
+- Custom verification emails and sign-in alerts are running through the production transactional email provider.
 - Posting eligibility rules are enforced for production users.
 - Notification scheduling reliability fixes are in place.
 - Security-rules emulator coverage exists and is part of the repo workflow.
@@ -47,7 +49,8 @@ This is the public-safe release tracker for the current push toward App Store su
 
 1. Upload valid native iPad screenshots in App Store Connect.
 2. Run an iPad release-build smoke test and save the evidence outside the repo if needed.
-3. Submit the reviewer response once the new build and screenshots are ready.
+3. Test signup, verification email, resend verification, password reset, sign-in alert, and account deletion on a release build.
+4. Submit the reviewer response once the new build and screenshots are ready.
 
 ## Recommended Working Loop
 

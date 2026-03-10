@@ -16,7 +16,8 @@ export function getMapsKey() {
     (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string) ||
     (process.env.GOOGLE_MAPS_API_KEY as string) ||
     (typeof global !== 'undefined' ? (global as any).GOOGLE_MAPS_API_KEY : '') ||
-    (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY
+    (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY ||
+    (Constants as any)?.manifest?.extra?.GOOGLE_MAPS_API_KEY
   );
 }
 
@@ -88,6 +89,19 @@ const geocodeInflight = new Map<string, Promise<string | null>>();
 const SEARCH_CACHE_MAX = 120;
 const DETAILS_CACHE_MAX = 80;
 const GEOCODE_CACHE_MAX = 64;
+type GoogleMapsCacheBucket = 'search' | 'details' | 'geocode';
+type GoogleMapsCacheCounter = { hits: number; misses: number; sets: number; evictions: number };
+const googleMapsCacheCounters: Record<GoogleMapsCacheBucket, GoogleMapsCacheCounter> = {
+  search: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  details: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+  geocode: { hits: 0, misses: 0, sets: 0, evictions: 0 },
+};
+
+function getCacheBucket<T>(cache: Map<string, { ts: number; payload: T }>): GoogleMapsCacheBucket {
+  if (cache === detailsCache) return 'details';
+  if (cache === geocodeCache) return 'geocode';
+  return 'search';
+}
 
 function touchCacheEntry<T>(cache: Map<string, { ts: number; payload: T }>, key: string, entry: { ts: number; payload: T }) {
   cache.delete(key);
@@ -95,36 +109,49 @@ function touchCacheEntry<T>(cache: Map<string, { ts: number; payload: T }>, key:
 }
 
 function pruneCache<T>(cache: Map<string, { ts: number; payload: T }>, maxEntries: number) {
+  const bucket = getCacheBucket(cache);
   while (cache.size > maxEntries) {
     const oldestKey = cache.keys().next().value;
     if (!oldestKey) break;
     cache.delete(oldestKey);
+    googleMapsCacheCounters[bucket].evictions += 1;
   }
 }
 
 function cacheGet<T>(cache: Map<string, { ts: number; payload: T }>, key: string, ttlMs: number) {
+  const bucket = getCacheBucket(cache);
   const cached = cache.get(key);
   if (cached && Date.now() - cached.ts < ttlMs) {
     touchCacheEntry(cache, key, cached);
+    googleMapsCacheCounters[bucket].hits += 1;
     return cached.payload;
   }
+  googleMapsCacheCounters[bucket].misses += 1;
   return null;
 }
 
 function cacheGetEntry<T>(cache: Map<string, { ts: number; payload: T }>, key: string, ttlMs: number) {
+  const bucket = getCacheBucket(cache);
   const cached = cache.get(key);
-  if (!cached) return null;
+  if (!cached) {
+    googleMapsCacheCounters[bucket].misses += 1;
+    return null;
+  }
   if (Date.now() - cached.ts >= ttlMs) {
     cache.delete(key);
+    googleMapsCacheCounters[bucket].misses += 1;
     return null;
   }
   touchCacheEntry(cache, key, cached);
+  googleMapsCacheCounters[bucket].hits += 1;
   return cached;
 }
 
 function cacheSet<T>(cache: Map<string, { ts: number; payload: T }>, key: string, payload: T, maxEntries: number) {
+  const bucket = getCacheBucket(cache);
   cache.delete(key);
   cache.set(key, { ts: Date.now(), payload });
+  googleMapsCacheCounters[bucket].sets += 1;
   pruneCache(cache, maxEntries);
 }
 
@@ -688,4 +715,38 @@ export async function searchLocations(query: string, kind: 'campus' | 'city', li
   });
 }
 
-export default { searchPlaces, getPlaceDetails, searchPlacesNearby, searchLocations, reverseGeocodeCity };
+export function getGoogleMapsCacheStats() {
+  return {
+    search: {
+      ...googleMapsCacheCounters.search,
+      size: searchCache.size,
+      max: SEARCH_CACHE_MAX,
+    },
+    details: {
+      ...googleMapsCacheCounters.details,
+      size: detailsCache.size,
+      max: DETAILS_CACHE_MAX,
+    },
+    geocode: {
+      ...googleMapsCacheCounters.geocode,
+      size: geocodeCache.size,
+      max: GEOCODE_CACHE_MAX,
+    },
+  };
+}
+
+export function resetGoogleMapsCacheStats() {
+  (Object.keys(googleMapsCacheCounters) as GoogleMapsCacheBucket[]).forEach((key) => {
+    googleMapsCacheCounters[key] = { hits: 0, misses: 0, sets: 0, evictions: 0 };
+  });
+}
+
+export default {
+  searchPlaces,
+  getPlaceDetails,
+  searchPlacesNearby,
+  searchLocations,
+  reverseGeocodeCity,
+  getGoogleMapsCacheStats,
+  resetGoogleMapsCacheStats,
+};

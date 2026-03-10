@@ -8,7 +8,7 @@
     "android": "expo run:android",
     "ios": "RCT_METRO_PORT=8081 expo run:ios --port 8081",
     "web": "expo start --web",
-    "lint": "expo lint",
+    "lint": "expo lint --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "build:ios:export": "npm exec -- expo export --platform ios --clear --output-dir .expo-export",
     "build:mobile": "npm run build:ios:export",
@@ -114,11 +114,8 @@
     "npm": ">=10"
   },
   "overrides": {
-    "@tootallnate/once": "3.0.1",
-    "express-rate-limit": "8.2.2",
     "fast-xml-parser": "5.4.1",
-    "minimatch": "10.2.4",
-    "tar": "7.5.10"
+    "minimatch": "10.2.4"
   },
   "private": true
 }

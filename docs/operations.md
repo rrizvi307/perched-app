@@ -20,6 +20,7 @@ This is the single runbook for Firebase setup, launch operations, and App Store 
 6. Re-deploy rules and functions whenever schema or security-sensitive fields change.
 7. Add billing budget alerts before large-scale testing or launch.
 8. Smoke test auth, check-in creation, photo upload, and account deletion on a release build.
+9. Re-test verification email delivery and sign-in alert delivery whenever the transactional email setup changes.
 
 ## App Store Resubmission Checklist
 

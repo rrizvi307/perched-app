@@ -71,7 +71,6 @@ function SignatureDrinks({ data }: { data: LifestyleSpotData }) {
 
 function DrinkSpecialties({ data }: { data: LifestyleSpotData }) {
   const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
 
   if (!data.drinkSpecialties?.length) return null;
 
@@ -156,9 +155,6 @@ function AccessibilityFeatures({ data }: { data: LifestyleSpotData }) {
 }
 
 function WaitTimeInfo({ data }: { data: LifestyleSpotData }) {
-  const text = useThemeColor({}, 'text');
-  const muted = useThemeColor({}, 'muted');
-
   if (!data.typicalWaitMinutes && !data.reservationRecommended) return null;
 
   return (
@@ -253,7 +249,6 @@ export default function LifestyleSpotInfo({ data, compact = false }: LifestyleSp
 // Compact badges for list items
 export function LifestyleBadges({ data }: { data: LifestyleSpotData }) {
   const badge = getDiscoveryBadge(data);
-  const muted = useThemeColor({}, 'muted');
 
   return (
     <View style={styles.compactBadges}>
