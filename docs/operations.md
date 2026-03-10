@@ -14,12 +14,12 @@ This is the single runbook for Firebase setup, launch operations, and App Store 
 
 1. Enable Phone Auth before beta or wider release.
 2. Confirm production auth domains and mobile app fingerprints are configured.
-3. Set the Firebase project display name to the production product name.
-4. Point auth action links at the production domain.
-5. Configure the transactional email provider and store its credentials in Firebase or cloud secret storage.
-6. Connect the production domain to Firebase Hosting if auth action links or web hosting depend on it.
-7. Re-deploy rules and functions whenever schema or security-sensitive fields change.
-8. Add billing budget alerts before large-scale testing or launch.
+3. Set the Firebase project display name and point auth action links at the production domain.
+4. Configure the transactional email provider and store its credentials only in managed secret storage.
+5. Connect the production domain to Firebase Hosting if auth action links or web hosting depend on it.
+6. Re-deploy rules and functions whenever schema or security-sensitive fields change.
+7. Add billing budget alerts before large-scale testing or launch.
+8. Smoke test auth, check-in creation, photo upload, and account deletion on a release build.
 
 ## App Store Resubmission Checklist
 
@@ -73,6 +73,12 @@ We addressed all reported issues in the new build:
 Please re-review this submission. Thank you.
 ```
 
+## Related Submission Docs
+
+- App Store metadata and reviewer notes: [app-store.md](./app-store.md)
+- Current release tracker: [release-readiness.md](./release-readiness.md)
+- Privacy and terms copy: [privacy-policy.md](./privacy-policy.md), [terms-of-service.md](./terms-of-service.md)
+
 ## Command Gate
 
 ```bash
@@ -83,5 +89,5 @@ npm run check:all
 ## Public Repo Safety
 
 - Keep only placeholder env var names in repo docs. Do not paste live secrets.
-- Keep internal audit findings, migration commands that require service accounts, local machine paths, and personal contact addresses out of public GitHub docs.
+- Keep internal audit findings, service-account workflows, local machine paths, and personal contact addresses out of public GitHub docs.
 - If a document describes current security gaps or internal recovery steps, treat it as private unless it has been deliberately redacted.
