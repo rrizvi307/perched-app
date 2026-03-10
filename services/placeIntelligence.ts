@@ -1254,11 +1254,16 @@ function buildCrowdForecast(checkins: any[], baseConfidence: number): CrowdForec
   for (let offset = 0; offset < 6; offset += 1) {
     const hour = (currentHour + offset) % 24;
     const countNorm = clamp(hourlyCounts[hour] / maxCount, 0, 1);
-    const busyAvg = hourlyBusynessCounts[hour]
+    const hasHourlyBusyness = hourlyBusynessCounts[hour] > 0;
+    const busyAvg = hasHourlyBusyness
       ? hourlyBusynessSums[hour] / hourlyBusynessCounts[hour]
       : globalBusyness;
     const busyNorm = clamp(busyAvg / 5, 0, 1);
-    const score = clamp(0.65 * countNorm + 0.35 * busyNorm, 0, 1);
+    // Sample volume should strengthen confidence, not override explicit low/high
+    // busyness ratings for the hour itself.
+    const score = hasHourlyBusyness
+      ? busyNorm
+      : clamp(0.45 * countNorm + 0.55 * busyNorm, 0, 1);
     const localConfidence = clamp(baseConfidence * 0.6 + countNorm * 0.4, 0.1, 0.95);
 
     points.push({
