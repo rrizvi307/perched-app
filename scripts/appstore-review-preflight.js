@@ -21,6 +21,13 @@ function exists(parts) {
   return fs.existsSync(relPath(parts));
 }
 
+function firstExisting(partsList) {
+  for (const parts of partsList) {
+    if (exists(parts)) return parts;
+  }
+  return null;
+}
+
 function check(condition, okMessage, failMessage) {
   if (condition) {
     process.stdout.write(`PASS  ${okMessage}\n`);
@@ -182,15 +189,19 @@ function main() {
     'One or more Settings legal/support routes are missing'
   );
 
-  const hasResubmissionDoc = exists(['APPSTORE_RESUBMISSION_CHECKLIST.md']);
+  const resubmissionDocPath = firstExisting([
+    ['docs', 'operations.md'],
+    ['APPSTORE_RESUBMISSION_CHECKLIST.md'],
+  ]);
+  const hasResubmissionDoc = Boolean(resubmissionDocPath);
   check(
     hasResubmissionDoc,
     'App Store resubmission checklist doc exists',
-    'Missing APPSTORE_RESUBMISSION_CHECKLIST.md'
+    'Missing docs/operations.md (or legacy APPSTORE_RESUBMISSION_CHECKLIST.md)'
   );
 
   if (hasResubmissionDoc) {
-    const doc = readText(['APPSTORE_RESUBMISSION_CHECKLIST.md']);
+    const doc = readText(resubmissionDocPath);
     check(
       contains(doc, '2.1.0') && contains(doc, '4.0.0') && contains(doc, '2.3.3'),
       'Resubmission doc tracks all cited App Review guidelines',

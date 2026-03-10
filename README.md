@@ -113,7 +113,10 @@ npm run check:all
 npm run preflight
 ```
 
-## Firebase Ops Notes
+---
 
-1. Firebase setup and launch TODOs are tracked in [FIREBASE_SETUP_TODO.md](./FIREBASE_SETUP_TODO.md).
-2. Current hosting and backend config is defined in `firebase.json` and `functions/`.
+## Documentation
+
+- Consolidated setup, launch, and App Store runbook: [docs/operations.md](./docs/operations.md)
+- Docs index: [docs/README.md](./docs/README.md)
+- Current hosting and backend config is defined in `firebase.json` and `functions/`.
