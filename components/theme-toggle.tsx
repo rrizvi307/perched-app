@@ -1,4 +1,5 @@
 import { Colors } from '@/constants/theme';
+import { tokens } from '@/constants/tokens';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import React from 'react';
@@ -24,7 +25,7 @@ export function ThemeToggle() {
 }
 
 const styles = StyleSheet.create({
-  btn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, borderWidth: 1 },
+  btn: { paddingHorizontal: tokens.space.s12, paddingVertical: tokens.space.s6, borderRadius: tokens.radius.r10, borderWidth: 1 },
 });
 
 export default ThemeToggle;

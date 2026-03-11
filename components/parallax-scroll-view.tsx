@@ -1,4 +1,5 @@
 import React from 'react';
+import { tokens } from '@/constants/tokens';
 import { ScrollView, StyleSheet, View, type ViewStyle } from 'react-native';
 
 type Props = {
@@ -19,14 +20,14 @@ export default function ParallaxScrollView({ headerImage, children, style }: Pro
 
 const styles = StyleSheet.create({
   container: {
-    paddingBottom: 24,
+    paddingBottom: tokens.space.s24,
   },
   header: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: tokens.space.s8,
   },
   content: {
-    paddingHorizontal: 24,
+    paddingHorizontal: tokens.space.s24,
   },
 });

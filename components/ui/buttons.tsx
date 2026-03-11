@@ -38,7 +38,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: tokens.space.s16,
-    paddingHorizontal: 20,
+    paddingHorizontal: tokens.space.s20,
     // subtle elevation
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },

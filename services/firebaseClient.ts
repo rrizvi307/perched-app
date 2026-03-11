@@ -132,6 +132,25 @@ const SOCIAL_GRAPH_FIELDS = ['friends', 'closeFriends', 'blocked'] as const;
 const PRIVATE_USER_PROFILE_FIELDS = ['email', 'phone', 'phoneNormalized', 'pushToken'];
 const LEGACY_PUBLIC_USERS_FIELDS = [...PUBLIC_PROFILE_FIELDS, ...SOCIAL_GRAPH_FIELDS, ...PRIVATE_USER_PROFILE_FIELDS];
 
+type SocialGraphRequestRecord = {
+  id: string;
+  fromId: string;
+  toId: string;
+  status?: string;
+  createdAt?: any;
+  respondedAt?: any;
+};
+
+type SecureSocialGraphSnapshot = {
+  friends?: string[];
+  closeFriends?: string[];
+  blocked?: string[];
+  incomingRequests?: SocialGraphRequestRecord[];
+  outgoingRequests?: SocialGraphRequestRecord[];
+  users?: any[];
+  suggestions?: any[];
+};
+
 type SplitUserFields = {
   publicProfileFields: Record<string, any>;
   privateFields: Record<string, any>;
@@ -151,6 +170,21 @@ function stripPrivateUserFields<T extends Record<string, any> | null | undefined
   });
   if (id && !next.id) next.id = id;
   return next;
+}
+
+function normalizeRequestRecord(input: any): SocialGraphRequestRecord | null {
+  const id = typeof input?.id === 'string' ? input.id.trim() : '';
+  const fromId = typeof input?.fromId === 'string' ? input.fromId.trim() : '';
+  const toId = typeof input?.toId === 'string' ? input.toId.trim() : '';
+  if (!id || !fromId || !toId) return null;
+  return {
+    id,
+    fromId,
+    toId,
+    status: typeof input?.status === 'string' ? input.status : 'pending',
+    createdAt: input?.createdAt ?? null,
+    respondedAt: input?.respondedAt ?? null,
+  };
 }
 
 function shouldConfigureWebAuthPersistence() {
@@ -377,7 +411,8 @@ async function getSanitizedUserById(db: any, userId: string) {
 
 async function getSocialGraphDoc(db: any, userId: string) {
   const doc = await db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).get();
-  const data = doc.exists ? (doc.data() || {}) : {};
+  const legacyDoc = doc.exists ? null : await db.collection(USERS_COLLECTION).doc(userId).get().catch(() => null);
+  const data = doc.exists ? (doc.data() || {}) : legacyDoc?.exists ? (legacyDoc.data() || {}) : {};
   return {
     friends: normalizeStringArray(data.friends),
     closeFriends: normalizeStringArray(data.closeFriends),
@@ -1676,6 +1711,67 @@ async function callSocialGraphMutation(action: string, payload: Record<string, a
   return response?.data || null;
 }
 
+export async function getSocialGraphSnapshotSecure(campusOrCity?: string, suggestionLimit = 10): Promise<SecureSocialGraphSnapshot | null> {
+  const fb = ensureFirebase();
+  const currentUid = fb?.auth?.()?.currentUser?.uid || null;
+  if (!fb || !currentUid || typeof (fb as any).functions !== 'function') return null;
+  try {
+    const response = await callFirebaseCallable<SecureSocialGraphSnapshot>(
+      'getSocialGraphSnapshot',
+      removeUndefinedFields({
+        ...(campusOrCity ? { campusOrCity } : {}),
+        suggestionLimit,
+      }),
+    );
+    if (!response) return null;
+    return {
+      friends: normalizeStringArray(response.friends),
+      closeFriends: normalizeStringArray(response.closeFriends),
+      blocked: normalizeStringArray(response.blocked),
+      incomingRequests: Array.isArray(response.incomingRequests)
+        ? response.incomingRequests.map(normalizeRequestRecord).filter(Boolean) as SocialGraphRequestRecord[]
+        : [],
+      outgoingRequests: Array.isArray(response.outgoingRequests)
+        ? response.outgoingRequests.map(normalizeRequestRecord).filter(Boolean) as SocialGraphRequestRecord[]
+        : [],
+      users: Array.isArray(response.users)
+        ? response.users
+            .map((user: any) => stripPrivateUserFields(user, user?.id))
+            .filter(Boolean)
+        : [],
+      suggestions: Array.isArray(response.suggestions)
+        ? response.suggestions
+            .map((user: any) => stripPrivateUserFields(user, user?.id))
+            .filter(Boolean)
+        : [],
+    };
+  } catch (error) {
+    devLog('getSocialGraphSnapshot failed', { campusOrCity, error });
+    return null;
+  }
+}
+
+async function getSecureUserProfiles(userIds: string[]) {
+  const ids = normalizeStringArray(userIds).slice(0, 50);
+  if (!ids.length) return [];
+  const response = await callFirebaseCallable<{ users?: any[] }>('secureUserProfiles', { userIds: ids });
+  return Array.isArray(response?.users) ? response.users : [];
+}
+
+async function searchUsersSecure(query: string, limit = 10) {
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return [];
+  const response = await callFirebaseCallable<{ users?: any[] }>('secureUserSearch', { query: trimmed, limit });
+  return Array.isArray(response?.users) ? response.users : [];
+}
+
+async function getUsersByCampusSecure(campusOrCity: string, limit = 10) {
+  const normalized = String(campusOrCity || '').trim();
+  if (!normalized) return [];
+  const response = await callFirebaseCallable<{ users?: any[] }>('secureUsersByCampus', { campusOrCity: normalized, limit });
+  return Array.isArray(response?.users) ? response.users : [];
+}
+
 async function getProfileAccessSnapshot(targetUserId: string) {
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).functions !== 'function' || !targetUserId) return null;
@@ -2139,10 +2235,15 @@ export async function getUserFriends(userId: string) {
     return normalizeStringArray(map[userId]);
   }
   const db = fb.firestore();
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
   try {
     const graph = await getSocialGraphDoc(db, userId);
     return graph.friends;
   } catch (e) {
+    if (currentUid && currentUid === userId) {
+      const snapshot = await getSocialGraphSnapshotSecure();
+      if (snapshot) return normalizeStringArray(snapshot.friends);
+    }
     return [];
   }
 }
@@ -2151,10 +2252,15 @@ export async function getCloseFriends(userId: string) {
   const fb = ensureFirebase();
   if (!fb) return [];
   const db = fb.firestore();
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
   try {
     const graph = await getSocialGraphDoc(db, userId);
     return graph.closeFriends;
   } catch (e) {
+    if (currentUid && currentUid === userId) {
+      const snapshot = await getSocialGraphSnapshotSecure();
+      if (snapshot) return normalizeStringArray(snapshot.closeFriends);
+    }
     return [];
   }
 }
@@ -2323,9 +2429,17 @@ export async function findUserByHandle(handle: string) {
   }
   const db = fb.firestore();
   const q = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
-  if (q.empty) return null;
-  const doc = q.docs[0];
-  return stripPrivateUserFields(doc.data() || {}, doc.id);
+  if (!q.empty) {
+    const doc = q.docs[0];
+    return stripPrivateUserFields(doc.data() || {}, doc.id);
+  }
+  try {
+    const secureMatches = await searchUsersSecure(`@${normalized}`, 5);
+    return secureMatches.find((item: any) => (item?.handle || '').toLowerCase() === normalized) || null;
+  } catch (error) {
+    devLog('findUserByHandle secure fallback failed', { normalized, error });
+    return null;
+  }
 }
 
 /**
@@ -2377,6 +2491,17 @@ export async function searchUsers(query: string, limit = 10): Promise<any[]> {
     }
   } catch {}
 
+  if (results.size < limit) {
+    try {
+      const secureResults = await searchUsersSecure(query, limit);
+      for (const item of secureResults) {
+        if (item?.id && !results.has(item.id)) {
+          results.set(item.id, stripPrivateUserFields(item, item.id));
+        }
+      }
+    } catch {}
+  }
+
   return Array.from(results.values()).slice(0, limit);
 }
 
@@ -2390,10 +2515,23 @@ export async function getUsersByIds(userIds: string[]) {
   if (!userIds || userIds.length === 0) return [];
   const db = fb.firestore();
   const items: any[] = [];
+  const foundIds = new Set<string>();
   for (let i = 0; i < userIds.length; i += 10) {
     const batch = userIds.slice(i, i + 10);
     const snap = await db.collection(PUBLIC_PROFILES_COLLECTION).where(fb.firestore.FieldPath.documentId(), 'in', batch).get();
-    snap.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
+    snap.forEach((doc: any) => {
+      foundIds.add(doc.id);
+      items.push(stripPrivateUserFields(doc.data() || {}, doc.id));
+    });
+  }
+  const missingIds = userIds.filter((id) => id && !foundIds.has(id));
+  if (missingIds.length) {
+    try {
+      const secureItems = await getSecureUserProfiles(missingIds);
+      secureItems.forEach((item: any) => items.push(stripPrivateUserFields(item, item.id)));
+    } catch (error) {
+      devLog('getUsersByIds secure fallback failed', { missingIds, error });
+    }
   }
   return items;
 }
@@ -2413,6 +2551,14 @@ export async function getUsersByCampus(campusOrCity: string, limit = 10) {
   const items: any[] = [];
   snapCampus.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
   snapLegacy.forEach((doc: any) => items.push(stripPrivateUserFields(doc.data() || {}, doc.id)));
+  if (items.length < limit) {
+    try {
+      const secureItems = await getUsersByCampusSecure(campusOrCity, limit);
+      secureItems.forEach((item: any) => items.push(stripPrivateUserFields(item, item.id)));
+    } catch (error) {
+      devLog('getUsersByCampus secure fallback failed', { campusOrCity, error });
+    }
+  }
   const seen = new Set<string>();
   return items.filter((u) => {
     if (!u?.id || seen.has(u.id)) return false;
@@ -2476,10 +2622,20 @@ export async function getIncomingFriendRequests(userId: string) {
     return requests.filter((r: any) => r.toId === userId && r.status === 'pending');
   }
   const db = fb.firestore();
-  const snap = await db.collection('friendRequests').where('toId', '==', userId).where('status', '==', 'pending').get();
-  const items: any[] = [];
-  snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-  return items;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  try {
+    const snap = await db.collection('friendRequests').where('toId', '==', userId).where('status', '==', 'pending').get();
+    const items: any[] = [];
+    snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    return items;
+  } catch (error) {
+    if (currentUid && currentUid === userId) {
+      const snapshot = await getSocialGraphSnapshotSecure();
+      if (snapshot) return snapshot.incomingRequests || [];
+    }
+    devLog('getIncomingFriendRequests failed', { userId, error });
+    return [];
+  }
 }
 
 export async function getOutgoingFriendRequests(userId: string) {
@@ -2489,10 +2645,20 @@ export async function getOutgoingFriendRequests(userId: string) {
     return requests.filter((r: any) => r.fromId === userId && r.status === 'pending');
   }
   const db = fb.firestore();
-  const snap = await db.collection('friendRequests').where('fromId', '==', userId).where('status', '==', 'pending').get();
-  const items: any[] = [];
-  snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
-  return items;
+  const currentUid = fb.auth?.()?.currentUser?.uid || null;
+  try {
+    const snap = await db.collection('friendRequests').where('fromId', '==', userId).where('status', '==', 'pending').get();
+    const items: any[] = [];
+    snap.forEach((doc: any) => items.push({ id: doc.id, ...(doc.data() || {}) }));
+    return items;
+  } catch (error) {
+    if (currentUid && currentUid === userId) {
+      const snapshot = await getSocialGraphSnapshotSecure();
+      if (snapshot) return snapshot.outgoingRequests || [];
+    }
+    devLog('getOutgoingFriendRequests failed', { userId, error });
+    return [];
+  }
 }
 
 export async function acceptFriendRequest(requestId: string, fromId: string, toId: string) {
@@ -2629,8 +2795,18 @@ export async function getBlockedUsers(currentUserId: string) {
     return normalizeStringArray(map[currentUserId]);
   }
   const db = fb.firestore();
-  const graph = await getSocialGraphDoc(db, currentUserId);
-  return graph.blocked;
+  try {
+    const graph = await getSocialGraphDoc(db, currentUserId);
+    return graph.blocked;
+  } catch (error) {
+    const currentUid = fb.auth?.()?.currentUser?.uid || null;
+    if (currentUid && currentUid === currentUserId) {
+      const snapshot = await getSocialGraphSnapshotSecure();
+      if (snapshot) return normalizeStringArray(snapshot.blocked);
+    }
+    devLog('getBlockedUsers failed', { currentUserId, error });
+    return [];
+  }
 }
 
 export async function savePushToken(userId: string, token: string) {

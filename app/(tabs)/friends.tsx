@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tokens } from '@/constants/tokens';
 import { ThemedView } from '@/components/themed-view';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -23,6 +24,7 @@ import { withAlpha } from '@/utils/colors';
 import {
   searchUsers,
   sendFriendRequest,
+  getSocialGraphSnapshotSecure,
   getUserFriendsCached,
   getUsersByCampus,
   getOutgoingFriendRequests,
@@ -35,6 +37,7 @@ import {
   unfollowUserRemote,
 } from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
+import { useFocusEffect } from '@react-navigation/native';
 
 interface FriendUser {
   id: string;
@@ -111,6 +114,56 @@ export default function FriendsScreen() {
       if (!silent) setLoading(true);
 
       try {
+        const campus = user.campus || user.campusOrCity;
+        const secureSnapshot = await getSocialGraphSnapshotSecure(campus, 10);
+        if (secureSnapshot) {
+          const secureFriendIds = secureSnapshot.friends || [];
+          const secureIncoming = secureSnapshot.incomingRequests || [];
+          const secureOutgoing = secureSnapshot.outgoingRequests || [];
+          const profileMap: Record<string, FriendUser> = {};
+
+          (secureSnapshot.users || []).forEach((profile: any) => {
+            if (!profile?.id) return;
+            profileMap[profile.id] = {
+              id: profile.id,
+              name: profile.name || 'Unknown',
+              handle: profile.handle,
+              photoUrl: profile.photoUrl || profile.avatarUrl,
+              campus: profile.campus || profile.campusOrCity,
+            };
+          });
+
+          friendIdSetRef.current = new Set(secureFriendIds);
+          setOutgoingIds(new Set(secureOutgoing.map((request: any) => request.toId)));
+          setFriends(secureFriendIds.map((id) => profileMap[id]).filter(Boolean));
+          setIncomingReqs(
+            secureIncoming.map((request: any) => ({
+              id: request.id,
+              fromId: request.fromId,
+              toId: request.toId,
+              user: profileMap[request.fromId],
+            })),
+          );
+          setOutgoingReqs(
+            secureOutgoing.map((request: any) => ({
+              id: request.id,
+              fromId: request.fromId,
+              toId: request.toId,
+              user: profileMap[request.toId],
+            })),
+          );
+          setSuggestions(
+            (secureSnapshot.suggestions || []).map((profile: any) => ({
+              id: profile.id,
+              name: profile.name || 'Unknown',
+              handle: profile.handle,
+              photoUrl: profile.photoUrl || profile.avatarUrl,
+              campus: profile.campus || profile.campusOrCity,
+            })),
+          );
+          return;
+        }
+
         const [friendIds, incoming, outgoing] = await Promise.all([
           getUserFriendsCached(user.id),
           getIncomingFriendRequests(user.id),
@@ -154,26 +207,32 @@ export default function FriendsScreen() {
           })),
         );
 
-        const campus = user.campus || user.campusOrCity;
         if (campus) {
-          const campusUsers = await getUsersByCampus(campus, 30);
-          const outgoingSet = new Set((outgoing || []).map((r: any) => r.toId));
-          const filtered = campusUsers
-            .filter(
-              (u: any) =>
-                u.id !== user.id &&
-                !friendIdSetRef.current.has(u.id) &&
-                !outgoingSet.has(u.id),
-            )
-            .slice(0, 10)
-            .map((u: any) => ({
-              id: u.id,
-              name: u.name || 'Unknown',
-              handle: u.handle,
-              photoUrl: u.photoUrl,
-              campus: u.campus || u.campusOrCity,
-            }));
-          setSuggestions(filtered);
+          try {
+            const campusUsers = await getUsersByCampus(campus, 30);
+            const outgoingSet = new Set((outgoing || []).map((r: any) => r.toId));
+            const filtered = campusUsers
+              .filter(
+                (u: any) =>
+                  u.id !== user.id &&
+                  !friendIdSetRef.current.has(u.id) &&
+                  !outgoingSet.has(u.id),
+              )
+              .slice(0, 10)
+              .map((u: any) => ({
+                id: u.id,
+                name: u.name || 'Unknown',
+                handle: u.handle,
+                photoUrl: u.photoUrl,
+                campus: u.campus || u.campusOrCity,
+              }));
+            setSuggestions(filtered);
+          } catch (error) {
+            devLog('friends suggestions load error', error);
+            setSuggestions([]);
+          }
+        } else {
+          setSuggestions([]);
         }
       } catch (err) {
         devLog('friends load error', err);
@@ -189,6 +248,14 @@ export default function FriendsScreen() {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user?.id) return undefined;
+      void loadData(true);
+      return undefined;
+    }, [loadData, user?.id]),
+  );
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
@@ -270,8 +337,30 @@ export default function FriendsScreen() {
     markBusy(target.id);
     setOutgoingIds((prev) => new Set(prev).add(target.id));
     try {
-      await sendFriendRequest(user.id, target.id);
-      showToast('Friend request sent', 'success');
+      const result: any = await sendFriendRequest(user.id, target.id);
+      const becameFriends = Boolean(result?.status === 'accepted' || result?.autoAccepted || result?.alreadyFriends);
+
+      if (becameFriends) {
+        friendIdSetRef.current.add(target.id);
+        setOutgoingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(target.id);
+          return next;
+        });
+        setOutgoingReqs((prev) => prev.filter((request) => request.toId !== target.id));
+        setIncomingReqs((prev) => prev.filter((request) => request.fromId !== target.id));
+        setFriends((prev) => (prev.some((friend) => friend.id === target.id) ? prev : [target, ...prev]));
+        setSuggestions((prev) => prev.filter((entry) => entry.id !== target.id));
+        showToast(result?.alreadyFriends ? 'Already friends' : 'You are now friends', 'success');
+      } else {
+        setOutgoingReqs((prev) =>
+          prev.some((request) => request.toId === target.id)
+            ? prev
+            : [{ id: result?.id || `${user.id}_${target.id}`, fromId: user.id, toId: target.id, user: target }, ...prev],
+        );
+        setSuggestions((prev) => prev.filter((entry) => entry.id !== target.id));
+        showToast('Friend request sent', 'success');
+      }
     } catch (err: any) {
       setOutgoingIds((prev) => {
         const next = new Set(prev);
@@ -874,20 +963,20 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: tokens.space.s16,
+    paddingVertical: tokens.space.s10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 10,
+    gap: tokens.space.s10,
   },
   searchField: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     height: 40,
-    borderRadius: 10,
-    paddingHorizontal: 10,
+    borderRadius: tokens.radius.r10,
+    paddingHorizontal: tokens.space.s10,
     borderWidth: StyleSheet.hairlineWidth,
-    gap: 6,
+    gap: tokens.space.s6,
   },
   searchInput: {
     flex: 1,
@@ -902,21 +991,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  section: { marginTop: 4 },
+  section: { marginTop: tokens.space.s4 },
   pendingChipRow: {
-    paddingHorizontal: 16,
+    paddingHorizontal: tokens.space.s16,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: tokens.space.s8,
   },
   pendingChip: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    borderRadius: tokens.radius.r16,
+    paddingVertical: tokens.space.s8,
+    paddingHorizontal: tokens.space.s10,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: tokens.space.s8,
   },
   pendingChipMore: {
     minWidth: 42,
@@ -929,32 +1018,32 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
+    gap: tokens.space.s6,
+    paddingHorizontal: tokens.space.s16,
+    paddingTop: tokens.space.s14,
+    paddingBottom: tokens.space.s6,
   },
   sectionTitle: { fontSize: 15, fontWeight: '700' },
   contactsMeta: {
     fontSize: 12,
-    paddingHorizontal: 16,
-    paddingBottom: 6,
+    paddingHorizontal: tokens.space.s16,
+    paddingBottom: tokens.space.s6,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: tokens.space.s16,
+    paddingVertical: tokens.space.s10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   rowLeft: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  avatar: { marginRight: 12 },
+  avatar: { marginRight: tokens.space.s12 },
   avatarPlaceholder: { alignItems: 'center', justifyContent: 'center' },
   rowInfo: { flex: 1 },
   rowName: { fontSize: 15, fontWeight: '600' },
   rowHandle: { fontSize: 13, marginTop: 1 },
-  rowCampus: { fontSize: 12, marginTop: 2 },
-  requestActions: { flexDirection: 'row', gap: 8 },
+  rowCampus: { fontSize: 12, marginTop: tokens.space.s2 },
+  requestActions: { flexDirection: 'row', gap: tokens.space.s8 },
   actionBtn: {
     width: 36,
     height: 36,
@@ -977,33 +1066,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    paddingHorizontal: 12,
+    paddingHorizontal: tokens.space.s12,
   },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
+    gap: tokens.space.s4,
+    paddingHorizontal: tokens.space.s10,
+    paddingVertical: tokens.space.s6,
+    borderRadius: tokens.radius.r14,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 32,
-    gap: 8,
+    paddingVertical: tokens.space.s60,
+    paddingHorizontal: tokens.space.s32,
+    gap: tokens.space.s8,
   },
   showMoreBtn: {
-    marginHorizontal: 16,
-    marginTop: 10,
+    marginHorizontal: tokens.space.s16,
+    marginTop: tokens.space.s10,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    paddingVertical: 10,
+    borderRadius: tokens.radius.r12,
+    paddingVertical: tokens.space.s10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emptyTitle: { fontSize: 17, fontWeight: '700', marginTop: 8 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', marginTop: tokens.space.s8 },
   emptyDesc: { fontSize: 14, textAlign: 'center', lineHeight: 20 },
 });

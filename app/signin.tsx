@@ -1,6 +1,7 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import Logo from '@/components/logo';
+import { tokens } from '@/constants/tokens';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
@@ -107,7 +108,7 @@ export default function SignIn() {
           contentContainerStyle={[
             styles.scroll,
             {
-              paddingTop: Math.max(20, insets.top + 16),
+              paddingTop: Math.max(tokens.space.s20, insets.top + tokens.space.s16),
               paddingBottom: insets.bottom + extraScrollPad,
               flexGrow: 1,
             },
@@ -119,9 +120,9 @@ export default function SignIn() {
         >
           <View style={styles.header}>
             <Logo size={logoSize} variant="mark" label="Perched" />
-            <H1 style={{ color, marginBottom: 4, ...(titleSize ? { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.1) } : null) }}>Perched</H1>
+            <H1 style={{ color, marginBottom: tokens.space.s4, ...(titleSize ? { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.1) } : null) }}>Perched</H1>
             {!compactHeader ? (
-              <Body style={{ color, marginTop: 2, textAlign: 'center', maxWidth: 420 }}>
+              <Body style={{ color, marginTop: tokens.space.s2, textAlign: 'center', maxWidth: 420 }}>
                 Perched helps you share where you work or study and discover new spots nearby.
               </Body>
             ) : null}
@@ -146,15 +147,15 @@ export default function SignIn() {
             </View>
             <Label style={{ color, marginBottom: 6, opacity: 1 }}>Sign In</Label>
             {!fbAvailable ? (
-              <View style={{ padding: 12, borderRadius: 10, backgroundColor: withAlpha(accent, 0.14), borderWidth: 1, borderColor: withAlpha(accent, 0.3), marginBottom: 12 }}>
+              <View style={{ padding: tokens.space.s12, borderRadius: tokens.radius.r10, backgroundColor: withAlpha(accent, 0.14), borderWidth: 1, borderColor: withAlpha(accent, 0.3), marginBottom: tokens.space.s12 }}>
                 <Text style={{ color: accent, fontWeight: '600' }}>Demo mode — server auth not configured</Text>
-                <Text style={{ color: accent, marginTop: 6 }}>Create an account will store locally in your browser. Use the demo button to sign in quickly.</Text>
-                <View style={{ height: 8 }} />
+                <Text style={{ color: accent, marginTop: tokens.space.s6 }}>Create an account will store locally in your browser. Use the demo button to sign in quickly.</Text>
+                <View style={{ height: tokens.space.s8 }} />
                 <Pressable
                   onPress={useDemoAccount}
                   accessibilityRole="button"
                   accessibilityLabel="Use the Perched demo account"
-                  style={{ padding: 8, borderRadius: 8, backgroundColor: accent, alignItems: 'center', marginTop: 6 }}
+                  style={{ padding: tokens.space.s8, borderRadius: tokens.radius.r12, backgroundColor: accent, alignItems: 'center', marginTop: tokens.space.s6 }}
                 >
                   <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Use demo account</Text>
                 </Pressable>
@@ -221,12 +222,12 @@ export default function SignIn() {
               onPress={() => router.push('/reset')}
               accessibilityRole="button"
               accessibilityLabel="Reset password"
-              style={{ alignSelf: 'flex-start', marginTop: 6 }}
+              style={{ alignSelf: 'flex-start', marginTop: tokens.space.s6 }}
             >
               <Text style={{ color: primary, fontWeight: '600' }}>Forgot password?</Text>
             </Pressable>
 
-            {error ? <Body style={{ color: danger, marginTop: 8 }}>{error}</Body> : null}
+            {error ? <Body style={{ color: danger, marginTop: tokens.space.s8 }}>{error}</Body> : null}
 
             <Pressable
               onPress={doSignIn}
@@ -237,7 +238,7 @@ export default function SignIn() {
             >
               <Text style={[styles.primaryText, { color: '#FFFFFF' }]}>{loading ? 'Signing in...' : 'Sign in'}</Text>
             </Pressable>
-            <View style={{ height: 10 }} />
+            <View style={{ height: tokens.space.s10 }} />
             <Text style={{ color: muted, fontSize: 12 }}>
               By continuing you agree to our{' '}
               <Text onPress={() => router.push('/terms')} style={{ color: primary, fontWeight: '600' }}>Terms</Text>
@@ -255,16 +256,16 @@ export default function SignIn() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
-  input: { borderWidth: 1, padding: 14, borderRadius: 14, marginTop: 6, width: '100%' },
-  primary: { height: 54, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginTop: 16, paddingHorizontal: 22, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 14, elevation: 4 },
+  input: { borderWidth: 1, padding: tokens.space.s14, borderRadius: tokens.radius.r14, marginTop: tokens.space.s6, width: '100%' },
+  primary: { height: 54, borderRadius: tokens.radius.r18, alignItems: 'center', justifyContent: 'center', marginTop: tokens.space.s16, paddingHorizontal: 22, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 14, elevation: 4 },
   primaryText: { fontSize: 17, fontWeight: '700' },
-  scroll: { paddingHorizontal: 20, alignItems: 'center' },
-  header: { width: '100%', maxWidth: 720, alignItems: 'center', marginBottom: 14 },
-  card: { width: '100%', maxWidth: 540, marginTop: 6, borderRadius: 20, padding: 20, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 6, alignItems: 'stretch' },
-  createBlock: { width: '100%', alignItems: 'center', marginBottom: 12 },
-  secondary: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 14, borderWidth: 1, marginTop: 8 },
-  fieldGroup: { width: '100%', maxWidth: 420, alignSelf: 'stretch', marginBottom: 12 },
+  scroll: { paddingHorizontal: tokens.space.s20, alignItems: 'center' },
+  header: { width: '100%', maxWidth: 720, alignItems: 'center', marginBottom: tokens.space.s14 },
+  card: { width: '100%', maxWidth: 540, marginTop: tokens.space.s6, borderRadius: tokens.radius.r20, padding: tokens.space.s20, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 6, alignItems: 'stretch' },
+  createBlock: { width: '100%', alignItems: 'center', marginBottom: tokens.space.s12 },
+  secondary: { paddingHorizontal: tokens.space.s16, paddingVertical: tokens.space.s10, borderRadius: tokens.radius.r14, borderWidth: 1, marginTop: tokens.space.s8 },
+  fieldGroup: { width: '100%', maxWidth: 420, alignSelf: 'stretch', marginBottom: tokens.space.s12 },
   passwordRow: { flexDirection: 'row', alignItems: 'center', ...gapStyle(8) },
   passwordInput: { flex: 1 },
-  passwordToggle: { paddingHorizontal: 12, paddingVertical: 12, borderRadius: 12, borderWidth: 1, marginTop: 6 },
+  passwordToggle: { paddingHorizontal: tokens.space.s12, paddingVertical: tokens.space.s12, borderRadius: tokens.radius.r12, borderWidth: 1, marginTop: tokens.space.s6 },
 });

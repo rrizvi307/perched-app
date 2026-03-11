@@ -10,6 +10,8 @@ export const tokens = {
     warm: "#8B5CF6", // Vibrant purple (replaces old green)
   },
   space: {
+    s2: 2,
+    s4: 4,
     s6: 6,
     s8: 8,
     s10: 10,
@@ -21,12 +23,18 @@ export const tokens = {
     s24: 24,
     s28: 28,
     s32: 32,
+    s40: 40,
+    s48: 48,
+    s60: 60,
   },
   radius: {
     r10: 10,
     r12: 12,
+    r14: 14,
     r16: 16,
+    r18: 18,
     r20: 20,
+    r22: 22,
     r24: 24,
     r28: 28,
     r32: 32,

@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { IconSymbol } from './icon-symbol';
+import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -49,7 +50,7 @@ export function PolishedHeader({
       style={[
         styles.container,
         backgroundStyle,
-        { paddingTop: Math.max(insets.top, 12) },
+        { paddingTop: Math.max(insets.top, tokens.space.s12) },
       ]}
     >
       {/* Left Action */}
@@ -137,7 +138,7 @@ export function PolishedLargeHeader({
   const primary = useThemeColor({}, 'primary');
 
   return (
-    <View style={[styles.largeContainer, { paddingTop: Math.max(insets.top, 12) }]}>
+    <View style={[styles.largeContainer, { paddingTop: Math.max(insets.top, tokens.space.s12) }]}>
       <View style={styles.largeHeader}>
         <View style={styles.largeTitleContainer}>
           {title && (
@@ -182,8 +183,8 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingHorizontal: tokens.space.s16,
+    paddingBottom: tokens.space.s12,
     minHeight: 56,
   },
   action: {
@@ -195,7 +196,7 @@ const styles = StyleSheet.create({
   },
   rightAction: {
     minWidth: 40,
-    paddingHorizontal: 8,
+    paddingHorizontal: tokens.space.s8,
     width: 'auto',
   },
   actionPressed: {
@@ -203,7 +204,7 @@ const styles = StyleSheet.create({
   },
   titleContainer: {
     flex: 1,
-    marginHorizontal: 12,
+    marginHorizontal: tokens.space.s12,
   },
   titleCentered: {
     alignItems: 'center',
@@ -215,15 +216,15 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 13,
-    marginTop: 2,
+    marginTop: tokens.space.s2,
   },
   rightText: {
     fontSize: 15,
     fontWeight: '600',
   },
   largeContainer: {
-    paddingHorizontal: 20,
-    paddingBottom: 16,
+    paddingHorizontal: tokens.space.s20,
+    paddingBottom: tokens.space.s16,
   },
   largeHeader: {
     flexDirection: 'row',
@@ -232,7 +233,7 @@ const styles = StyleSheet.create({
   },
   largeTitleContainer: {
     flex: 1,
-    marginRight: 16,
+    marginRight: tokens.space.s16,
   },
   largeTitle: {
     fontSize: 34,
@@ -242,7 +243,7 @@ const styles = StyleSheet.create({
   },
   largeSubtitle: {
     fontSize: 15,
-    marginTop: 4,
+    marginTop: tokens.space.s4,
     lineHeight: 20,
   },
 });

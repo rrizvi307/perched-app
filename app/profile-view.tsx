@@ -266,8 +266,12 @@ export default function ProfileView() {
               }
               setRequesting(true);
               try {
-                await sendFriendRequest(user.id, profile.id);
-                setRelationship('outgoing');
+                const result: any = await sendFriendRequest(user.id, profile.id);
+                setRelationship(
+                  result?.status === 'accepted' || result?.autoAccepted || result?.alreadyFriends
+                    ? 'friend'
+                    : 'outgoing',
+                );
               } finally {
                 setRequesting(false);
               }

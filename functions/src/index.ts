@@ -915,8 +915,21 @@ async function getPublicProfileDoc(userId: string) {
   return db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
 }
 
+async function getLegacyUserDoc(userId: string) {
+  return db.collection(USERS_COLLECTION).doc(userId).get();
+}
+
 async function getSocialGraphDoc(userId: string) {
   return db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).get();
+}
+
+async function resolveNormalizedSocialGraph(userId: string) {
+  const graphDoc = await getSocialGraphDoc(userId);
+  if (graphDoc.exists) {
+    return normalizeSocialGraph(graphDoc.data() || {});
+  }
+  const legacyDoc = await getLegacyUserDoc(userId);
+  return normalizeSocialGraph(legacyDoc.exists ? legacyDoc.data() || {} : {});
 }
 
 async function getPrivateAccountData(userId: string) {
@@ -926,6 +939,145 @@ async function getPrivateAccountData(userId: string) {
     ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
     ...(privateDoc.exists ? privateDoc.data() || {} : {}),
   };
+}
+
+async function resolveSanitizedPublicUserProfile(userId: string) {
+  const [publicDoc, legacyDoc] = await Promise.all([
+    getPublicProfileDoc(userId),
+    getLegacyUserDoc(userId),
+  ]);
+  if (publicDoc.exists) {
+    return sanitizePublicUserProfile(userId, publicDoc.data() || {});
+  }
+  if (legacyDoc.exists) {
+    return sanitizePublicUserProfile(userId, legacyDoc.data() || {});
+  }
+  return null;
+}
+
+async function getSanitizedUsersByIds(userIds: string[]) {
+  const ids = normalizeIdList(userIds);
+  if (!ids.length) return [];
+
+  const results = new Map<string, ReturnType<typeof sanitizePublicUserProfile>>();
+  for (const batch of chunkArray(ids, 10)) {
+    const [publicSnap, legacySnap] = await Promise.all([
+      db.collection(PUBLIC_PROFILES_COLLECTION)
+        .where(admin.firestore.FieldPath.documentId(), 'in', batch)
+        .get(),
+      db.collection(USERS_COLLECTION)
+        .where(admin.firestore.FieldPath.documentId(), 'in', batch)
+        .get(),
+    ]);
+
+    publicSnap.forEach((doc) => {
+      results.set(doc.id, sanitizePublicUserProfile(doc.id, doc.data() || {}));
+    });
+
+    legacySnap.forEach((doc) => {
+      if (!results.has(doc.id)) {
+        results.set(doc.id, sanitizePublicUserProfile(doc.id, doc.data() || {}));
+      }
+    });
+  }
+
+  return ids
+    .map((id) => results.get(id))
+    .filter(Boolean);
+}
+
+function sanitizeFriendRequestRecord(
+  requestId: string,
+  data: Record<string, any> | null | undefined,
+) {
+  const request = data || {};
+  return {
+    id: requestId,
+    fromId: asId(request.fromId),
+    toId: asId(request.toId),
+    status: asId(request.status) || 'pending',
+    createdAt: request.createdAt || null,
+    respondedAt: request.respondedAt || null,
+  };
+}
+
+async function searchSanitizedUsers(query: string, limit = 10) {
+  const trimmed = asId(query).toLowerCase();
+  if (!trimmed) return [];
+  const prefix = trimmed.replace(/^@/, '');
+  if (!prefix) return [];
+  const prefixEnd = `${prefix}\uf8ff`;
+  const boundedLimit = Math.max(1, Math.min(25, Math.floor(limit || 10)));
+  const results = new Map<string, ReturnType<typeof sanitizePublicUserProfile>>();
+
+  const mergeSnapshot = (snapshot: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>) => {
+    snapshot.forEach((doc) => {
+      if (!results.has(doc.id)) {
+        results.set(doc.id, sanitizePublicUserProfile(doc.id, doc.data() || {}));
+      }
+    });
+  };
+
+  const [handleSnap, nameSnap, legacyHandleSnap, legacyNameSnap] = await Promise.all([
+    db.collection(PUBLIC_PROFILES_COLLECTION)
+      .where('handle', '>=', prefix)
+      .where('handle', '<=', prefixEnd)
+      .limit(boundedLimit)
+      .get()
+      .catch(() => null),
+    db.collection(PUBLIC_PROFILES_COLLECTION)
+      .where('nameLower', '>=', prefix)
+      .where('nameLower', '<=', prefixEnd)
+      .limit(boundedLimit)
+      .get()
+      .catch(() => null),
+    db.collection(USERS_COLLECTION)
+      .where('handle', '>=', prefix)
+      .where('handle', '<=', prefixEnd)
+      .limit(boundedLimit)
+      .get()
+      .catch(() => null),
+    db.collection(USERS_COLLECTION)
+      .where('nameLower', '>=', prefix)
+      .where('nameLower', '<=', prefixEnd)
+      .limit(boundedLimit)
+      .get()
+      .catch(() => null),
+  ]);
+
+  [handleSnap, nameSnap, legacyHandleSnap, legacyNameSnap]
+    .filter(Boolean)
+    .forEach((snapshot) => mergeSnapshot(snapshot as FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>));
+
+  return Array.from(results.values()).slice(0, boundedLimit);
+}
+
+async function getSanitizedUsersByCampus(campusOrCity: string, limit = 10) {
+  const normalized = asId(campusOrCity);
+  if (!normalized) return [];
+  const boundedLimit = Math.max(1, Math.min(25, Math.floor(limit || 10)));
+  const results = new Map<string, ReturnType<typeof sanitizePublicUserProfile>>();
+
+  const mergeSnapshot = (snapshot: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>) => {
+    snapshot.forEach((doc) => {
+      if (!results.has(doc.id)) {
+        results.set(doc.id, sanitizePublicUserProfile(doc.id, doc.data() || {}));
+      }
+    });
+  };
+
+  const [campusSnap, campusOrCitySnap, legacyCampusSnap, legacyCampusOrCitySnap] = await Promise.all([
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campus', '==', normalized).limit(boundedLimit).get().catch(() => null),
+    db.collection(PUBLIC_PROFILES_COLLECTION).where('campusOrCity', '==', normalized).limit(boundedLimit).get().catch(() => null),
+    db.collection(USERS_COLLECTION).where('campus', '==', normalized).limit(boundedLimit).get().catch(() => null),
+    db.collection(USERS_COLLECTION).where('campusOrCity', '==', normalized).limit(boundedLimit).get().catch(() => null),
+  ]);
+
+  [campusSnap, campusOrCitySnap, legacyCampusSnap, legacyCampusOrCitySnap]
+    .filter(Boolean)
+    .forEach((snapshot) => mergeSnapshot(snapshot as FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>));
+
+  return Array.from(results.values()).slice(0, boundedLimit);
 }
 
 async function writeUserPrivateAccount(
@@ -1955,6 +2107,7 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
     const forwardRequestId = `${actorId}_${targetUserId}`;
     const reverseRequestId = `${targetUserId}_${actorId}`;
     const actorUserRef = db.collection(SOCIAL_GRAPH_COLLECTION).doc(actorId);
+    const actorLegacyUserRef = db.collection(USERS_COLLECTION).doc(actorId);
     const targetUserRef = db.collection(SOCIAL_GRAPH_COLLECTION).doc(targetUserId);
     const forwardRequestRef = db.collection('friendRequests').doc(forwardRequestId);
     const reverseRequestRef = db.collection('friendRequests').doc(reverseRequestId);
@@ -1965,12 +2118,15 @@ export const socialGraphMutation = functions.https.onCall(async (data, context) 
       = { ok: true, status: 'pending', requestId: forwardRequestId };
 
     await db.runTransaction(async (tx) => {
-      const [actorUserDoc, reverseRequestDoc] = await Promise.all([
+      const [actorUserDoc, actorLegacyUserDoc, reverseRequestDoc] = await Promise.all([
         tx.get(actorUserRef),
+        tx.get(actorLegacyUserRef),
         tx.get(reverseRequestRef),
       ]);
 
-      const actorFriends = normalizeIdList(actorUserDoc.data()?.friends);
+      const actorFriends = normalizeIdList(
+        actorUserDoc.exists ? actorUserDoc.data()?.friends : actorLegacyUserDoc.data()?.friends,
+      );
       if (actorFriends.includes(targetUserId)) {
         result = {
           ok: true,
@@ -2230,12 +2386,113 @@ export const secureUserLookup = functions.https.onCall(async (data, context) => 
 
   const privateDoc = snapshot.docs[0];
   const userId = privateDoc.id;
-  const publicDoc = await db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).get();
-  if (!publicDoc.exists) {
-    return { user: null };
+  return { user: await resolveSanitizedPublicUserProfile(userId) };
+});
+
+export const secureUserProfiles = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
   }
 
-  return { user: sanitizePublicUserProfile(publicDoc.id, publicDoc.data() || {}) };
+  const userIds = normalizeIdList(data?.userIds).slice(0, 50);
+  if (!userIds.length) {
+    return { users: [] };
+  }
+
+  return { users: await getSanitizedUsersByIds(userIds) };
+});
+
+export const secureUserSearch = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const query = asId(data?.query);
+  if (!query) {
+    throw new functions.https.HttpsError('invalid-argument', 'query is required');
+  }
+
+  const limit = Math.max(1, Math.min(25, Math.floor(Number(data?.limit) || 10)));
+  return { users: await searchSanitizedUsers(query, limit) };
+});
+
+export const secureUsersByCampus = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const campusOrCity = asId(data?.campusOrCity);
+  if (!campusOrCity) {
+    throw new functions.https.HttpsError('invalid-argument', 'campusOrCity is required');
+  }
+
+  const limit = Math.max(1, Math.min(25, Math.floor(Number(data?.limit) || 10)));
+  return { users: await getSanitizedUsersByCampus(campusOrCity, limit) };
+});
+
+export const getSocialGraphSnapshot = functions.https.onCall(async (data, context) => {
+  const actorId = context.auth?.uid;
+  if (!actorId) {
+    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  }
+
+  const campusOrCity = asId(data?.campusOrCity);
+  const suggestionLimit = Math.max(1, Math.min(25, Math.floor(Number(data?.suggestionLimit) || 10)));
+
+  const [graph, incomingSnap, outgoingSnap] = await Promise.all([
+    resolveNormalizedSocialGraph(actorId),
+    db.collection('friendRequests').where('toId', '==', actorId).where('status', '==', 'pending').get(),
+    db.collection('friendRequests').where('fromId', '==', actorId).where('status', '==', 'pending').get(),
+  ]);
+
+  const incomingRequests = incomingSnap.docs
+    .map((doc) => sanitizeFriendRequestRecord(doc.id, doc.data() || {}))
+    .filter((request) => request.fromId && request.toId);
+  const outgoingRequests = outgoingSnap.docs
+    .map((doc) => sanitizeFriendRequestRecord(doc.id, doc.data() || {}))
+    .filter((request) => request.fromId && request.toId);
+
+  const outgoingIds = new Set(outgoingRequests.map((request) => request.toId));
+  const incomingIds = new Set(incomingRequests.map((request) => request.fromId));
+  const blockedIds = new Set(graph.blocked);
+  const friendIds = new Set(graph.friends);
+
+  let suggestions: Array<ReturnType<typeof sanitizePublicUserProfile>> = [];
+  if (campusOrCity) {
+    suggestions = (await getSanitizedUsersByCampus(campusOrCity, suggestionLimit * 4))
+      .filter((user) => {
+        const userId = asId(user?.id);
+        return Boolean(
+          userId &&
+            userId !== actorId &&
+            !friendIds.has(userId) &&
+            !blockedIds.has(userId) &&
+            !outgoingIds.has(userId) &&
+            !incomingIds.has(userId),
+        );
+      })
+      .slice(0, suggestionLimit);
+  }
+
+  const relatedUserIds = [
+    ...graph.friends,
+    ...incomingRequests.map((request) => request.fromId),
+    ...outgoingRequests.map((request) => request.toId),
+    ...suggestions.map((user) => asId(user?.id)),
+  ];
+
+  return {
+    friends: graph.friends,
+    closeFriends: graph.closeFriends,
+    blocked: graph.blocked,
+    incomingRequests,
+    outgoingRequests,
+    users: await getSanitizedUsersByIds(relatedUserIds),
+    suggestions,
+  };
 });
 
 export const getProfileAccessSnapshot = functions.https.onCall(async (data, context) => {
@@ -2259,13 +2516,10 @@ export const getProfileAccessSnapshot = functions.https.onCall(async (data, cont
     };
   }
 
-  const [viewerGraphDoc, targetGraphDoc] = await Promise.all([
-    getSocialGraphDoc(actorId),
-    getSocialGraphDoc(targetUserId),
+  const [viewerGraph, targetGraph] = await Promise.all([
+    resolveNormalizedSocialGraph(actorId),
+    resolveNormalizedSocialGraph(targetUserId),
   ]);
-
-  const viewerGraph = normalizeSocialGraph(viewerGraphDoc.data() || {});
-  const targetGraph = normalizeSocialGraph(targetGraphDoc.data() || {});
   const viewerBlocked = viewerGraph.blocked.includes(targetUserId);
   const blockedByTarget = targetGraph.blocked.includes(actorId);
   const isFriend = viewerGraph.friends.includes(targetUserId);

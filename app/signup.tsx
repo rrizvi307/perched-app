@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
+import { tokens } from '@/constants/tokens';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useKeyboardHeight, useKeyboardVisible } from '@/hooks/use-keyboard-visible';
@@ -352,7 +353,7 @@ export default function SignUp() {
           contentContainerStyle={[
             styles.scroll,
             {
-              paddingTop: Math.max(20, insets.top + 16),
+              paddingTop: Math.max(tokens.space.s20, insets.top + tokens.space.s16),
               paddingBottom: insets.bottom + extraScrollPad,
               flexGrow: 1,
             },
@@ -368,7 +369,7 @@ export default function SignUp() {
             <H1
               style={{
                 color,
-                marginTop: 10,
+                marginTop: tokens.space.s10,
                 ...(titleSize
                   ? { fontSize: titleSize, lineHeight: Math.round(titleSize * 1.2) }
                   : null),
@@ -378,12 +379,12 @@ export default function SignUp() {
             </H1>
           </View>
           {!compactHeader ? (
-            <Body style={{ color, marginTop: 8, marginBottom: 4 }}>
+            <Body style={{ color, marginTop: tokens.space.s8, marginBottom: tokens.space.s4 }}>
               Sign up with your email to get started.
             </Body>
           ) : null}
 
-          <View style={{ height: 16 }} />
+          <View style={{ height: tokens.space.s16 }} />
 
           {!fbAvailable ? (
             <View style={[styles.infoBox, { backgroundColor: withAlpha(accent, 0.12), borderColor: withAlpha(accent, 0.3) }]}>
@@ -464,7 +465,7 @@ export default function SignUp() {
               },
             ]}
           >
-            <Text style={{ color: muted, fontWeight: '600', paddingLeft: 12, fontSize: 16 }}>
+            <Text style={{ color: muted, fontWeight: '600', paddingLeft: tokens.space.s12, fontSize: 16 }}>
               @
             </Text>
             <TextInput
@@ -572,7 +573,7 @@ export default function SignUp() {
               {!cityResults.length &&
               !cityLoading &&
               getLocationOptions('city', cityQuery).length === 0 ? (
-                <Text style={{ color: muted, marginVertical: 8 }}>
+                <Text style={{ color: muted, marginVertical: tokens.space.s8 }}>
                   No matches — try a different city name.
                 </Text>
               ) : null}
@@ -649,7 +650,7 @@ export default function SignUp() {
               {!campusResults.length &&
               !campusLoading &&
               getLocationOptions('campus', campusQuery).length === 0 ? (
-                <Text style={{ color: muted, marginVertical: 8 }}>
+                <Text style={{ color: muted, marginVertical: tokens.space.s8 }}>
                   No matches — try a different university name.
                 </Text>
               ) : null}
@@ -665,7 +666,7 @@ export default function SignUp() {
             <View
               style={[
                 styles.infoBox,
-                { backgroundColor: withAlpha(danger, 0.1), borderColor: withAlpha(danger, 0.3), marginTop: 4 },
+                { backgroundColor: withAlpha(danger, 0.1), borderColor: withAlpha(danger, 0.3), marginTop: tokens.space.s4 },
               ]}
             >
               <Text style={{ color: danger, fontWeight: '500' }}>{authError}</Text>
@@ -687,7 +688,7 @@ export default function SignUp() {
             </Text>
           </Pressable>
 
-          <View style={{ height: 12 }} />
+          <View style={{ height: tokens.space.s12 }} />
           <Text style={{ color: muted, fontSize: 12 }}>
             By continuing you agree to our{' '}
             <Text onPress={() => router.push('/terms')} style={{ color: primary, fontWeight: '600' }}>
@@ -699,7 +700,7 @@ export default function SignUp() {
             </Text>
             .
           </Text>
-          <View style={{ height: 12 }} />
+          <View style={{ height: tokens.space.s12 }} />
           <Pressable onPress={() => router.push('/signin')}>
             <Text style={{ color: primary, fontWeight: '600' }}>
               Already have an account? Sign in
@@ -713,48 +714,48 @@ export default function SignUp() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
-  scroll: { paddingHorizontal: 20 },
-  input: { borderWidth: 1, padding: 12, borderRadius: 14, marginBottom: 4 },
-  hint: { fontSize: 13, marginBottom: 10 },
-  infoBox: { padding: 12, borderRadius: 12, borderWidth: 1, marginBottom: 12 },
+  scroll: { paddingHorizontal: tokens.space.s20 },
+  input: { borderWidth: 1, padding: tokens.space.s12, borderRadius: tokens.radius.r14, marginBottom: tokens.space.s4 },
+  hint: { fontSize: 13, marginBottom: tokens.space.s10 },
+  infoBox: { padding: tokens.space.s12, borderRadius: tokens.radius.r12, borderWidth: 1, marginBottom: tokens.space.s12 },
   handleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderRadius: 14,
-    marginBottom: 4,
+    borderRadius: tokens.radius.r14,
+    marginBottom: tokens.space.s4,
     overflow: 'hidden',
   },
   handleInput: {
     flex: 1,
-    padding: 12,
+    padding: tokens.space.s12,
     fontSize: 16,
   },
   locationRow: {
-    paddingVertical: 10,
+    paddingVertical: tokens.space.s10,
     borderBottomWidth: 1,
   },
   suggestionList: {
     borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginBottom: 10,
+    borderRadius: tokens.radius.r14,
+    paddingHorizontal: tokens.space.s10,
+    paddingVertical: tokens.space.s6,
+    marginBottom: tokens.space.s10,
   },
   inlineButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
+    paddingHorizontal: tokens.space.s14,
+    paddingVertical: tokens.space.s10,
+    borderRadius: tokens.radius.r12,
     borderWidth: 1,
-    marginBottom: 10,
+    marginBottom: tokens.space.s10,
     alignItems: 'center',
   },
   primaryButton: {
     height: 54,
-    borderRadius: 18,
+    borderRadius: tokens.radius.r18,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    marginTop: tokens.space.s8,
   },
   primaryText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });

@@ -1,4 +1,5 @@
 import { Body, H2, Label } from '@/components/ui/typography';
+import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { getMapsKey, searchPlaces, searchPlacesNearby } from '@/services/googleMaps';
 import { devLog } from '@/services/logger';
@@ -186,9 +187,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
   return (
     <Modal visible={visible} animationType="slide">
       <View style={[styles.container, { backgroundColor: bg }]}>
-        <Label style={{ color: muted, marginBottom: 8 }}>Find a spot</Label>
+        <Label style={{ color: muted, marginBottom: tokens.space.s8 }}>Find a spot</Label>
         <H2 style={{ color: text }}>Search places</H2>
-        <View style={{ height: 12 }} />
+        <View style={{ height: tokens.space.s12 }} />
         <TextInput
           placeholder="Search places"
           value={q}
@@ -201,17 +202,17 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           onSubmitEditing={doSearch}
         />
         {q ? (
-          <Pressable onPress={() => { setQ(''); setResults([]); }} style={{ alignSelf: 'flex-start', marginTop: 8 }}>
+          <Pressable onPress={() => { setQ(''); setResults([]); }} style={{ alignSelf: 'flex-start', marginTop: tokens.space.s8 }}>
             <Text style={{ color: primary, fontWeight: '600' }}>Clear</Text>
           </Pressable>
         ) : null}
-        <View style={{ height: 12 }} />
-        {loading ? <Text style={{ color: muted, marginBottom: 8 }}>Searching…</Text> : null}
-        {error ? <Text style={{ color: danger, marginBottom: 8 }}>{error}</Text> : null}
+        <View style={{ height: tokens.space.s12 }} />
+        {loading ? <Text style={{ color: muted, marginBottom: tokens.space.s8 }}>Searching…</Text> : null}
+        {error ? <Text style={{ color: danger, marginBottom: tokens.space.s8 }}>{error}</Text> : null}
         <Pressable onPress={doSearch} style={[styles.searchButton, { backgroundColor: primary }]} disabled={loading || q.trim().length < 2}>
           <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>{loading ? 'Searching…' : 'Search'}</Text>
         </Pressable>
-        <View style={{ height: 12 }} />
+        <View style={{ height: tokens.space.s12 }} />
         <FlatList
           data={results}
           keyExtractor={(i) => i.placeId || i.name}
@@ -223,11 +224,11 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
             !q.trim() ? (
-              <View style={{ marginBottom: 12 }}>
-                {nearbyLoading ? <Text style={{ color: muted, marginBottom: 8 }}>Finding nearby spots…</Text> : null}
+              <View style={{ marginBottom: tokens.space.s12 }}>
+                {nearbyLoading ? <Text style={{ color: muted, marginBottom: tokens.space.s8 }}>Finding nearby spots…</Text> : null}
                 {nearby.length ? (
-                  <View style={{ marginBottom: 12 }}>
-                    <Label style={{ color: muted, marginBottom: 6 }}>Nearby suggestions</Label>
+                  <View style={{ marginBottom: tokens.space.s12 }}>
+                    <Label style={{ color: muted, marginBottom: tokens.space.s6 }}>Nearby suggestions</Label>
                     {nearby.map((r) => (
                       <Pressable
                         key={`nearby-${r.placeId}`}
@@ -243,8 +244,8 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
                   </View>
                 ) : null}
                 {recents.length ? (
-                  <View style={{ marginBottom: 12 }}>
-                    <Label style={{ color: muted, marginBottom: 6 }}>Recent spots</Label>
+                  <View style={{ marginBottom: tokens.space.s12 }}>
+                    <Label style={{ color: muted, marginBottom: tokens.space.s6 }}>Recent spots</Label>
                     {recents.map((r) => (
                       <Pressable
                         key={`recent-${r.placeId || r.name}`}
@@ -280,8 +281,8 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           )}
         />
         {!q.trim() && topSpots.length ? (
-          <View style={{ marginTop: 4 }}>
-            <Label style={{ color: muted, marginBottom: 6 }}>Top picks</Label>
+          <View style={{ marginTop: tokens.space.s4 }}>
+            <Label style={{ color: muted, marginBottom: tokens.space.s6 }}>Top picks</Label>
             {topSpots.map((name) => (
               <Pressable
                 key={`top-${name}`}
@@ -295,9 +296,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           </View>
         ) : null}
         {!results.length && !nearby.length && !loading && !nearbyLoading && !error && q.trim().length < 2 ? (
-          <Text style={{ color: muted, marginTop: 8 }}>Type at least 2 letters to search.</Text>
+          <Text style={{ color: muted, marginTop: tokens.space.s8 }}>Type at least 2 letters to search.</Text>
         ) : null}
-        <View style={{ height: 12 }} />
+        <View style={{ height: tokens.space.s12 }} />
         <Pressable onPress={onClose} style={[styles.close, { borderColor: border, backgroundColor: card }]}>
           <Text style={{ color: primary, fontWeight: '600' }}>Close</Text>
         </Pressable>
@@ -307,9 +308,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  input: { borderWidth: 1, padding: 12, borderRadius: 14 },
-  searchButton: { padding: 12, borderRadius: 14, alignItems: 'center' },
-  row: { padding: 12, borderWidth: 1, borderRadius: 16, marginBottom: 10 },
-  close: { padding: 12, borderWidth: 1, borderRadius: 14, alignItems: 'center' },
+  container: { flex: 1, padding: tokens.space.s20 },
+  input: { borderWidth: 1, padding: tokens.space.s12, borderRadius: tokens.radius.r14 },
+  searchButton: { padding: tokens.space.s12, borderRadius: tokens.radius.r14, alignItems: 'center' },
+  row: { padding: tokens.space.s12, borderWidth: 1, borderRadius: tokens.radius.r16, marginBottom: tokens.space.s10 },
+  close: { padding: tokens.space.s12, borderWidth: 1, borderRadius: tokens.radius.r14, alignItems: 'center' },
 });

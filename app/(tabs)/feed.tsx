@@ -1198,6 +1198,7 @@ function FeedPhoto({
 								style={({ pressed }) => [
 									{
 										marginHorizontal: 16,
+										marginTop: tokens.space.s12,
 										marginBottom: 12,
 										padding: 14,
 										borderRadius: 16,
@@ -1681,7 +1682,7 @@ const styles = StyleSheet.create({
 		borderRadius: tokens.radius.r20,
 		marginBottom: tokens.space.s12,
 	},
-	quickActions: { flexDirection: 'row', marginTop: tokens.space.s12, ...gapStyle(10) },
+	quickActions: { flexDirection: 'row', marginTop: tokens.space.s12, ...gapStyle(tokens.space.s10) },
 	quickButton: {
 		paddingHorizontal: tokens.space.s14,
 		paddingVertical: tokens.space.s10,
@@ -1701,7 +1702,7 @@ const styles = StyleSheet.create({
 	},
 	trendingList: {
 		marginTop: tokens.space.s8,
-		gap: 8,
+		gap: tokens.space.s8,
 	},
 	trendingRow: {
 		borderWidth: 1,
@@ -1726,7 +1727,7 @@ const styles = StyleSheet.create({
 	cardHeader: { padding: tokens.space.s16, paddingBottom: tokens.space.s10 },
 		avatarRow: { flexDirection: 'row', alignItems: 'center', minHeight: 44 },
 		nameRow: { flexDirection: 'row', alignItems: 'center' },
-		liveDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
+		liveDot: { width: 8, height: 8, borderRadius: 4, marginLeft: tokens.space.s6 },
 		avatar: { width: 46, height: 46, borderRadius: 23 },
 	cardActions: { flexDirection: 'row', alignItems: 'center', marginTop: tokens.space.s12 },
 	followButton: {
@@ -1738,16 +1739,16 @@ const styles = StyleSheet.create({
 	},
 		closeButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
 	spot: { fontSize: tokens.type.body.fontSize, fontWeight: '700' as any },
-	metricChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+	metricChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: tokens.space.s6, marginTop: tokens.space.s8 },
 	metricChip: {
 		borderWidth: 1,
 		borderRadius: 999,
 		paddingHorizontal: tokens.space.s8,
-		paddingVertical: 4,
+		paddingVertical: tokens.space.s4,
 	},
-	date: { fontSize: tokens.type.small.fontSize, opacity: 0.6, marginTop: 8 },
-	cardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
-	footerButton: { marginLeft: tokens.space.s12, minWidth: 44, minHeight: 44, paddingHorizontal: 8, justifyContent: 'center', alignItems: 'center' },
+	date: { fontSize: tokens.type.small.fontSize, opacity: 0.6, marginTop: tokens.space.s8 },
+	cardFooter: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: tokens.space.s10 },
+	footerButton: { marginLeft: tokens.space.s12, minWidth: 44, minHeight: 44, paddingHorizontal: tokens.space.s8, justifyContent: 'center', alignItems: 'center' },
 	empty: { marginTop: tokens.space.s20, alignItems: 'flex-start' },
 	emptyCta: {
 		paddingHorizontal: tokens.space.s16,
@@ -1755,19 +1756,19 @@ const styles = StyleSheet.create({
 		borderRadius: 999,
 		alignItems: 'center',
 	},
-	ctaRow: { flexDirection: 'row', alignItems: 'center', ...gapStyle(8) },
+	ctaRow: { flexDirection: 'row', alignItems: 'center', ...gapStyle(tokens.space.s8) },
 	emptySecondary: {
 		paddingHorizontal: tokens.space.s16,
 		paddingVertical: tokens.space.s10,
 		borderRadius: 999,
 		borderWidth: 1,
-		marginTop: 10,
+		marginTop: tokens.space.s10,
 	},
 	cardDivider: {
 		height: 1,
 		opacity: 0.25,
-		marginTop: 10,
-		marginBottom: 6,
+		marginTop: tokens.space.s10,
+		marginBottom: tokens.space.s6,
 	},
 	softDivider: {
 		height: 1,

@@ -1,4 +1,5 @@
 import { Body } from '@/components/ui/typography';
+import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
 import { Pressable, StyleSheet, TextStyle } from 'react-native';
@@ -42,10 +43,10 @@ export function Button({ children, variant = 'primary', style, onPress }: Props)
 const styles = StyleSheet.create({
   base: {
     height: 52,
-    borderRadius: 14,
+    borderRadius: tokens.radius.r14,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: tokens.space.s18,
   },
   primary: {
   },
