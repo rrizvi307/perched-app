@@ -2,6 +2,7 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/app-check';
 import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
+import { observeIdTokenChanges } from './firebaseClient';
 import { devLog } from './logger';
 
 const GLOBAL_APP_CHECK_TOKEN_KEY = 'FIREBASE_APP_CHECK_TOKEN';
@@ -12,6 +13,10 @@ let appCheckInitialized = false;
 let tokenListenerUnsubscribe: (() => void) | null = null;
 let authListenerUnsubscribe: (() => void) | null = null;
 let appCheckTokenExpiryMs = 0;
+
+function shouldEnableFirebaseAppCheck() {
+  return !(typeof __DEV__ !== 'undefined' && __DEV__);
+}
 
 function getExpoExtra() {
   return ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
@@ -79,6 +84,7 @@ async function issueCustomAppCheckToken(appId: string) {
 }
 
 export async function initFirebaseAppCheck() {
+  if (!shouldEnableFirebaseAppCheck()) return null;
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).appCheck !== 'function') return null;
   if (appCheckInitialized) {
@@ -111,7 +117,7 @@ export async function initFirebaseAppCheck() {
     },
   );
 
-  authListenerUnsubscribe = fb.auth().onIdTokenChanged(() => {
+  authListenerUnsubscribe = observeIdTokenChanges(() => {
     void appCheck.getToken(true).catch((error: any) => {
       devLog('Firebase App Check refresh failed after auth change', error);
     });
@@ -130,6 +136,7 @@ export async function initFirebaseAppCheck() {
 }
 
 export async function refreshFirebaseAppCheckToken(forceRefresh = false) {
+  if (!shouldEnableFirebaseAppCheck()) return '';
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).appCheck !== 'function') return '';
   if (!forceRefresh) {

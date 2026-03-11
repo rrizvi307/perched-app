@@ -1,4 +1,4 @@
-import { createAccountWithEmail, deleteAccountAndData, ensureFirebase, getFirebaseInitError, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
+import { createAccountWithEmail, deleteAccountAndData, ensureFirebase, getCurrentFirebaseUser, getFirebaseInitError, observeAuthStateChanges, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, signOutCurrentUser, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
 import { buildPasswordResetTelemetry } from '@/services/analyticsPrivacy';
 import { devLog } from '@/services/logger';
 import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
@@ -107,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         return;
       }
-      const unsub = fb.auth().onAuthStateChanged(async (u: any) => {
+      const unsub = observeAuthStateChanges(async (u: any) => {
         if (!u) {
           setUser(null);
           return;
@@ -385,7 +385,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const fb = getFirebaseOrThrow();
 
       const userObj = await fbSignInWithEmail({ email, password } as any);
-      const authUser = fb.auth().currentUser;
+      const authUser = getCurrentFirebaseUser();
       const emailVerified = !!(authUser && authUser.emailVerified);
       // Hydrate from local cache first so UI has name/handle immediately (avoids "Someone" on first post).
       let cached: any = null;
@@ -511,7 +511,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { sendVerificationEmail } = await import('@/services/firebaseClient');
       await sendVerificationEmail();
     } catch (e) {
-      const authUser = fb.auth().currentUser;
+      const authUser = getCurrentFirebaseUser();
       if (!authUser) throw new Error('No authenticated user');
       if (typeof authUser.sendEmailVerification === 'function') await authUser.sendEmailVerification();
     }
@@ -520,7 +520,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function signOut() {
     const fb = ensureFirebase();
     try {
-      if (fb) await fb.auth().signOut();
+      if (fb) await signOutCurrentUser();
     } catch {}
     // keep local user cache so local/demo accounts can sign back in
     setUser(null);
@@ -588,7 +588,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-    const authUser = fb.auth().currentUser;
+    const authUser = getCurrentFirebaseUser();
     if (!authUser) return false;
     try {
       if (typeof authUser.reload === 'function') {

@@ -6,7 +6,10 @@ import 'firebase/compat/auth';
 import 'firebase/compat/firestore';
 import 'firebase/compat/storage';
 import 'firebase/compat/functions';
+import * as modularAuth from '@firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
 import { normalizePhone } from '@/utils/phone';
@@ -97,6 +100,7 @@ export function isFirebaseConfigured() {
 let _initialized = false;
 let _firebaseApp: any = null;
 let _initError: any = null;
+let _reactNativeAuthConfigured = false;
 let _authPersistenceConfigured = false;
 let _authPersistencePromise: Promise<void> | null = null;
 const checkinsCache = new Map<string, { ts: number; payload: any }>();
@@ -153,11 +157,91 @@ function shouldConfigureWebAuthPersistence() {
   return typeof window !== 'undefined' && typeof document !== 'undefined';
 }
 
+function shouldUseModularAuth() {
+  return Platform.OS !== 'web';
+}
+
+function ensureReactNativeAuthConfigured(firebaseApp?: any) {
+  const fb = firebaseApp || _firebaseApp;
+  if (!fb?.auth || Platform.OS === 'web' || _reactNativeAuthConfigured) return;
+
+  const compatApp = Array.isArray(fb?.apps) ? fb.apps[0] : null;
+  const modularApp = compatApp?._delegate;
+  const getReactNativePersistence = (modularAuth as any).getReactNativePersistence;
+  if (!modularApp || typeof getReactNativePersistence !== 'function') return;
+
+  try {
+    modularAuth.initializeAuth(modularApp, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+  } catch (error: any) {
+    const code = typeof error?.code === 'string' ? error.code : '';
+    const message = typeof error?.message === 'string' ? error.message : '';
+    const alreadyInitialized =
+      code === 'auth/already-initialized' ||
+      /already\s+initialized/i.test(message);
+    if (!alreadyInitialized) {
+      throw error;
+    }
+  }
+
+  // Compat auth delegates to the modular instance, so forcing it here keeps
+  // existing fb.auth() call sites working on React Native.
+  void modularAuth.getAuth(modularApp);
+  _reactNativeAuthConfigured = true;
+}
+
+function getModularFirebaseAuth(firebaseApp?: any) {
+  const fb = firebaseApp || _firebaseApp;
+  if (!fb?.auth) {
+    throw new Error('Firebase auth unavailable');
+  }
+  ensureReactNativeAuthConfigured(fb);
+  const compatApp = Array.isArray(fb?.apps) ? fb.apps[0] : null;
+  const modularApp = compatApp?._delegate;
+  if (!modularApp) {
+    throw new Error('Firebase modular app unavailable');
+  }
+  return modularAuth.getAuth(modularApp);
+}
+
+export function getCurrentFirebaseUser() {
+  const fb = ensureFirebase();
+  if (!fb) return null;
+  if (shouldUseModularAuth()) {
+    try {
+      return getModularFirebaseAuth(fb).currentUser;
+    } catch {
+      return null;
+    }
+  }
+  return fb.auth?.().currentUser || null;
+}
+
+export function observeAuthStateChanges(listener: (user: any) => void) {
+  const fb = ensureFirebase();
+  if (!fb) return () => {};
+  if (shouldUseModularAuth()) {
+    return modularAuth.onAuthStateChanged(getModularFirebaseAuth(fb), listener);
+  }
+  return fb.auth().onAuthStateChanged(listener);
+}
+
+export function observeIdTokenChanges(listener: (user: any) => void) {
+  const fb = ensureFirebase();
+  if (!fb) return () => {};
+  if (shouldUseModularAuth()) {
+    return modularAuth.onIdTokenChanged(getModularFirebaseAuth(fb), listener);
+  }
+  return fb.auth().onIdTokenChanged(listener);
+}
+
 async function ensureAuthPersistenceConfigured(firebaseApp?: any) {
   const fb = firebaseApp || _firebaseApp;
   if (!fb?.auth) return;
   if (_authPersistenceConfigured) return;
   if (!shouldConfigureWebAuthPersistence()) {
+    ensureReactNativeAuthConfigured(fb);
     _authPersistenceConfigured = true;
     return;
   }
@@ -831,6 +915,7 @@ function removeLocalMutualFriend(map: any, userA: string, userB: string) {
 
 export function ensureFirebase() {
   if (_initialized) {
+    ensureReactNativeAuthConfigured(_firebaseApp);
     void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
   }
@@ -841,6 +926,7 @@ export function ensureFirebase() {
       firebaseApp.initializeApp(resolveFirebaseConfig());
     }
     _firebaseApp = firebaseApp;
+    ensureReactNativeAuthConfigured(_firebaseApp);
     _initialized = true;
     void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
@@ -2591,6 +2677,15 @@ export async function linkAnonymousWithEmail({ email, password }: { email: strin
   if (!fb) throw new Error('Firebase not initialized.');
   await ensureAuthPersistenceConfigured(fb);
 
+  if (shouldUseModularAuth()) {
+    const auth = getModularFirebaseAuth(fb);
+    const user = auth.currentUser;
+    if (!user) throw new Error('No authenticated user to link.');
+    const cred = modularAuth.EmailAuthProvider.credential(email, password);
+    const res = await modularAuth.linkWithCredential(user, cred);
+    return res.user;
+  }
+
   const auth = fb.auth();
   const user = auth.currentUser;
   if (!user) throw new Error('No authenticated user to link.');
@@ -2604,6 +2699,11 @@ export async function signInWithEmail({ email, password }: { email: string; pass
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
   await ensureAuthPersistenceConfigured(fb);
+  if (shouldUseModularAuth()) {
+    const auth = getModularFirebaseAuth(fb);
+    const res = await modularAuth.signInWithEmailAndPassword(auth, email, password);
+    return res.user;
+  }
   const auth = fb.auth();
   const res = await auth.signInWithEmailAndPassword(email, password);
   return res.user;
@@ -2625,8 +2725,9 @@ export async function createAccountWithEmail({
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
   await ensureAuthPersistenceConfigured(fb);
-  const auth = fb.auth();
-  const res = await auth.createUserWithEmailAndPassword(email, password);
+  const res = shouldUseModularAuth()
+    ? await modularAuth.createUserWithEmailAndPassword(getModularFirebaseAuth(fb), email, password)
+    : await fb.auth().createUserWithEmailAndPassword(email, password);
   const uid = res.user.uid;
   // send verification email (non-blocking)
   try {
@@ -2675,6 +2776,11 @@ export async function startPhoneAuth(phone: string, verifier: any) {
   if (!fb) throw new Error('Firebase not initialized.');
   const normalized = normalizePhone(phone);
   if (!normalized) throw new Error('Invalid phone number');
+  if (shouldUseModularAuth()) {
+    const auth = getModularFirebaseAuth(fb);
+    const res = await modularAuth.signInWithPhoneNumber(auth, normalized, verifier);
+    return { verificationId: res.verificationId };
+  }
   const res = await fb.auth().signInWithPhoneNumber(normalized, verifier);
   return { verificationId: res.verificationId };
 }
@@ -2682,6 +2788,12 @@ export async function startPhoneAuth(phone: string, verifier: any) {
 export async function confirmPhoneAuth(verificationId: string, code: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  if (shouldUseModularAuth()) {
+    const auth = getModularFirebaseAuth(fb);
+    const credential = modularAuth.PhoneAuthProvider.credential(verificationId, code);
+    const res = await modularAuth.signInWithCredential(auth, credential);
+    return res.user;
+  }
   const credential = fb.auth.PhoneAuthProvider.credential(verificationId, code);
   const res = await fb.auth().signInWithCredential(credential);
   return res.user;
@@ -2690,8 +2802,7 @@ export async function confirmPhoneAuth(verificationId: string, code: string) {
 export async function sendVerificationEmail(actionUrl?: string, displayName?: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
-  const auth = fb.auth();
-  const user = auth.currentUser;
+  const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user to send verification to');
   try {
     const callableResult = await callFirebaseCallable<{
@@ -2716,6 +2827,10 @@ export async function sendVerificationEmail(actionUrl?: string, displayName?: st
       ((global as any)?.FIREBASE_ACTION_URL as string) ||
       undefined;
     const actionCodeSettings = fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
+    if (shouldUseModularAuth()) {
+      await modularAuth.sendEmailVerification(user, actionCodeSettings);
+      return;
+    }
     // @ts-ignore
     if (typeof user.sendEmailVerification === 'function') await user.sendEmailVerification(actionCodeSettings);
   } catch (e) {
@@ -2726,6 +2841,10 @@ export async function sendVerificationEmail(actionUrl?: string, displayName?: st
 export async function sendPasswordResetEmail(email: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
+  if (shouldUseModularAuth()) {
+    await modularAuth.sendPasswordResetEmail(getModularFirebaseAuth(fb), email);
+    return;
+  }
   const auth = fb.auth();
   await auth.sendPasswordResetEmail(email);
 }
@@ -2733,24 +2852,39 @@ export async function sendPasswordResetEmail(email: string) {
 export async function updateCurrentUserPassword(newPassword: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
-  const user = fb.auth().currentUser;
+  const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user');
+  if (shouldUseModularAuth()) {
+    await modularAuth.updatePassword(user, newPassword);
+    return;
+  }
   await user.updatePassword(newPassword);
 }
 
 export async function deleteCurrentUser() {
-  const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
-  const user = fb.auth().currentUser;
+  const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user');
+  if (shouldUseModularAuth()) {
+    await modularAuth.deleteUser(user);
+    return;
+  }
   await user.delete();
+}
+
+export async function signOutCurrentUser() {
+  const fb = ensureFirebase();
+  if (!fb) return;
+  if (shouldUseModularAuth()) {
+    await modularAuth.signOut(getModularFirebaseAuth(fb));
+    return;
+  }
+  await fb.auth().signOut();
 }
 
 export async function deleteAccountAndData({ password }: { password?: string } = {}) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
-  const auth = fb.auth();
-  const current = auth.currentUser;
+  const current = getCurrentFirebaseUser();
   if (!current) throw new Error('No authenticated user');
 
   const userId = current.uid;
@@ -2830,8 +2964,13 @@ export async function deleteAccountAndData({ password }: { password?: string } =
 export async function reauthenticateCurrentUser({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
-  const user = fb.auth().currentUser;
+  const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user');
+  if (shouldUseModularAuth()) {
+    const cred = modularAuth.EmailAuthProvider.credential(email, password);
+    await modularAuth.reauthenticateWithCredential(user, cred);
+    return;
+  }
   const cred = fb.auth.EmailAuthProvider.credential(email, password);
   // modern API name may be reauthenticateWithCredential
   if (typeof user.reauthenticateWithCredential === 'function') {
