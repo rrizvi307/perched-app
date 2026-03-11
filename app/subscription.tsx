@@ -17,6 +17,7 @@ import { cancelPremiumSubscription, isPremiumPurchasesEnabled, PRICING } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import * as Haptics from 'expo-haptics';
+import Constants from 'expo-constants';
 
 export default function SubscriptionScreen() {
   const router = useRouter();
@@ -30,6 +31,7 @@ export default function SubscriptionScreen() {
   const primary = useThemeColor({}, 'primary');
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
 
   const {
     premiumStatus,
@@ -229,7 +231,7 @@ export default function SubscriptionScreen() {
         {/* Footer */}
         <View style={styles.footer}>
           <Text style={[styles.footerText, { color: muted }]}>
-            Questions? Email support@perched.app
+            Questions? Email {supportEmail}
           </Text>
         </View>
       </ScrollView>

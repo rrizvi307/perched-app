@@ -34,6 +34,7 @@ import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrime
 import { toMillis } from '@/services/checkinUtils';
 import { normalizePhone } from '@/utils/phone';
 import { openExternalLink } from '@/services/externalLinks';
+import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
@@ -72,6 +73,7 @@ export default function ProfileScreen() {
   const muted = useThemeColor({}, 'muted');
   const highlight = withAlpha(primary, 0.1);
   const separator = withAlpha(textColor, 0.08);
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
   const [checkins, setCheckins] = useState<any[]>([]);
   const router = useRouter();
   const [, setFriendIds] = useState<string[]>([]);
@@ -1252,7 +1254,7 @@ export default function ProfileScreen() {
               </Pressable>
               <Pressable
                 onPress={() => {
-                  void openExternalLink('mailto:perchedappteam@gmail.com');
+                  void openExternalLink(`mailto:${supportEmail}`);
                 }}
                 accessibilityLabel="Email Perched"
                 style={({ pressed }) => [

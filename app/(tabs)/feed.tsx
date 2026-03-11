@@ -29,7 +29,6 @@ import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { trackScreenLoad } from '@/services/perfMonitor';
-import { getWeeklyRaffleProgress, type WeeklyRaffleProgress } from '@/services/earlyAdopterRaffle';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { FlatList, InteractionManager, Platform, Pressable, RefreshControl, Share, StyleSheet, Text, View } from 'react-native';
@@ -310,8 +309,6 @@ function FeedPhoto({
 	const [feedScope, setFeedScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
 		const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
 		const [blockedIds, setBlockedIds] = useState<string[]>([]);
-	const [weeklyRaffle, setWeeklyRaffle] = useState<WeeklyRaffleProgress | null>(null);
-
 		const summarizePending = useCallback(
 			(pending: any[]) => {
 				const scoped = user?.id ? pending.filter((p: any) => p?.userId === user.id) : pending;
@@ -401,29 +398,6 @@ function FeedPhoto({
 			};
 		}, [])
 	);
-
-	useEffect(() => {
-		let active = true;
-		if (!isFocused || !user?.id) {
-			setWeeklyRaffle(null);
-			return () => {
-				active = false;
-			};
-		}
-		(async () => {
-			try {
-				const progress = await getWeeklyRaffleProgress(user.id);
-				if (!active) return;
-				setWeeklyRaffle(progress);
-			} catch {
-				if (!active) return;
-				setWeeklyRaffle(null);
-			}
-		})();
-		return () => {
-			active = false;
-		};
-	}, [isFocused, user?.id, items.length]);
 
 	useEffect(() => {
 		(async () => {
@@ -1026,9 +1000,6 @@ function FeedPhoto({
 
 		const feedCount = feedItems.length;
 		const demoMode = isDemoMode();
-		const raffleProgressPct = weeklyRaffle
-			? Math.max(0, Math.min(100, Math.round((weeklyRaffle.postsThisWeek / Math.max(1, weeklyRaffle.target)) * 100)))
-			: 0;
 
 		useEffect(() => {
 			const ids = feedItems
@@ -1153,26 +1124,6 @@ function FeedPhoto({
 								</>
 							) : null}
 						</View>
-						{user && weeklyRaffle ? (
-							<View style={[styles.raffleCard, { borderColor: border, backgroundColor: withAlpha(primary, 0.06) }]}>
-								<View style={styles.raffleHeaderRow}>
-									<Text style={{ color: text, fontWeight: '700' }}>Early adopter raffle</Text>
-									<Text style={{ color: primary, fontWeight: '700', fontSize: 12 }}>
-										{weeklyRaffle.postsThisWeek}/{weeklyRaffle.target}
-									</Text>
-								</View>
-								<Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
-									{weeklyRaffle.entered
-										? 'Entry locked for this week. Keep posting to seed the feed.'
-										: weeklyRaffle.remaining > 0
-										? `${weeklyRaffle.remaining} more post${weeklyRaffle.remaining === 1 ? '' : 's'} to enter this week.`
-										: 'You qualify this week. Entry is being confirmed.'}
-								</Text>
-								<View style={[styles.raffleProgressTrack, { backgroundColor: withAlpha(primary, 0.16) }]}>
-									<View style={[styles.raffleProgressFill, { backgroundColor: primary, width: `${raffleProgressPct}%` }]} />
-								</View>
-							</View>
-						) : null}
 						<View style={[styles.softDivider, { backgroundColor: border }]} />
 						<View style={styles.quickActions}>
 							<Pressable
@@ -1731,27 +1682,6 @@ const styles = StyleSheet.create({
 		marginBottom: tokens.space.s12,
 	},
 	quickActions: { flexDirection: 'row', marginTop: tokens.space.s12, ...gapStyle(10) },
-	raffleCard: {
-		marginTop: tokens.space.s12,
-		borderWidth: 1,
-		borderRadius: tokens.radius.r16,
-		padding: tokens.space.s12,
-	},
-	raffleHeaderRow: {
-		flexDirection: 'row',
-		alignItems: 'center',
-		justifyContent: 'space-between',
-	},
-	raffleProgressTrack: {
-		height: 8,
-		borderRadius: 999,
-		marginTop: tokens.space.s10,
-		overflow: 'hidden',
-	},
-	raffleProgressFill: {
-		height: '100%',
-		borderRadius: 999,
-	},
 	quickButton: {
 		paddingHorizontal: tokens.space.s14,
 		paddingVertical: tokens.space.s10,

@@ -9,6 +9,17 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
+function mapVerificationError(error: any) {
+  const code = String(error?.code || '');
+  if (code === 'resource-exhausted' || code === 'functions/resource-exhausted' || code === 'auth/too-many-requests') {
+    return 'Too many attempts. Wait a bit, then try again.';
+  }
+  if (code === 'unavailable' || code === 'functions/unavailable' || code === 'network-request-failed') {
+    return 'Unable to send verification right now. Check your connection and try again.';
+  }
+  return 'Unable to send verification right now. Please try again.';
+}
+
 export default function Verify() {
   const { resendVerification, refreshUser } = useAuth();
   const color = useThemeColor({}, 'text');
@@ -45,8 +56,7 @@ export default function Verify() {
       setError(null);
     } catch (e) {
       devLog('resend error', e);
-      const msg = (e as any)?.message || String(e);
-      setError(`Unable to send verification: ${msg}`);
+      setError(mapVerificationError(e));
     } finally {
       setLoading(false);
     }

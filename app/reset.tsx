@@ -2,9 +2,14 @@ import { ThemedView } from '@/components/themed-view';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { devLog } from '@/services/logger';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+function isValidEmail(email: string) {
+  return /\S+@\S+\.\S+/.test(email);
+}
 
 export default function ResetPassword() {
   const { resetPassword } = useAuth();
@@ -19,13 +24,24 @@ export default function ResetPassword() {
   const [loading, setLoading] = useState(false);
 
   async function submit() {
-    if (!email) return;
+    const trimmed = email.trim();
+    if (!trimmed) return;
+    if (!isValidEmail(trimmed)) {
+      setStatus('Enter a valid email address.');
+      return;
+    }
     try {
       setLoading(true);
-      await resetPassword(email.trim());
+      await resetPassword(trimmed);
       setStatus('If that email exists, a reset link has been sent.');
     } catch (e: any) {
-      setStatus(e?.message || 'Unable to request reset.');
+      devLog('reset password failed', e);
+      const code = String(e?.code || '');
+      if (code === 'auth/user-not-found') {
+        setStatus('If that email exists, a reset link has been sent.');
+      } else {
+        setStatus('Unable to request reset right now. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

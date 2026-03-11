@@ -16,7 +16,8 @@ function mapDeletionError(error: any) {
   if (code === 'auth/weak-password') return 'Choose a stronger password before retrying this action.';
   if (code === 'auth/requires-recent-login') return 'Please sign in again, then retry account deletion.';
   if (code === 'auth/too-many-requests') return 'Too many attempts. Wait a bit, then try again.';
-  return error?.message || 'Unable to delete your account right now.';
+  if (code === 'auth/network-request-failed') return 'Unable to delete your account right now. Check your connection and try again.';
+  return 'Unable to delete your account right now.';
 }
 
 export default function DeleteAccountScreen() {

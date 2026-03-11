@@ -12,7 +12,7 @@ This is the single runbook for Firebase setup, launch operations, and App Store 
 
 ## Launch Ops Checklist
 
-1. Enable Phone Auth before beta or wider release.
+1. Enable Phone Auth before beta or wider release only if the product is shipping a phone-auth flow.
 2. Confirm production auth domains and mobile app fingerprints are configured.
 3. Set the Firebase project display name and point auth action links at the production domain.
 4. Configure the transactional email provider and store its credentials only in managed secret storage.

@@ -2,11 +2,13 @@ import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import Constants from 'expo-constants';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 export default function TermsOfService() {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
 
   return (
     <ThemedView style={styles.container}>
@@ -25,7 +27,7 @@ export default function TermsOfService() {
         </Body>
         <View style={{ height: 16 }} />
         <Body style={{ color: muted }}>
-          Questions? Email perchedappteam@gmail.com or contact us in-app.
+          Questions? Email {supportEmail} or contact us in-app.
         </Body>
       </ScrollView>
     </ThemedView>

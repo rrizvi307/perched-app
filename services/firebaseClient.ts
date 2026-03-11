@@ -2760,6 +2760,16 @@ export async function deleteAccountAndData({ password }: { password?: string } =
   }
 
   const db = fb.firestore();
+  const deleteDocsByQuery = async (buildQuery: () => any, pageLimit = 50, maxPages = 20) => {
+    for (let page = 0; page < maxPages; page += 1) {
+      const snap = await buildQuery().limit(pageLimit).get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc: any) => batch.delete(doc.ref));
+      await batch.commit();
+      if (snap.size < pageLimit) break;
+    }
+  };
 
   // Attempt to remove user-generated content first while still authenticated.
   try {
@@ -2776,31 +2786,28 @@ export async function deleteAccountAndData({ password }: { password?: string } =
 
     // Delete friend requests to/from this user.
     try {
-      const toSnap = await db.collection('friendRequests').where('toId', '==', userId).get();
-      for (const doc of toSnap.docs) {
-        try {
-          await db.collection('friendRequests').doc(doc.id).delete();
-        } catch {}
-      }
+      await deleteDocsByQuery(() => db.collection('friendRequests').where('toId', '==', userId));
     } catch {}
     try {
-      const fromSnap = await db.collection('friendRequests').where('fromId', '==', userId).get();
-      for (const doc of fromSnap.docs) {
-        try {
-          await db.collection('friendRequests').doc(doc.id).delete();
-        } catch {}
-      }
+      await deleteDocsByQuery(() => db.collection('friendRequests').where('fromId', '==', userId));
     } catch {}
 
     // Delete check-ins authored by this user (batch in pages).
-    for (let page = 0; page < 20; page++) {
-      const snap = await db.collection('checkins').where('userId', '==', userId).limit(50).get();
-      if (snap.empty) break;
-      const batch = db.batch();
-      snap.docs.forEach((d: any) => batch.delete(d.ref));
-      await batch.commit();
-      if (snap.size < 50) break;
-    }
+    await deleteDocsByQuery(() => db.collection('checkins').where('userId', '==', userId));
+
+    // Delete social activity authored by this user.
+    try {
+      await deleteDocsByQuery(() => db.collection('comments').where('userId', '==', userId));
+    } catch {}
+    try {
+      await deleteDocsByQuery(() => db.collection('reactions').where('userId', '==', userId));
+    } catch {}
+    try {
+      await deleteDocsByQuery(() => db.collection('checkinResponses').where('userId', '==', userId));
+    } catch {}
+    try {
+      await deleteDocsByQuery(() => db.collection('checkinResponses').where('ownerId', '==', userId));
+    } catch {}
 
     // Delete the user profile document last.
     try {

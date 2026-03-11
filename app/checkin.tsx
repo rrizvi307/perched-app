@@ -37,7 +37,6 @@ import { safeImpact, safeNotification } from '@/utils/haptics';
 import { trackCheckinForRating, promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
 import { toNumericNoiseLevel } from '@/services/checkinUtils';
 import { DISCOVERY_INTENT_OPTIONS, sanitizeDiscoveryIntents, type DiscoveryIntent } from '@/services/discoveryIntents';
-import { trackWeeklyRaffleProgress } from '@/services/earlyAdopterRaffle';
 
 function dmsToDeg(value: any, ref?: string) {
 	if (!value) return null;
@@ -847,20 +846,6 @@ export default function CheckinScreen() {
 					}
 				} catch (error) {
 					devLog('celebration/notification flow failed', error);
-				}
-
-				// Early adopter weekly raffle: 3 check-ins/week => auto-enter.
-				try {
-					const raffle = await trackWeeklyRaffleProgress(uid);
-					if (raffle?.enteredNow) {
-						showToast('You are entered in this week\'s early adopter raffle!', 'success');
-					} else if (raffle && raffle.qualified && !raffle.entered) {
-						showToast('You qualify for this week\'s early adopter raffle. Entry is being confirmed.', 'info');
-					} else if (raffle && !raffle.entered && raffle.remaining === 1) {
-						showToast('One more post this week to enter the early adopter raffle.', 'info');
-					}
-				} catch (error) {
-					devLog('weekly raffle tracking failed', error);
 				}
 
 				// Track metrics impact
