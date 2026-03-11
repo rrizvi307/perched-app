@@ -57,15 +57,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24.11.0'
           cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
       - name: Run ESLint
@@ -76,19 +74,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24.11.0'
           cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
-      - name: Install Cloud Functions dependencies
-        run: npm ci --prefix functions --legacy-peer-deps
       - name: Run TypeScript type check
         run: npm run typecheck
 
@@ -97,32 +91,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24.11.0'
           cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
-      - name: Install Cloud Functions dependencies
-        run: npm ci --prefix functions --legacy-peer-deps
       - name: Run tests
-        run: npm test -- --runInBand
+        run: npm run test:unit -- --runInBand
 
   functions-typecheck:
     name: Functions Type Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: functions/package-lock.json
       - name: Install Cloud Functions dependencies
@@ -135,11 +125,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: functions/package-lock.json
       - name: Install Cloud Functions dependencies
@@ -152,11 +142,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24.11.0'
           cache: 'npm'
           cache-dependency-path: package-lock.json
       - name: Install dependencies
