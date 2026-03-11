@@ -14,6 +14,14 @@ module.exports = {
     '**/__tests__/**/*.test.ts',
     '**/?(*.)+(spec|test).ts',
   ],
+  testPathIgnorePatterns: [
+    '<rootDir>/.codex-push/',
+    '<rootDir>/.tools/',
+  ],
+  modulePathIgnorePatterns: [
+    '<rootDir>/.codex-push/',
+    '<rootDir>/.tools/',
+  ],
   moduleFileExtensions: ['ts', 'js', 'json', 'node'],
   collectCoverageFrom: [
     'services/schemaHelpers.ts',

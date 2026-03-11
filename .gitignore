@@ -59,6 +59,10 @@ spot-app-*-firebase-adminsdk-*.json
 # local logs
 logs/
 
+# local agent/workspace artifacts
+.codex-push/
+.tools/
+
 # local/process docs (keep README if present)
 docs/*
 !docs/README.md

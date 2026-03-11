@@ -190,7 +190,7 @@ function main() {
     'One or more Settings legal/support routes are missing'
   );
   check(
-    contains(settings, "/delete-account"),
+    contains(settings, "router.push('/delete-account'"),
     'Settings exposes an in-app delete account route',
     'Settings must expose an in-app delete account route'
   );
