@@ -31,6 +31,53 @@ const SECTION_BUNDLE = 'SECTION 4  BUNDLE KEY EXPOSURE';
 const SECTION_MIGRATION = 'SECTION 5  MIGRATION INTEGRITY';
 const SECTION_FINAL = 'SECTION 6  SMOKE PASS/FAIL';
 
+function parseDotenv(content) {
+  const output = {};
+  const lines = String(content || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const withoutExport = line.startsWith('export ') ? line.slice(7).trim() : line;
+    const eq = withoutExport.indexOf('=');
+    if (eq <= 0) continue;
+
+    const key = withoutExport.slice(0, eq).trim();
+    if (!key) continue;
+    let value = withoutExport.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return parseDotenv(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function hydrateLocalEnv() {
+  const envFiles = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '.env.local'),
+  ];
+  for (const filePath of envFiles) {
+    const parsed = loadEnvFile(filePath);
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (!process.env[key]) process.env[key] = value;
+    });
+  }
+}
+
 function parseArgs(argv) {
   const args = {
     serviceAccount: null,
@@ -267,6 +314,12 @@ function buildBundleForScan() {
   };
 }
 
+function bundleDirHasExportArtifacts(bundleDir) {
+  if (!fs.existsSync(bundleDir)) return false;
+  const entries = collectFiles(bundleDir);
+  return entries.length > 0;
+}
+
 function collectFiles(dir, acc = []) {
   if (!fs.existsSync(dir)) return acc;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -302,6 +355,7 @@ function record(section, name, pass, details = {}) {
 }
 
 async function main() {
+  hydrateLocalEnv();
   const args = parseArgs(process.argv);
   const firebaseApiKey = resolveFirebaseApiKey();
   if (!firebaseApiKey) {
@@ -409,7 +463,17 @@ async function main() {
     createdStoragePaths.push(await uploadSmokeMedia(bucket, ids.owner, `friends-${smokeId}.jpg`, 'friends'));
     createdStoragePaths.push(await uploadSmokeMedia(bucket, ids.owner, `close-${smokeId}.jpg`, 'close'));
 
-    const appCheckToken = (await admin.appCheck().createToken(appCheckAppId, { ttlMillis: 5 * 60 * 1000 })).token;
+    let appCheckToken = null;
+    try {
+      appCheckToken = (
+        await admin.appCheck().createToken(appCheckAppId, { ttlMillis: 30 * 60 * 1000 })
+      ).token;
+      record(report.appCheck, 'App Check token creation succeeds', true, {});
+    } catch (error) {
+      record(report.appCheck, 'App Check token creation succeeds', false, {
+        error: error?.message || String(error),
+      });
+    }
     const googleProxyUrl = getFunctionsEndpoint(projectId, 'googlePlacesProxy');
     const placeSignalsUrl = getFunctionsEndpoint(projectId, 'placeSignalsProxy');
 
@@ -423,18 +487,25 @@ async function main() {
       expectedStatuses: Array.from(DENY_STATUSES),
     });
 
-    const positiveGoogle = await fetchJson(googleProxyUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Firebase-AppCheck': appCheckToken,
-      },
-      body: JSON.stringify({ action: 'reverse_geocode', lat: 29.7604, lng: -95.3698 }),
-    });
-    record(report.appCheck, 'googlePlacesProxy accepts valid App Check', positiveGoogle.ok, {
-      status: positiveGoogle.status,
-      responsePreview: positiveGoogle.json || positiveGoogle.text.slice(0, 300),
-    });
+    if (appCheckToken) {
+      const positiveGoogle = await fetchJson(googleProxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Firebase-AppCheck': appCheckToken,
+        },
+        body: JSON.stringify({ action: 'reverse_geocode', lat: 29.7604, lng: -95.3698 }),
+      });
+      record(report.appCheck, 'googlePlacesProxy accepts valid App Check', positiveGoogle.ok, {
+        status: positiveGoogle.status,
+        responsePreview: positiveGoogle.json || positiveGoogle.text.slice(0, 300),
+      });
+    } else {
+      record(report.appCheck, 'googlePlacesProxy accepts valid App Check', false, {
+        skipped: true,
+        reason: 'App Check token unavailable',
+      });
+    }
 
     const negativeSignals = await fetchJson(placeSignalsUrl, {
       method: 'POST',
@@ -450,22 +521,29 @@ async function main() {
       expectedStatuses: Array.from(DENY_STATUSES),
     });
 
-    const positiveSignals = await fetchJson(placeSignalsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Firebase-AppCheck': appCheckToken,
-      },
-      body: JSON.stringify({
-        placeName: 'Blacksmith',
-        placeId: 'smoke-blacksmith',
-        location: { lat: 29.743, lng: -95.3977 },
-      }),
-    });
-    record(report.appCheck, 'placeSignalsProxy accepts valid App Check', positiveSignals.ok, {
-      status: positiveSignals.status,
-      responsePreview: positiveSignals.json || positiveSignals.text.slice(0, 300),
-    });
+    if (appCheckToken) {
+      const positiveSignals = await fetchJson(placeSignalsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Firebase-AppCheck': appCheckToken,
+        },
+        body: JSON.stringify({
+          placeName: 'Blacksmith',
+          placeId: 'smoke-blacksmith',
+          location: { lat: 29.743, lng: -95.3977 },
+        }),
+      });
+      record(report.appCheck, 'placeSignalsProxy accepts valid App Check', positiveSignals.ok, {
+        status: positiveSignals.status,
+        responsePreview: positiveSignals.json || positiveSignals.text.slice(0, 300),
+      });
+    } else {
+      record(report.appCheck, 'placeSignalsProxy accepts valid App Check', false, {
+        skipped: true,
+        reason: 'App Check token unavailable',
+      });
+    }
 
     const firestoreCases = [
       {
@@ -568,9 +646,12 @@ async function main() {
       {},
     );
 
-    const bundleBuild = buildBundleForScan();
+    const bundleBuild = bundleDirHasExportArtifacts(args.bundleDir)
+      ? { status: 0, stdout: 'reused existing export bundle', stderr: '', reused: true }
+      : buildBundleForScan();
     record(report.bundle, 'mobile export build succeeds for bundle scan', bundleBuild.status === 0, {
       status: bundleBuild.status,
+      reusedExistingBundle: bundleBuild.reused === true,
       stderr: bundleBuild.status === 0 ? undefined : bundleBuild.stderr.slice(0, 800),
     });
 

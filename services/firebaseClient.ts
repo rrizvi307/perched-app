@@ -2906,11 +2906,9 @@ export async function createAccountWithEmail({
     : await fb.auth().createUserWithEmailAndPassword(email, password);
   const uid = res.user.uid;
   // send verification email (non-blocking)
-  try {
-    void sendVerificationEmail(undefined, name || res.user.displayName || undefined);
-  } catch (e) {
-    // ignore
-  }
+  void sendVerificationEmail(undefined, name || res.user.displayName || undefined).catch((error) => {
+    devLog('sendVerificationEmail failed', error);
+  });
   // create profile doc in background for faster UX
   void createUserRemote({
     userId: uid,
@@ -2980,38 +2978,41 @@ export async function sendVerificationEmail(actionUrl?: string, displayName?: st
   if (!fb) throw new Error('Firebase not initialized.');
   const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user to send verification to');
-  try {
-    const callableResult = await callFirebaseCallable<{
-      ok?: boolean;
-      sent?: boolean;
-      skipped?: boolean;
-      reason?: string | null;
-    }>('sendVerificationEmailCustom', {
-      ...(actionUrl ? { actionUrl } : {}),
-      ...(displayName ? { displayName } : {}),
-    });
-    if (callableResult?.sent) {
-      return;
-    }
-    if (callableResult?.skipped && callableResult?.reason === 'already_verified') {
-      return;
-    }
-
-    const fallbackUrl =
-      actionUrl ||
-      (process.env.FIREBASE_ACTION_URL as string) ||
-      ((global as any)?.FIREBASE_ACTION_URL as string) ||
-      undefined;
-    const actionCodeSettings = fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
-    if (shouldUseModularAuth()) {
-      await modularAuth.sendEmailVerification(user, actionCodeSettings);
-      return;
-    }
-    // @ts-ignore
-    if (typeof user.sendEmailVerification === 'function') await user.sendEmailVerification(actionCodeSettings);
-  } catch (e) {
-    throw e;
+  const callableResult = await callFirebaseCallable<{
+    ok?: boolean;
+    sent?: boolean;
+    skipped?: boolean;
+    reason?: string | null;
+  }>('sendVerificationEmailCustom', {
+    ...(actionUrl ? { actionUrl } : {}),
+    ...(displayName ? { displayName } : {}),
+  });
+  if (callableResult?.sent) {
+    return;
   }
+  if (callableResult?.skipped && callableResult?.reason === 'already_verified') {
+    return;
+  }
+
+  if (!__DEV__) {
+    const error = new Error('Verification email must be sent through the custom mailer.');
+    (error as any).code = 'verification/custom-mailer-required';
+    (error as any).details = callableResult?.reason || 'custom_mailer_unavailable';
+    throw error;
+  }
+
+  const fallbackUrl =
+    actionUrl ||
+    (process.env.FIREBASE_ACTION_URL as string) ||
+    ((global as any)?.FIREBASE_ACTION_URL as string) ||
+    undefined;
+  const actionCodeSettings = fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
+  if (shouldUseModularAuth()) {
+    await modularAuth.sendEmailVerification(user, actionCodeSettings);
+    return;
+  }
+  // @ts-ignore
+  if (typeof user.sendEmailVerification === 'function') await user.sendEmailVerification(actionCodeSettings);
 }
 
 export async function sendPasswordResetEmail(email: string) {

@@ -27,6 +27,7 @@ import {
   getUsersByCampus,
   getUserFriends,
 } from '@/services/firebaseClient';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { logEvent } from '@/services/logEvent';
 import { promptRatingAtMoment, RatingTriggers } from '@/services/appRating';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
@@ -254,7 +255,15 @@ export default function FriendsScreen() {
 
     try {
       // Send friend request
-      await sendFriendRequest(user.id, targetUserId);
+      const result = await sendFriendRequest(user.id, targetUserId);
+      const becameFriends = didFriendRequestResolveToFriendship(result);
+
+      if (becameFriends) {
+        await loadFriendData();
+        void logEvent('friend_request_accepted', user.id, { target: targetUserId, source: 'friends_auto_accept' });
+        void promptRatingAtMoment(RatingTriggers.FRIEND_ADDED);
+        return;
+      }
 
       // Remove from suggestions
       setSuggestions((prev) => prev.filter((s) => s.id !== targetUserId));

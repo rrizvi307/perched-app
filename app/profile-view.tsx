@@ -15,6 +15,7 @@ import {
   findUserByHandle,
 } from '@/services/firebaseClient';
 import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { getCheckins } from '@/storage/local';
 import { gapStyle } from '@/utils/layout';
@@ -266,12 +267,8 @@ export default function ProfileView() {
               }
               setRequesting(true);
               try {
-                const result: any = await sendFriendRequest(user.id, profile.id);
-                setRelationship(
-                  result?.status === 'accepted' || result?.autoAccepted || result?.alreadyFriends
-                    ? 'friend'
-                    : 'outgoing',
-                );
+                const result = await sendFriendRequest(user.id, profile.id);
+                setRelationship(didFriendRequestResolveToFriendship(result) ? 'friend' : 'outgoing');
               } finally {
                 setRequesting(false);
               }

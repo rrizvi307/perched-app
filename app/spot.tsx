@@ -9,12 +9,13 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { getCheckinsForSpotRemote, getCheckinsRemote, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
+import { getCheckinsForSpotRemote, getCheckinsRemote, getOutgoingFriendRequests, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
 import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
 import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spotUtils';
 import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -123,6 +124,7 @@ export default function SpotDetail() {
   const [friendsHere, setFriendsHere] = useState<any[]>([]);
   const [friendIds, setFriendIds] = useState<string[]>([]);
   const [peopleHere, setPeopleHere] = useState<any[]>([]);
+  const [pendingPeopleIds, setPendingPeopleIds] = useState<string[]>([]);
   const [reactions, setReactions] = useState<Record<string, number>>({});
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -147,6 +149,7 @@ export default function SpotDetail() {
     transform: [{ scale: saveScale.value }],
   }));
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+  const pendingPeopleIdSet = useMemo(() => new Set(pendingPeopleIds), [pendingPeopleIds]);
   const canTag = useMemo(() => {
     if (!user) return false;
     return checkins.some((c) => {
@@ -419,6 +422,27 @@ export default function SpotDetail() {
       }
     })();
   }, [user, visibleCheckins]);
+
+  useEffect(() => {
+    let canceled = false;
+    if (!user?.id) {
+      setPendingPeopleIds([]);
+      return;
+    }
+    (async () => {
+      try {
+        const outgoing = await getOutgoingFriendRequests(user.id);
+        if (!canceled) {
+          setPendingPeopleIds(Array.from(new Set((outgoing || []).map((request: any) => request?.toId).filter(Boolean))));
+        }
+      } catch {
+        if (!canceled) setPendingPeopleIds([]);
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     const now = Date.now();
@@ -798,10 +822,31 @@ export default function SpotDetail() {
                   <Text style={{ color: muted }}>{p.handle ? `@${p.handle}` : p.email || ''}</Text>
                 </View>
                 <Pressable
-                  onPress={() => user && sendFriendRequest(user.id, p.id)}
+                  onPress={async () => {
+                    if (!user?.id || pendingPeopleIdSet.has(p.id)) return;
+                    setPendingPeopleIds((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                    try {
+                      const result = await sendFriendRequest(user.id, p.id);
+                      if (didFriendRequestResolveToFriendship(result)) {
+                        setPendingPeopleIds((prev) => prev.filter((id) => id !== p.id));
+                        setFriendIds((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
+                        setFriendsHere((prev) => (prev.some((friend) => friend.id === p.id) ? prev : [...prev, p]));
+                        setPeopleHere((prev) => prev.filter((person) => person.id !== p.id));
+                        showToast('You are now friends', 'success');
+                        return;
+                      }
+                      showToast('Friend request sent', 'success');
+                    } catch {
+                      setPendingPeopleIds((prev) => prev.filter((id) => id !== p.id));
+                      showToast('Could not send friend request right now.', 'error');
+                    }
+                  }}
+                  disabled={pendingPeopleIdSet.has(p.id)}
                   style={[styles.addButton, { backgroundColor: primary }]}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Add</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    {pendingPeopleIdSet.has(p.id) ? 'Pending' : 'Add'}
+                  </Text>
                 </Pressable>
               </View>
             ))}

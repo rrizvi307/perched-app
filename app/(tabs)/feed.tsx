@@ -17,6 +17,7 @@ import { subscribeCheckinEvents } from '@/services/feedEvents';
 import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportCheckinRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { spotKey } from '@/services/spotUtils';
 import { formatCheckinTime, isCheckinExpired, toMillis } from '@/services/checkinUtils';
 import { DEMO_USER_IDS, isDemoMode } from '@/services/demoMode';
@@ -1409,8 +1410,13 @@ function FeedPhoto({
 													} else if (isOutgoing) {
 														// no-op for now; keep pending
 													} else {
-														await sendFriendRequest(user.id, targetId);
-														await logEvent('friend_request_sent', user.id, { target: targetId });
+														const result = await sendFriendRequest(user.id, targetId);
+														if (didFriendRequestResolveToFriendship(result)) {
+															showToast('You are now friends', 'success');
+															await logEvent('friend_request_accepted', user.id, { target: targetId, source: 'feed_auto_accept' });
+														} else {
+															await logEvent('friend_request_sent', user.id, { target: targetId });
+														}
 													}
 													await refreshFriendRequests();
 												} catch (e) {

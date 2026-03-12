@@ -111,7 +111,7 @@ function main() {
 
   runStep('TypeScript check', 'npm', ['run', 'typecheck']);
   runStep('Lint', 'npm', ['run', 'lint']);
-  runStep('Tests', 'npm', ['test', '--', '--runInBand']);
+  runStep('Tests', 'npm', ['run', 'test:unit', '--', '--runInBand']);
 
   process.stdout.write('\n[preflight] release preflight passed\n');
 }

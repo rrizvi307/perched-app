@@ -34,6 +34,8 @@ const PUBLIC_PROFILE_FIELDS = new Set([
 
 const SOCIAL_GRAPH_FIELDS = new Set(['friends', 'closeFriends', 'blocked']);
 const CONTACT_FIELDS = new Set(['email', 'phone', 'phoneNormalized', 'pushToken']);
+const LEGACY_ALIAS_FIELDS = new Set(['displayName', 'username', 'userHandle', 'photoURL']);
+const USERS_ALLOWED_FIELDS = new Set(['createdAt', 'updatedAt', 'migrationVersion']);
 
 function parseArgs(argv) {
   const args = {
@@ -105,6 +107,11 @@ function asString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function asLowerString(value) {
+  const normalized = asString(value);
+  return normalized ? normalized.toLowerCase() : '';
+}
+
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
@@ -123,6 +130,28 @@ function splitLegacyUserData(data, pushTokenDoc) {
   const socialGraph = {};
   const userPrivate = {};
 
+  const canonicalName = asString(data?.name) || asString(data?.displayName);
+  const canonicalHandle =
+    asLowerString(data?.handle) ||
+    asLowerString(data?.userHandle) ||
+    asLowerString(data?.username);
+  const canonicalPhotoUrl = asString(data?.photoUrl) || asString(data?.photoURL);
+
+  if (canonicalName) {
+    publicProfile.name = canonicalName;
+    publicProfile.nameLower = asLowerString(data?.nameLower) || canonicalName.toLowerCase();
+  } else if (asLowerString(data?.nameLower)) {
+    publicProfile.nameLower = asLowerString(data.nameLower);
+  }
+
+  if (canonicalHandle) {
+    publicProfile.handle = canonicalHandle;
+  }
+
+  if (canonicalPhotoUrl) {
+    publicProfile.photoUrl = canonicalPhotoUrl;
+  }
+
   Object.entries(data || {}).forEach(([key, value]) => {
     if (PUBLIC_PROFILE_FIELDS.has(key)) {
       publicProfile[key] = value;
@@ -136,7 +165,13 @@ function splitLegacyUserData(data, pushTokenDoc) {
       userPrivate[key] = value;
       return;
     }
-    if (key === 'createdAt' || key === 'updatedAt') {
+    if (
+      key === 'createdAt' ||
+      key === 'updatedAt' ||
+      key === 'migrationVersion' ||
+      key === 'id' ||
+      LEGACY_ALIAS_FIELDS.has(key)
+    ) {
       return;
     }
     userPrivate[key] = value;
@@ -231,15 +266,13 @@ async function migrateUserDocuments(db, apply) {
           createdAt,
           updatedAt,
           migrationVersion: 2,
-          ...Array.from(PUBLIC_PROFILE_FIELDS).reduce((acc, field) => {
-            acc[field] = admin.firestore.FieldValue.delete();
+          ...Object.keys(data).reduce((acc, field) => {
+            if (!USERS_ALLOWED_FIELDS.has(field)) {
+              acc[field] = admin.firestore.FieldValue.delete();
+            }
             return acc;
           }, {}),
-          ...Array.from(SOCIAL_GRAPH_FIELDS).reduce((acc, field) => {
-            acc[field] = admin.firestore.FieldValue.delete();
-            return acc;
-          }, {}),
-          ...Array.from(CONTACT_FIELDS).reduce((acc, field) => {
+          ...Array.from(LEGACY_ALIAS_FIELDS).reduce((acc, field) => {
             acc[field] = admin.firestore.FieldValue.delete();
             return acc;
           }, {}),

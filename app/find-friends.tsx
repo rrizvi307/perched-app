@@ -21,6 +21,7 @@ import {
   getUserFriends,
   getOutgoingFriendRequests,
 } from '@/services/firebaseClient';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { logEvent } from '@/services/logEvent';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { devLog } from '@/services/logger';
@@ -235,17 +236,31 @@ export default function FindFriendsScreen() {
     setSendingTo(targetUser.id);
 
     try {
-      await sendFriendRequest(user.id, targetUser.id);
+      const result = await sendFriendRequest(user.id, targetUser.id);
+      const becameFriends = didFriendRequestResolveToFriendship(result);
 
       // Update local state
       setSearchResults((prev) =>
-        prev.map((u) => (u.id === targetUser.id ? { ...u, isPending: true } : u))
+        prev.map((u) => (
+          u.id === targetUser.id
+            ? { ...u, isFriend: becameFriends, isPending: becameFriends ? false : true }
+            : u
+        ))
       );
       setCampusSuggestions((prev) =>
-        prev.map((u) => (u.id === targetUser.id ? { ...u, isPending: true } : u))
+        prev.map((u) => (
+          u.id === targetUser.id
+            ? { ...u, isFriend: becameFriends, isPending: becameFriends ? false : true }
+            : u
+        ))
       );
 
-      void logEvent('friend_request_sent', user.id, { toUserId: targetUser.id, source: 'find_friends' });
+      if (becameFriends) {
+        showToast('You are now friends', 'success');
+        void logEvent('friend_request_accepted', user.id, { target: targetUser.id, source: 'find_friends_auto_accept' });
+      } else {
+        void logEvent('friend_request_sent', user.id, { toUserId: targetUser.id, source: 'find_friends' });
+      }
     } catch (error) {
       devLog('Failed to send friend request:', error);
       showToast('Failed to send friend request. Please try again.', 'error');

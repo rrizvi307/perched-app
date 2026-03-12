@@ -512,6 +512,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await sendVerificationEmail();
     } catch (e) {
       const authUser = getCurrentFirebaseUser();
+      if (!__DEV__) throw e;
       if (!authUser) throw new Error('No authenticated user');
       if (typeof authUser.sendEmailVerification === 'function') await authUser.sendEmailVerification();
     }

@@ -36,6 +36,7 @@ import {
   getUsersByIdsCached,
   unfollowUserRemote,
 } from '@/services/firebaseClient';
+import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { devLog } from '@/services/logger';
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -335,12 +336,9 @@ export default function FriendsScreen() {
   const handleSendRequest = async (target: FriendUser) => {
     if (!user?.id) return;
     markBusy(target.id);
-    setOutgoingIds((prev) => new Set(prev).add(target.id));
     try {
-      const result: any = await sendFriendRequest(user.id, target.id);
-      const becameFriends = Boolean(result?.status === 'accepted' || result?.autoAccepted || result?.alreadyFriends);
-
-      if (becameFriends) {
+      const result = await sendFriendRequest(user.id, target.id);
+      if (didFriendRequestResolveToFriendship(result)) {
         friendIdSetRef.current.add(target.id);
         setOutgoingIds((prev) => {
           const next = new Set(prev);
@@ -352,21 +350,18 @@ export default function FriendsScreen() {
         setFriends((prev) => (prev.some((friend) => friend.id === target.id) ? prev : [target, ...prev]));
         setSuggestions((prev) => prev.filter((entry) => entry.id !== target.id));
         showToast(result?.alreadyFriends ? 'Already friends' : 'You are now friends', 'success');
-      } else {
-        setOutgoingReqs((prev) =>
-          prev.some((request) => request.toId === target.id)
-            ? prev
-            : [{ id: result?.id || `${user.id}_${target.id}`, fromId: user.id, toId: target.id, user: target }, ...prev],
-        );
-        setSuggestions((prev) => prev.filter((entry) => entry.id !== target.id));
-        showToast('Friend request sent', 'success');
+        return;
       }
+
+      setOutgoingIds((prev) => new Set(prev).add(target.id));
+      setOutgoingReqs((prev) => (
+        prev.some((request) => request.toId === target.id)
+          ? prev
+          : [{ id: result?.id || `${user.id}_${target.id}`, fromId: user.id, toId: target.id, user: target }, ...prev]
+      ));
+      setSuggestions((prev) => prev.filter((entry) => entry.id !== target.id));
+      showToast('Friend request sent', 'success');
     } catch (err: any) {
-      setOutgoingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(target.id);
-        return next;
-      });
       const msg = err?.message || 'Could not send request';
       showToast(msg.length > 80 ? 'Could not send request' : msg, 'error');
     } finally {

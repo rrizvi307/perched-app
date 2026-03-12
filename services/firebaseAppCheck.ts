@@ -8,11 +8,13 @@ import { devLog } from './logger';
 const GLOBAL_APP_CHECK_TOKEN_KEY = 'FIREBASE_APP_CHECK_TOKEN';
 const APP_CHECK_CALLABLE = 'issueAppCheckToken';
 const APP_CHECK_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const APP_CHECK_FAILURE_BACKOFF_MS = 10 * 60 * 1000;
 
 let appCheckInitialized = false;
 let tokenListenerUnsubscribe: (() => void) | null = null;
 let authListenerUnsubscribe: (() => void) | null = null;
 let appCheckTokenExpiryMs = 0;
+let appCheckRetryAfterMs = 0;
 
 function shouldEnableFirebaseAppCheck() {
   return !(typeof __DEV__ !== 'undefined' && __DEV__);
@@ -53,6 +55,19 @@ function setAppCheckTokenState(token?: string | null, expireTimeMillis?: number 
     typeof expireTimeMillis === 'number' && Number.isFinite(expireTimeMillis)
       ? expireTimeMillis
       : 0;
+  if (typeof token === 'string' && token.trim()) {
+    appCheckRetryAfterMs = 0;
+  }
+}
+
+function isAppCheckFailureBackoffActive() {
+  return appCheckRetryAfterMs > Date.now();
+}
+
+function noteAppCheckFailure() {
+  setGlobalAppCheckToken('');
+  appCheckTokenExpiryMs = 0;
+  appCheckRetryAfterMs = Date.now() + APP_CHECK_FAILURE_BACKOFF_MS;
 }
 
 export function getCurrentFirebaseAppCheckToken() {
@@ -84,6 +99,7 @@ async function issueCustomAppCheckToken(appId: string) {
 }
 
 export async function initFirebaseAppCheck() {
+  if (isAppCheckFailureBackoffActive()) return null;
   if (!shouldEnableFirebaseAppCheck()) return null;
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).appCheck !== 'function') return null;
@@ -113,6 +129,7 @@ export async function initFirebaseAppCheck() {
       setAppCheckTokenState(tokenResult?.token || '', tokenResult?.expireTimeMillis || null);
     },
     (error: Error) => {
+      noteAppCheckFailure();
       devLog('Firebase App Check token listener failed', error);
     },
   );
@@ -129,6 +146,7 @@ export async function initFirebaseAppCheck() {
     const tokenResult = await appCheck.getToken(true);
     setAppCheckTokenState(tokenResult?.token || '', tokenResult?.expireTimeMillis || null);
   } catch (error) {
+    noteAppCheckFailure();
     devLog('Firebase App Check initial token fetch failed', error);
   }
 
@@ -136,6 +154,7 @@ export async function initFirebaseAppCheck() {
 }
 
 export async function refreshFirebaseAppCheckToken(forceRefresh = false) {
+  if (isAppCheckFailureBackoffActive()) return '';
   if (!shouldEnableFirebaseAppCheck()) return '';
   const fb = ensureFirebase();
   if (!fb || typeof (fb as any).appCheck !== 'function') return '';
@@ -151,6 +170,7 @@ export async function refreshFirebaseAppCheckToken(forceRefresh = false) {
     setAppCheckTokenState(token, tokenResult?.expireTimeMillis || null);
     return token;
   } catch (error) {
+    noteAppCheckFailure();
     devLog('Firebase App Check getToken failed', error);
     return '';
   }
@@ -159,6 +179,7 @@ export async function refreshFirebaseAppCheckToken(forceRefresh = false) {
 export function resetFirebaseAppCheckForTests() {
   appCheckInitialized = false;
   appCheckTokenExpiryMs = 0;
+  appCheckRetryAfterMs = 0;
   tokenListenerUnsubscribe?.();
   tokenListenerUnsubscribe = null;
   authListenerUnsubscribe?.();

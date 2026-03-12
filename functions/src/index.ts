@@ -767,7 +767,7 @@ async function resolveResendConfig(): Promise<{ apiKey: string; fromEmail: strin
     process.env.RESEND_FROM_EMAIL,
     runtimeConfig?.notifications?.from_email,
     runtimeConfig?.resend_from_email,
-    'perchedappteam@gmail.com',
+    'noreply@mail.perched.app',
   );
   const fromName = readFirstNonEmpty(
     process.env.RESEND_FROM_NAME,
@@ -3082,9 +3082,14 @@ const GOOGLE_PLACES_PROXY_TTL_MS = 5 * 60 * 1000;
 const googlePlacesProxyCache = new Map<string, { ts: number; payload: any }>();
 function parseCloudRuntimeConfig() {
   const raw = process.env.CLOUD_RUNTIME_CONFIG;
-  if (!raw) return {};
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+  }
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = typeof functions.config === 'function' ? functions.config() : {};
     if (parsed && typeof parsed === 'object') return parsed;
   } catch {}
   return {};
@@ -3302,7 +3307,10 @@ async function verifyFirebaseUserFromRequest(req: any): Promise<string | null> {
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     return decoded?.uid || null;
-  } catch {
+  } catch (error: any) {
+    console.warn('verifyFirebaseUserFromRequest failed', {
+      message: error?.message || String(error),
+    });
     return null;
   }
 }

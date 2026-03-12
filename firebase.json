@@ -24,7 +24,13 @@
       "node_modules",
       ".git",
       "firebase-debug.log",
-      "firebase-debug.*.log"
+      "firebase-debug.*.log",
+      "coverage",
+      "scripts",
+      "jest.config.js",
+      "tsconfig.json",
+      "**/__tests__/**",
+      "**/*.map"
     ],
     "predeploy": [
       "cd \"$RESOURCE_DIR\" && npm run build"
