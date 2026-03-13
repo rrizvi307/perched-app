@@ -115,7 +115,9 @@
   },
   "overrides": {
     "fast-xml-parser": "5.4.1",
-    "minimatch": "10.2.4"
+    "minimatch": "10.2.4",
+    "@tootallnate/once": "3.0.1",
+    "flatted": "3.4.0"
   },
   "private": true
 }
