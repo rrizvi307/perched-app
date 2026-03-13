@@ -304,7 +304,6 @@ function InnerApp() {
         <Stack.Screen name="checkin" options={{ title: 'Check In', presentation: 'modal' }} />
         <Stack.Screen name="spot" options={{ title: 'Spot' }} />
         <Stack.Screen name="story-card" options={{ title: 'Story Card' }} />
-        <Stack.Screen name="story-card.web" options={{ title: 'Story Card' }} />
         <Stack.Screen
           name="settings"
           options={{
@@ -314,7 +313,7 @@ function InnerApp() {
             gestureResponseDistance: { start: 70 },
           }}
         />
-        <Stack.Screen name="verify" options={{ title: 'Verify Account' }} />
+        <Stack.Screen name="verify" options={{ title: 'Verify Account', gestureEnabled: false, fullScreenGestureEnabled: false }} />
         <Stack.Screen name="upgrade" options={{ title: 'Account' }} />
         <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
         <Stack.Screen name="premium-upgrade" options={{ title: 'Upgrade' }} />

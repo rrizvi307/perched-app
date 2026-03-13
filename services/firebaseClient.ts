@@ -2428,10 +2428,14 @@ export async function findUserByHandle(handle: string) {
     return users.find((u: any) => (u.handle || '').toLowerCase() === normalized) || null;
   }
   const db = fb.firestore();
-  const q = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
-  if (!q.empty) {
-    const doc = q.docs[0];
-    return stripPrivateUserFields(doc.data() || {}, doc.id);
+  try {
+    const q = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
+    if (!q.empty) {
+      const doc = q.docs[0];
+      return stripPrivateUserFields(doc.data() || {}, doc.id);
+    }
+  } catch (error) {
+    devLog('findUserByHandle direct lookup failed', { normalized, error });
   }
   try {
     const secureMatches = await searchUsersSecure(`@${normalized}`, 5);
@@ -2923,6 +2927,8 @@ export async function createAccountWithEmail({
     coffeeIntents,
     ambiancePreference,
     photoUrl: res.user.photoURL || null,
+  }).catch((error) => {
+    devLog('createUserRemote failed', error);
   });
   return res.user;
 }

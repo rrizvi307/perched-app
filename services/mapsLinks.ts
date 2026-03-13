@@ -21,13 +21,24 @@ function safeQuery(input: unknown) {
 export function buildGoogleMapsUrl(input: MapsInput): string | null {
   const lat = input.coords?.lat;
   const lng = input.coords?.lng;
-  if (isFiniteCoord(lat) && isFiniteCoord(lng)) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
-  }
-
   const placeId = safeQuery(input.placeId);
   if (placeId) {
+    // When a Place ID is available, include it so Google Maps opens the
+    // establishment details sheet instead of a coordinate pin.
+    if (isFiniteCoord(lat) && isFiniteCoord(lng)) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}&query_place_id=${encodeURIComponent(placeId)}`;
+    }
+
+    const name = safeQuery(input.name);
+    if (name) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}&query_place_id=${encodeURIComponent(placeId)}`;
+    }
+
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`place_id:${placeId}`)}`;
+  }
+
+  if (isFiniteCoord(lat) && isFiniteCoord(lng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
   }
 
   const name = safeQuery(input.name);

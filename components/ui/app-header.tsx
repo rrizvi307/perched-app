@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IconSymbol } from './icon-symbol';
 
-const NO_BACK_ROUTES = new Set(['(tabs)', 'feed', 'explore', 'profile', 'index', 'signin']);
+const NO_BACK_ROUTES = new Set(['(tabs)', 'feed', 'explore', 'profile', 'index', 'signin', 'verify']);
 
 function toTitle(routeName: string, optionsTitle?: string) {
   if (optionsTitle && optionsTitle.trim().length > 0) return optionsTitle;

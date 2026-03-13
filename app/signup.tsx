@@ -10,6 +10,7 @@ import { reverseGeocodeCity, searchLocations } from '@/services/googleMaps';
 import Logo from '@/components/logo';
 import {
   findUserByHandle,
+  getCurrentFirebaseUser,
   isFirebaseConfigured,
 } from '@/services/firebaseClient';
 import { devLog } from '@/services/logger';
@@ -87,6 +88,7 @@ export default function SignUp() {
   const border = useThemeColor({}, 'border');
   const card = useThemeColor({}, 'card');
   const muted = useThemeColor({}, 'muted');
+  const fieldLabelStyle = { color, opacity: 1, marginBottom: 6 } as const;
   const highlight = withAlpha(primary, 0.1);
   const router = useRouter();
   const rootNavigationState = useRootNavigationState();
@@ -110,6 +112,7 @@ export default function SignUp() {
     handleAvailability !== 'checking' &&
     handleAvailability !== 'taken' &&
     handleAvailability !== 'invalid';
+  const canCheckHandleAvailability = !!getCurrentFirebaseUser()?.uid;
   const canSubmit =
     isEmailValid &&
     isPasswordValid &&
@@ -155,10 +158,12 @@ export default function SignUp() {
     };
     try {
       let existing = null;
-      try {
-        existing = await withTimeout(findUserByHandle(normalizedHandle), 6000, 'Checking handle');
-      } catch (e) {
-        devLog('handle check skipped', e);
+      if (canCheckHandleAvailability) {
+        try {
+          existing = await withTimeout(findUserByHandle(normalizedHandle), 6000, 'Checking handle');
+        } catch (e) {
+          devLog('handle check skipped', e);
+        }
       }
       if (existing) {
         setAuthError('That username is taken.');
@@ -316,6 +321,10 @@ export default function SignUp() {
       setHandleAvailability('invalid');
       return () => { cancelled = true; };
     }
+    if (!canCheckHandleAvailability) {
+      setHandleAvailability('idle');
+      return () => { cancelled = true; };
+    }
     setHandleAvailability('checking');
     const id = setTimeout(async () => {
       try {
@@ -327,7 +336,7 @@ export default function SignUp() {
       }
     }, 400);
     return () => { cancelled = true; clearTimeout(id); };
-  }, [normalizedHandle]);
+  }, [canCheckHandleAvailability, normalizedHandle]);
 
   // Navigate once user is set
   useEffect(() => {
@@ -395,7 +404,7 @@ export default function SignUp() {
           ) : null}
 
           {/* ─── EMAIL ──────────────────────────────────────────────────────── */}
-          <Label>Email</Label>
+          <Label style={fieldLabelStyle}>Email</Label>
           <TextInput
             placeholder="you@email.com"
             placeholderTextColor={muted}
@@ -411,7 +420,7 @@ export default function SignUp() {
           ) : null}
 
           {/* ─── PASSWORD ───────────────────────────────────────────────────── */}
-          <Label>Password</Label>
+          <Label style={fieldLabelStyle}>Password</Label>
           <TextInput
             placeholder="At least 6 characters"
             placeholderTextColor={muted}
@@ -426,7 +435,7 @@ export default function SignUp() {
             <Text style={[styles.hint, { color: muted }]}>Min 6 characters.</Text>
           )}
 
-          <Label>Confirm password</Label>
+          <Label style={fieldLabelStyle}>Confirm password</Label>
           <TextInput
             placeholder="Re-enter your password"
             placeholderTextColor={muted}
@@ -450,7 +459,7 @@ export default function SignUp() {
           ) : null}
 
           {/* ─── USERNAME ───────────────────────────────────────────────────── */}
-          <Label>Username</Label>
+          <Label style={fieldLabelStyle}>Username</Label>
           <View
             style={[
               styles.handleRow,
@@ -494,7 +503,7 @@ export default function SignUp() {
           )}
 
           {/* ─── NAME (optional) ────────────────────────────────────────────── */}
-          <Label>
+          <Label style={fieldLabelStyle}>
             Name{' '}
             <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
           </Label>
@@ -508,7 +517,7 @@ export default function SignUp() {
           />
 
           {/* ─── PHONE (optional — for friend discovery) ────────────────────── */}
-          <Label>
+          <Label style={fieldLabelStyle}>
             Phone{' '}
             <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
           </Label>
@@ -525,7 +534,7 @@ export default function SignUp() {
           </Text>
 
           {/* ─── CITY ───────────────────────────────────────────────────────── */}
-          <Label>City</Label>
+          <Label style={fieldLabelStyle}>City</Label>
           <TextInput
             placeholder="Search cities..."
             placeholderTextColor={muted}
@@ -602,7 +611,7 @@ export default function SignUp() {
           ) : null}
 
           {/* ─── UNIVERSITY (optional) ──────────────────────────────────────── */}
-          <Label>
+          <Label style={fieldLabelStyle}>
             University{' '}
             <Text style={{ color: muted, fontWeight: '400', fontSize: 13 }}>(optional)</Text>
           </Label>

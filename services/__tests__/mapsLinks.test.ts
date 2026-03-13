@@ -1,18 +1,32 @@
 import { buildGoogleMapsUrl, buildAppleMapsUrl } from '../mapsLinks';
 
 describe('buildGoogleMapsUrl', () => {
-  it('uses coordinates when available', () => {
+  it('uses place details when coordinates and place id are both available', () => {
     const url = buildGoogleMapsUrl({
       coords: { lat: 29.7604, lng: -95.3698 },
-      placeId: 'ignored-place-id',
+      placeId: 'spot-place-id',
       name: 'Houston',
     });
+    expect(url).toBe(
+      'https://www.google.com/maps/search/?api=1&query=29.7604%2C-95.3698&query_place_id=spot-place-id'
+    );
+  });
+
+  it('uses place details when name and place id are both available', () => {
+    const url = buildGoogleMapsUrl({ placeId: 'abc123', name: 'Catalina Coffee' });
+    expect(url).toBe(
+      'https://www.google.com/maps/search/?api=1&query=Catalina%20Coffee&query_place_id=abc123'
+    );
+  });
+
+  it('falls back to coordinates when no place id is available', () => {
+    const url = buildGoogleMapsUrl({ coords: { lat: 29.7604, lng: -95.3698 } });
     expect(url).toBe(
       'https://www.google.com/maps/search/?api=1&query=29.7604%2C-95.3698'
     );
   });
 
-  it('falls back to place id', () => {
+  it('falls back to place id when it is the only destination hint', () => {
     const url = buildGoogleMapsUrl({ placeId: 'abc123' });
     expect(url).toBe(
       'https://www.google.com/maps/search/?api=1&query=place_id%3Aabc123'
