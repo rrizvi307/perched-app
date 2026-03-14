@@ -321,8 +321,16 @@ export default function CheckinScreen() {
 		}
 	}, [imageQuality, isWeb, showToast, user?.id]);
 	const pickImage = useCallback(async () => {
-		const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-		if (status !== 'granted') return;
+		const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+		if (permission.status !== 'granted') {
+			showToast(
+				permission.canAskAgain === false
+					? 'Enable photo library access in Settings to choose a photo.'
+					: 'Allow photo library access to choose a photo.',
+				'warning'
+			);
+			return;
+		}
 
 		const result = await ImagePicker.launchImageLibraryAsync({
 			mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -339,10 +347,10 @@ export default function CheckinScreen() {
 			const exif = Array.isArray(result.assets) ? result.assets[0].exif : (result as any).exif;
 			setImage(dataUri);
 			setImageExif(exif || null);
-			setCaptured(true);
-			await logEvent('photo_captured', user?.id);
-		}
-	}, [imageQuality, isWeb, user?.id]);
+				setCaptured(true);
+				await logEvent('photo_captured', user?.id);
+			}
+		}, [imageQuality, isWeb, showToast, user?.id]);
 
 	useEffect(() => {
 		if (initialLoadRef.current) return;

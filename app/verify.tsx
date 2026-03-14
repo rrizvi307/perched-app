@@ -85,7 +85,7 @@ export default function Verify() {
           : 'Check your inbox for a verification link. Open it to activate your account.'}
       </Body>
       <Body style={{ color: muted, marginTop: -8 }}>
-        If you do not see it, check spam or promotions. Temporary inboxes can suppress delivery, but your current log shows this device hit a verification send rate limit.
+        If you do not see it, check spam or promotions, then use resend below if needed.
       </Body>
 
       <View style={{ height: 18 }} />

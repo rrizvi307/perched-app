@@ -21,6 +21,11 @@ function scorePassword(pw: string) {
 
 export default function UpgradeAccount() {
   const insets = useSafeAreaInsets();
+  // Suppress platform autofill so manual password entry stays usable on account creation.
+  const manualPasswordEntryProps =
+    Platform.OS === 'ios'
+      ? ({ textContentType: 'oneTimeCode', autoComplete: 'off' } as const)
+      : ({ autoComplete: 'off', importantForAutofill: 'no' } as const);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -114,7 +119,9 @@ export default function UpgradeAccount() {
           showsVerticalScrollIndicator={false}
         >
           <H1 style={{ color }}>Account</H1>
-          <Body style={{ color, marginTop: 8 }}>Upgrade anonymous account to an email-password account or sign in.</Body>
+          <Body style={{ color, marginTop: 8 }}>
+            {!user?.email ? 'Create an email-password account or sign in.' : 'Manage your email and password.'}
+          </Body>
 
           {!user?.email ? (
             <>
@@ -139,6 +146,7 @@ export default function UpgradeAccount() {
                 }}
                 style={[styles.input, { borderColor: border, backgroundColor: background, color }]}
                 secureTextEntry
+                {...manualPasswordEntryProps}
               />
               {password ? <PasswordMeter pw={password} /> : null}
               {passwordError ? <Body style={{ color: danger, marginTop: 6 }}>{passwordError}</Body> : null}
@@ -165,6 +173,7 @@ export default function UpgradeAccount() {
                 onChangeText={setNewPassword}
                 style={[styles.input, { borderColor: border, backgroundColor: background, color }]}
                 secureTextEntry
+                {...manualPasswordEntryProps}
               />
               {newPassword ? (
                 <>

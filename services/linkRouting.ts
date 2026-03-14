@@ -92,5 +92,5 @@ export function isInternalPerchedUrl(rawInput: string | null | undefined): boole
 
 export async function openReportEmail(subject: string, body: string) {
   const { openExternalLink } = await import('./externalLinks');
-  return openExternalLink(`mailto:perchedappteam@gmail.com?subject=${subject}&body=${body}`);
+  return openExternalLink(`mailto:support@perched.app?subject=${subject}&body=${body}`);
 }

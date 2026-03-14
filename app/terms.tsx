@@ -8,7 +8,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 export default function TermsOfService() {
   const text = useThemeColor({}, 'text');
   const muted = useThemeColor({}, 'muted');
-  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'support@perched.app';
 
   return (
     <ThemedView style={styles.container}>

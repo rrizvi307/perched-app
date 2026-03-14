@@ -32,7 +32,7 @@ export default function SettingsScreen() {
   const highlight = withAlpha(primary, 0.1);
 
   const extra = ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-  const supportEmail = (extra.SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
+  const supportEmail = (extra.SUPPORT_EMAIL as string) || 'support@perched.app';
 
   const [notificationsEnabled, setNotificationsEnabledState] = useState(false);
   const [locationEnabled, setLocationEnabledState] = useState(true);
@@ -341,4 +341,3 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
-

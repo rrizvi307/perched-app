@@ -505,17 +505,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function resendVerification() {
-    const fb = getFirebaseOrThrow();
-    try {
-      // prefer central helper to include actionCodeSettings
-      const { sendVerificationEmail } = await import('@/services/firebaseClient');
-      await sendVerificationEmail();
-    } catch (e) {
-      const authUser = getCurrentFirebaseUser();
-      if (!__DEV__) throw e;
-      if (!authUser) throw new Error('No authenticated user');
-      if (typeof authUser.sendEmailVerification === 'function') await authUser.sendEmailVerification();
-    }
+    getFirebaseOrThrow();
+    const { sendVerificationEmail } = await import('@/services/firebaseClient');
+    await sendVerificationEmail();
   }
 
   async function signOut() {

@@ -2889,6 +2889,57 @@ export async function signInWithEmail({ email, password }: { email: string; pass
   return res.user;
 }
 
+function makeClientError(message: string, code: string) {
+  const error = new Error(message);
+  (error as any).code = code;
+  return error;
+}
+
+async function assertHandleAvailableForAccount(handle?: string, currentUserId?: string) {
+  const normalized = String(handle || '').trim().replace(/^@/, '').toLowerCase();
+  if (!normalized) return;
+  const fb = ensureFirebase();
+  if (!fb) return;
+  const db = fb.firestore();
+
+  try {
+    const snapshot = await db.collection(PUBLIC_PROFILES_COLLECTION).where('handle', '==', normalized).limit(1).get();
+    if (!snapshot.empty && snapshot.docs[0]?.id !== currentUserId) {
+      throw makeClientError('That username is taken.', 'auth/username-taken');
+    }
+    return;
+  } catch (error: any) {
+    if (String(error?.code || '') === 'auth/username-taken') {
+      throw error;
+    }
+  }
+
+  let secureMatches: any[] = [];
+  try {
+    secureMatches = await searchUsersSecure(`@${normalized}`, 5);
+  } catch (error) {
+    devLog('searchUsersSecure failed during signup handle check', { normalized, error });
+    throw makeClientError('Unable to verify that username right now. Please try again.', 'auth/username-check-failed');
+  }
+  const existing = secureMatches.find((item: any) => (item?.handle || '').toLowerCase() === normalized) || null;
+  if (existing && existing.id !== currentUserId) {
+    throw makeClientError('That username is taken.', 'auth/username-taken');
+  }
+}
+
+async function cleanupFailedEmailSignup() {
+  try {
+    await deleteCurrentUser();
+  } catch (deleteError) {
+    devLog('deleteCurrentUser failed during signup cleanup', deleteError);
+  }
+  try {
+    await signOutCurrentUser();
+  } catch (signOutError) {
+    devLog('signOutCurrentUser failed during signup cleanup', signOutError);
+  }
+}
+
 export async function createAccountWithEmail({
   email,
   password,
@@ -2909,11 +2960,14 @@ export async function createAccountWithEmail({
     ? await modularAuth.createUserWithEmailAndPassword(getModularFirebaseAuth(fb), email, password)
     : await fb.auth().createUserWithEmailAndPassword(email, password);
   const uid = res.user.uid;
-  // send verification email (non-blocking)
-  void sendVerificationEmail(undefined, name || res.user.displayName || undefined).catch((error) => {
-    devLog('sendVerificationEmail failed', error);
-  });
-  // create profile doc in background for faster UX
+  try {
+    await assertHandleAvailableForAccount(handle, uid);
+    await sendVerificationEmail(undefined, name || res.user.displayName || undefined);
+  } catch (error) {
+    await cleanupFailedEmailSignup();
+    throw error;
+  }
+  // create profile doc in background after verification delivery succeeds
   void createUserRemote({
     userId: uid,
     name,
@@ -3000,36 +3054,32 @@ export async function sendVerificationEmail(actionUrl?: string, displayName?: st
     return;
   }
 
-  if (!__DEV__) {
-    const error = new Error('Verification email must be sent through the custom mailer.');
-    (error as any).code = 'verification/custom-mailer-required';
-    (error as any).details = callableResult?.reason || 'custom_mailer_unavailable';
-    throw error;
-  }
-
-  const fallbackUrl =
-    actionUrl ||
-    (process.env.FIREBASE_ACTION_URL as string) ||
-    ((global as any)?.FIREBASE_ACTION_URL as string) ||
-    undefined;
-  const actionCodeSettings = fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
-  if (shouldUseModularAuth()) {
-    await modularAuth.sendEmailVerification(user, actionCodeSettings);
-    return;
-  }
-  // @ts-ignore
-  if (typeof user.sendEmailVerification === 'function') await user.sendEmailVerification(actionCodeSettings);
+  const error = new Error('Verification email must be sent through the custom mailer.');
+  (error as any).code = 'verification/custom-mailer-required';
+  (error as any).details = callableResult?.reason || 'custom_mailer_unavailable';
+  throw error;
 }
 
 export async function sendPasswordResetEmail(email: string) {
   const fb = ensureFirebase();
   if (!fb) throw new Error('Firebase not initialized.');
-  if (shouldUseModularAuth()) {
-    await modularAuth.sendPasswordResetEmail(getModularFirebaseAuth(fb), email);
+  const callableResult = await callFirebaseCallable<{
+    ok?: boolean;
+    sent?: boolean;
+    skipped?: boolean;
+    reason?: string | null;
+  }>('sendPasswordResetEmailCustom', { email });
+  if (callableResult?.sent) {
     return;
   }
-  const auth = fb.auth();
-  await auth.sendPasswordResetEmail(email);
+  if (callableResult?.skipped && ['missing_user', 'throttled'].includes(String(callableResult?.reason || ''))) {
+    return;
+  }
+
+  const error = new Error('Password reset email must be sent through the custom mailer.');
+  (error as any).code = 'password_reset/custom-mailer-required';
+  (error as any).details = callableResult?.reason || 'custom_mailer_unavailable';
+  throw error;
 }
 
 export async function updateCurrentUserPassword(newPassword: string) {

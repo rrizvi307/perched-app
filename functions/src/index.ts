@@ -79,7 +79,10 @@ const apiKeyCache = new Map<string, { ts: number; docId: string; data: any }>();
 const LOGIN_NOTIFICATION_COLLECTION = 'login_notifications';
 const LOGIN_NOTIFICATION_STATE_COLLECTION = 'login_notification_state';
 const VERIFICATION_EMAIL_COLLECTION = 'verification_emails';
+const PASSWORD_RESET_EMAIL_COLLECTION = 'password_reset_emails';
+const PASSWORD_RESET_STATE_COLLECTION = 'password_reset_state';
 const SIGNIN_ALERT_THROTTLE_MS = 2 * 60 * 1000;
+const PASSWORD_RESET_THROTTLE_MS = 2 * 60 * 1000;
 
 const B2B_SPOT_CHECKIN_LIMIT = 60;
 const B2B_NEARBY_SPOT_SCAN_LIMIT = 100;
@@ -738,16 +741,50 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function buildEmailActionCodeSettings(actionUrl?: string) {
-  const fallbackUrl = readFirstNonEmpty(
-    actionUrl,
-    process.env.FIREBASE_ACTION_URL,
-    runtimeConfig?.auth?.action_url,
-    runtimeConfig?.auth?.verification_action_url,
-    runtimeConfig?.email?.action_url,
-    runtimeConfig?.email?.verification_action_url,
-  );
-  return fallbackUrl ? { url: fallbackUrl, handleCodeInApp: true } : undefined;
+function normalizeEmailContinueUrl(value?: string): string | undefined {
+  const raw = asId(value);
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    // `url` in ActionCodeSettings is a continue URL, not the auth handler path.
+    if (parsed.pathname === '/__/auth/action') {
+      return parsed.origin;
+    }
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeEmailLinkDomain(value?: string): string | undefined {
+  const raw = asId(value);
+  if (!raw) return undefined;
+  try {
+    const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`);
+    return parsed.hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildEmailActionCodeSettings(actionUrl?: string): admin.auth.ActionCodeSettings {
+  const continueUrl =
+    normalizeEmailContinueUrl(readFirstNonEmpty(
+      actionUrl,
+      process.env.FIREBASE_ACTION_URL,
+      runtimeConfig?.auth?.action_url,
+      runtimeConfig?.auth?.verification_action_url,
+      runtimeConfig?.email?.action_url,
+      runtimeConfig?.email?.verification_action_url,
+    )) || 'https://perched.app';
+  const linkDomain = normalizeEmailLinkDomain(readFirstNonEmpty(
+    process.env.FIREBASE_AUTH_LINK_DOMAIN,
+    runtimeConfig?.auth?.link_domain,
+    runtimeConfig?.email?.link_domain,
+  ));
+  const settings: any = { url: continueUrl };
+  if (linkDomain) settings.linkDomain = linkDomain;
+  return settings as admin.auth.ActionCodeSettings;
 }
 
 async function resolveResendConfig(): Promise<{ apiKey: string; fromEmail: string; fromName: string } | null> {
@@ -865,6 +902,37 @@ If you did not create a Perched account, you can ignore this email.`;
       <p style="font-size: 14px; color: #4b5563;">If the button does not open, copy and paste this link into your browser:</p>
       <p style="font-size: 14px; word-break: break-all;"><a href="${safeLink}">${safeLink}</a></p>
       <p style="font-size: 14px; color: #4b5563;">If you did not create a Perched account, you can ignore this email.</p>
+    </div>
+  `;
+  return sendTransactionalEmail({ email, subject, text, html });
+}
+
+async function sendPasswordResetEmailViaResend(
+  email: string,
+  resetLink: string,
+  displayName?: string,
+): Promise<EmailDeliveryResult> {
+  const safeName = asId(displayName);
+  const greeting = safeName ? `Hi ${safeName},` : 'Hi,';
+  const safeLink = escapeHtml(resetLink);
+  const subject = 'Reset your Perched password';
+  const text = `${greeting}
+
+Reset your Perched password:
+
+${resetLink}
+
+If you did not request a password reset, you can ignore this email.`;
+  const html = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #111827; line-height: 1.5;">
+      <p>${escapeHtml(greeting)}</p>
+      <p>Reset your Perched password.</p>
+      <p style="margin: 24px 0;">
+        <a href="${safeLink}" style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 600;">Reset password</a>
+      </p>
+      <p style="font-size: 14px; color: #4b5563;">If the button does not open, copy and paste this link into your browser:</p>
+      <p style="font-size: 14px; word-break: break-all;"><a href="${safeLink}">${safeLink}</a></p>
+      <p style="font-size: 14px; color: #4b5563;">If you did not request a password reset, you can ignore this email.</p>
     </div>
   `;
   return sendTransactionalEmail({ email, subject, text, html });
@@ -2704,6 +2772,80 @@ export const sendVerificationEmailCustom = functions
       createdAtMs: now,
       sentAtMs: delivery.sent ? now : null,
     });
+
+    return {
+      ok: true,
+      sent: delivery.sent,
+      skipped: false,
+      provider: delivery.provider,
+      reason: delivery.error || null,
+    };
+  });
+
+export const sendPasswordResetEmailCustom = functions
+  .runWith({ secrets: ['RESEND_API_KEY'] })
+  .https.onCall(async (data) => {
+    const email = asId(data?.email).toLowerCase();
+    if (!email) {
+      throw new functions.https.HttpsError('invalid-argument', 'Email required');
+    }
+
+    const stateKey = crypto.createHash('sha256').update(email).digest('hex');
+    const stateRef = db.collection(PASSWORD_RESET_STATE_COLLECTION).doc(stateKey);
+    const stateDoc = await stateRef.get();
+    const lastSentAtMs = typeof stateDoc.data()?.lastSentAtMs === 'number' ? stateDoc.data()?.lastSentAtMs : 0;
+    const now = Date.now();
+    if (shouldThrottleSigninAlert(lastSentAtMs, now, PASSWORD_RESET_THROTTLE_MS)) {
+      return { ok: true, sent: false, skipped: true, reason: 'throttled' };
+    }
+
+    let userRecord: admin.auth.UserRecord | null = null;
+    try {
+      userRecord = await admin.auth().getUserByEmail(email);
+    } catch (error: any) {
+      const code = String(error?.code || '');
+      if (code === 'auth/user-not-found') {
+        await db.collection(PASSWORD_RESET_EMAIL_COLLECTION).add({
+          userId: null,
+          email,
+          provider: 'log_only',
+          status: 'skipped_missing_user',
+          error: null,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAtMs: now,
+          sentAtMs: null,
+        });
+        return { ok: true, sent: false, skipped: true, reason: 'missing_user' };
+      }
+      throw error;
+    }
+
+    const displayName = readFirstNonEmpty(
+      asId(data?.displayName),
+      asId(userRecord?.displayName),
+    );
+    const actionCodeSettings = buildEmailActionCodeSettings(asId(data?.actionUrl));
+    const resetLink = await admin.auth().generatePasswordResetLink(
+      email,
+      actionCodeSettings,
+    );
+    const delivery = await sendPasswordResetEmailViaResend(email, resetLink, displayName);
+
+    await db.collection(PASSWORD_RESET_EMAIL_COLLECTION).add({
+      userId: userRecord?.uid || null,
+      email,
+      provider: delivery.provider,
+      status: delivery.sent ? 'sent' : 'logged',
+      error: delivery.error || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAtMs: now,
+      sentAtMs: delivery.sent ? now : null,
+    });
+    await stateRef.set({
+      email,
+      lastSentAtMs: now,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
 
     return {
       ok: true,

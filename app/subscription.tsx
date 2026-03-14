@@ -31,7 +31,7 @@ export default function SubscriptionScreen() {
   const primary = useThemeColor({}, 'primary');
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
-  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'support@perched.app';
 
   const {
     premiumStatus,
@@ -59,7 +59,7 @@ export default function SubscriptionScreen() {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
     if (!premiumPurchasesEnabled) {
-      showToast('Premium purchases are temporarily unavailable in this beta build.', 'info');
+      showToast('Premium purchases are currently unavailable.', 'info');
       return;
     }
     router.push('/premium-upgrade');
@@ -211,7 +211,7 @@ export default function SubscriptionScreen() {
           )}
           {!isPremium && !premiumPurchasesEnabled ? (
             <Text style={[styles.footerText, { color: muted, marginBottom: 10 }]}>
-              Premium purchases are disabled for this beta build.
+              Premium purchases are currently unavailable.
             </Text>
           ) : null}
 

@@ -86,8 +86,12 @@ EXPO_PUBLIC_YELP_API_KEY=
 EXPO_PUBLIC_FOURSQUARE_API_KEY=
 EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS=false
 
-# Email action URL used by verification helper
+# Continue URL after auth email actions complete.
+# Do not set this to /__/auth/action; use a real page like https://perched.app or https://perched.app/signin
 FIREBASE_ACTION_URL=
+
+# Optional custom Firebase Hosting auth link domain, e.g. auth.perched.app
+FIREBASE_AUTH_LINK_DOMAIN=
 ```
 
 Notes:

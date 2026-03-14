@@ -38,6 +38,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function SignUp() {
   const insets = useSafeAreaInsets();
+  // iOS can force the strong-password sheet over these fields during signup.
+  const manualPasswordEntryProps =
+    Platform.OS === 'ios'
+      ? ({ textContentType: 'oneTimeCode', autoComplete: 'off' } as const)
+      : ({ autoComplete: 'off', importantForAutofill: 'no' } as const);
 
   // Account
   const [email, setEmail] = useState('');
@@ -130,6 +135,22 @@ export default function SignUp() {
   const titleSize = compactHeader ? 30 : height < 740 ? 36 : undefined;
   const extraScrollPad = Platform.OS === 'ios' ? Math.max(28, keyboardHeight + 28) : 28;
 
+  function mapRegistrationError(error: any) {
+    const code = String(error?.code || '');
+    if (code === 'auth/email-already-in-use') return 'That email is already in use.';
+    if (code === 'auth/invalid-email') return 'Enter a valid email address.';
+    if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
+    if (code === 'auth/username-taken') return 'That username is taken. Pick a different one.';
+    if (code === 'auth/username-check-failed') return 'Unable to verify that username right now. Please try again.';
+    if (code === 'verification/custom-mailer-required') {
+      return 'We could not send your verification email. Please try again.';
+    }
+    if (code === 'network-request-failed' || code === 'functions/unavailable' || code === 'unavailable') {
+      return 'Unable to create your account right now. Check your connection and try again.';
+    }
+    return error?.message ? `Unable to register: ${String(error.message)}` : 'Unable to register right now.';
+  }
+
   // ── Create account ───────────────────────────────────────────────────────────
   async function doRegister() {
     setAuthError(null);
@@ -187,8 +208,7 @@ export default function SignUp() {
       );
     } catch (e) {
       devLog('register error', e);
-      const msg = (e as any)?.message || String(e);
-      setAuthError('Unable to register: ' + msg);
+      setAuthError(mapRegistrationError(e));
     } finally {
       setLoading(false);
     }
@@ -428,6 +448,7 @@ export default function SignUp() {
             onChangeText={setPassword}
             style={[styles.input, { borderColor: border, backgroundColor: card, color }]}
             secureTextEntry
+            {...manualPasswordEntryProps}
           />
           {password.length > 0 && password.length < 6 ? (
             <Text style={[styles.hint, { color: danger }]}>Use at least 6 characters.</Text>
@@ -451,6 +472,7 @@ export default function SignUp() {
               },
             ]}
             secureTextEntry
+            {...manualPasswordEntryProps}
           />
           {passwordConfirm.length > 0 && password !== passwordConfirm ? (
             <Text style={[styles.hint, { color: danger }]}>Passwords don&apos;t match.</Text>
@@ -498,6 +520,8 @@ export default function SignUp() {
             <Text style={[styles.hint, { color: danger }]}>
               3–20 letters, numbers, underscores, or periods only.
             </Text>
+          ) : !canCheckHandleAvailability && fbAvailable ? (
+            <Text style={[styles.hint, { color: muted }]}>Availability is checked when you create your account.</Text>
           ) : (
             <Text style={[styles.hint, { color: muted }]}>e.g. @studyqueen</Text>
           )}

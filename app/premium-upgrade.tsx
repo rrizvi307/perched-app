@@ -34,7 +34,7 @@ export default function PremiumUpgradeScreen() {
       <Text style={styles.subtitle}>Get the most out of Perched</Text>
       {!purchasesEnabled ? (
         <Text style={styles.betaNotice}>
-          Premium purchases are disabled in this beta build.
+          Premium purchases are currently unavailable.
         </Text>
       ) : null}
 
@@ -46,29 +46,33 @@ export default function PremiumUpgradeScreen() {
         <FeatureItem icon="✓" text="Export check-in history" />
       </View>
 
-      <TouchableOpacity
-        style={styles.pricingCard}
-        onPress={() => handlePurchase('yearly')}
-        disabled={loading || !purchasesEnabled}
-        activeOpacity={0.9}
-      >
-        <Text style={styles.pricingBadge}>BEST VALUE</Text>
-        <Text style={styles.pricingTitle}>Annual</Text>
-        <Text style={styles.pricingPrice}>$49.99/year</Text>
-        <Text style={styles.pricingSavings}>Save 17% vs monthly</Text>
-      </TouchableOpacity>
+      {purchasesEnabled ? (
+        <>
+          <TouchableOpacity
+            style={styles.pricingCard}
+            onPress={() => handlePurchase('yearly')}
+            disabled={loading || !purchasesEnabled}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.pricingBadge}>BEST VALUE</Text>
+            <Text style={styles.pricingTitle}>Annual</Text>
+            <Text style={styles.pricingPrice}>$49.99/year</Text>
+            <Text style={styles.pricingSavings}>Save 17% vs monthly</Text>
+          </TouchableOpacity>
 
-      <TouchableOpacity
-        style={[styles.pricingCard, styles.pricingCardSecondary]}
-        onPress={() => handlePurchase('monthly')}
-        disabled={loading || !purchasesEnabled}
-        activeOpacity={0.9}
-      >
-        <Text style={styles.pricingTitle}>Monthly</Text>
-        <Text style={styles.pricingPrice}>$4.99/month</Text>
-      </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.pricingCard, styles.pricingCardSecondary]}
+            onPress={() => handlePurchase('monthly')}
+            disabled={loading || !purchasesEnabled}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.pricingTitle}>Monthly</Text>
+            <Text style={styles.pricingPrice}>$4.99/month</Text>
+          </TouchableOpacity>
 
-      <Text style={styles.disclaimer}>7-day free trial. Cancel anytime. Auto-renewal.</Text>
+          <Text style={styles.disclaimer}>7-day free trial. Cancel anytime. Auto-renewal.</Text>
+        </>
+      ) : null}
 
       <TouchableOpacity onPress={() => router.back()}>
         <Text style={styles.skipLink}>Maybe Later</Text>
