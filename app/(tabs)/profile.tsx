@@ -5,10 +5,8 @@ import { Atmosphere } from '@/components/ui/atmosphere';
 import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H2, Label } from '@/components/ui/typography';
-import { StreakBadge } from '@/components/ui/streak-badge';
 import { PolishedCard } from '@/components/ui/polished-card';
 import MetricsImpactCard from '@/components/ui/metrics-impact-card';
-import { PolishedLargeHeader } from '@/components/ui/polished-header';
 import { PremiumButton } from '@/components/ui/premium-button';
 import { PremiumBadge } from '@/components/ui/premium-badge';
 import { usePremium } from '@/hooks/use-premium';
@@ -786,10 +784,6 @@ export default function ProfileScreen() {
         }
         ListHeaderComponent={
           <View style={styles.header}>
-            <PolishedLargeHeader
-              title={user?.name || 'Profile'}
-              subtitle={user?.handle ? `@${user.handle}` : 'Add a username'}
-            />
             {status ? (
               <StatusBanner
                 message={status.message}
@@ -807,19 +801,16 @@ export default function ProfileScreen() {
               <ProfilePicture size={84} />
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <Body style={{ color: textColor }}>
+                  <Text style={[styles.profileName, { color: textColor }]}>
                     {user ? `${user.name || 'Your profile'}` : 'Not signed in'}
-                  </Body>
+                  </Text>
                   {isPremium && <PremiumBadge size="small" />}
                 </View>
-                <Text style={{ color: muted, fontSize: 13 }}>
+                <Text style={[styles.profileHandle, { color: muted }]}>
                   {user?.handle ? `@${user.handle}` : 'Add a username'}
                 </Text>
                 <Text style={{ color: muted, fontSize: 12 }}>{user?.email || 'Tap below to upgrade'}</Text>
               </View>
-              {userStats && userStats.streakDays > 0 && (
-                <StreakBadge days={userStats.streakDays} size="medium" />
-              )}
             </View>
             {userStats && (
               <>
@@ -1326,6 +1317,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 24,
     padding: tokens.space.s16,
+  },
+  profileName: {
+    fontSize: 19,
+    fontWeight: '700',
+  },
+  profileHandle: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   banner: {
     borderWidth: 1,

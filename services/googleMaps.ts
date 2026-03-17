@@ -16,6 +16,8 @@ export function getMapsKey() {
     (process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY as string) ||
     (process.env.GOOGLE_MAPS_API_KEY as string) ||
     (typeof global !== 'undefined' ? (global as any).GOOGLE_MAPS_API_KEY : '') ||
+    ((Constants.expoConfig as any)?.ios?.config?.googleMapsApiKey as string) ||
+    ((Constants.expoConfig as any)?.android?.config?.googleMaps?.apiKey as string) ||
     (Constants.expoConfig as any)?.extra?.GOOGLE_MAPS_API_KEY ||
     (Constants as any)?.manifest?.extra?.GOOGLE_MAPS_API_KEY
   );
@@ -199,9 +201,8 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 3200
 async function getProxyAuthHeaders() {
   const headers: Record<string, string> = {};
   try {
-    const { ensureFirebase } = await import('./firebaseClient');
-    const fb = ensureFirebase();
-    const user = fb?.auth?.()?.currentUser;
+    const { getCurrentFirebaseUser } = await import('./firebaseClient');
+    const user = getCurrentFirebaseUser();
     if (user && typeof user.getIdToken === 'function') {
       const idToken = await user.getIdToken();
       if (idToken) headers.Authorization = `Bearer ${idToken}`;

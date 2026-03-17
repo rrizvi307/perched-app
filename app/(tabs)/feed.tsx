@@ -1197,17 +1197,10 @@ function FeedPhoto({
 								accessibilityRole="button"
 								accessibilityLabel="Create a new check-in"
 								style={({ pressed }) => [
+									styles.checkinPromptCard,
 									{
-										marginHorizontal: 16,
-										marginTop: tokens.space.s12,
-										marginBottom: 12,
-										padding: 14,
-										borderRadius: 16,
-										borderWidth: 1,
 										borderColor: border,
 										backgroundColor: pressed ? withAlpha(primary, 0.08) : withAlpha(primary, 0.04),
-										flexDirection: 'row',
-										alignItems: 'center',
 									},
 								]}
 							>
@@ -1670,7 +1663,7 @@ function FeedPhoto({
 const styles = StyleSheet.create({
 	container: { flex: 1, position: 'relative' },
 	listContent: { paddingHorizontal: tokens.space.s20, paddingBottom: 140 },
-	header: { paddingTop: tokens.space.s20, paddingBottom: tokens.space.s16, paddingHorizontal: tokens.space.s20 },
+	header: { paddingTop: tokens.space.s20, paddingBottom: tokens.space.s16 },
 	heroCard: {
 		borderWidth: 1,
 		borderRadius: tokens.radius.r24,
@@ -1717,6 +1710,15 @@ const styles = StyleSheet.create({
 		paddingVertical: tokens.space.s8,
 	},
 	filterRow: { marginTop: tokens.space.s16, alignItems: 'center', justifyContent: 'center' },
+	checkinPromptCard: {
+		marginTop: tokens.space.s12,
+		marginBottom: tokens.space.s12,
+		padding: 14,
+		borderRadius: 16,
+		borderWidth: 1,
+		flexDirection: 'row',
+		alignItems: 'center',
+	},
 	card: {
 		borderRadius: tokens.radius.r24,
 		overflow: 'hidden',

@@ -22,7 +22,9 @@ import { useToast } from '@/contexts/ToastContext';
 import {
   ensureFirebase,
   getBlockedUsers,
+  getCheckinsForSpotRemote,
   getCheckinsRemote,
+  getPlaceTagRemote,
   getUserFriendsCached,
 } from '@/services/firebaseClient';
 import { resolvePhotoUri } from '@/services/photoSources';
@@ -276,6 +278,82 @@ function aggregateSpotMetrics(checkins: any[]) {
     intentScores,
     hereNowCount: hereNowUsers.size,
   };
+}
+
+const EXPLORE_INTELLIGENCE_CHECKIN_LIMIT = 240;
+
+function buildSpotTagScores(checkins: any[], remoteTagScores?: Record<string, number> | null) {
+  const scores: Record<string, number> = {};
+  checkins.forEach((item: any) => {
+    if (!Array.isArray(item?.tags)) return;
+    item.tags.forEach((tag: any) => {
+      const normalized = String(tag || '').trim();
+      if (!normalized) return;
+      scores[normalized] = (scores[normalized] || 0) + 1;
+    });
+  });
+  Object.entries(remoteTagScores || {}).forEach(([tag, count]) => {
+    if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) return;
+    scores[tag] = (scores[tag] || 0) + count;
+  });
+  return scores;
+}
+
+function getSpotInferredSignals(spot: any) {
+  if (!spot?.intel) return null;
+  return {
+    noise: spot.intel.inferredNoise ?? null,
+    noiseConfidence: spot.intel.inferredNoiseConfidence,
+    hasWifi: spot.intel.hasWifi,
+    wifiConfidence: spot.intel.wifiConfidence,
+    goodForStudying: spot.intel.goodForStudying,
+    goodForMeetings: spot.intel.goodForMeetings,
+    goodForDates: spot.intel.goodForDates,
+    goodForGroups: spot.intel.goodForGroups,
+    instagramWorthy: spot.intel.instagramWorthy,
+    foodQualitySignal: spot.intel.foodQualitySignal,
+    aestheticVibe: spot.intel.aestheticVibe,
+    musicAtmosphere: spot.intel.musicAtmosphere,
+    avgRating: spot.intel.avgRating,
+    reviewCount: spot.intel.reviewCount,
+    priceLevel: spot.intel.priceLevel,
+    isOpenNow: spot.intel.isOpenNow,
+  };
+}
+
+async function buildExploreSpotIntelligence(spot: any): Promise<PlaceIntelligence | null> {
+  const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
+  const placeName = spot?.name || '';
+  if (!placeName) return null;
+
+  const fallbackCheckins = Array.isArray(spot?._checkins) ? spot._checkins : [];
+  const [checkinsResult, tagScoresResult] = await Promise.allSettled([
+    placeId
+      ? getCheckinsForSpotRemote(placeId, EXPLORE_INTELLIGENCE_CHECKIN_LIMIT)
+      : Promise.resolve({ items: fallbackCheckins }),
+    getPlaceTagRemote(placeId || undefined, placeName),
+  ]);
+
+  const checkins =
+    checkinsResult.status === 'fulfilled' && Array.isArray(checkinsResult.value?.items) && checkinsResult.value.items.length
+      ? checkinsResult.value.items
+      : fallbackCheckins;
+  const remoteTagScores =
+    tagScoresResult.status === 'fulfilled' && tagScoresResult.value && typeof tagScoresResult.value === 'object'
+      ? (tagScoresResult.value as Record<string, number>)
+      : null;
+  const tagScores = buildSpotTagScores(checkins, remoteTagScores);
+
+  return buildPlaceIntelligence({
+    placeName,
+    placeId,
+    location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
+    openNow: spot?.openNow,
+    types: spot?.types,
+    checkins,
+    tagScores,
+    inferred: getSpotInferredSignals(spot),
+  });
 }
 
 function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number } | null) {
@@ -1148,34 +1226,8 @@ export default function Explore() {
           const name = spot?.name || '';
           const intelKey = spotKey(placeId, name);
           try {
-            const intel = await buildPlaceIntelligence({
-              placeName: name,
-              placeId,
-              location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
-              openNow: spot?.openNow,
-              types: spot?.types,
-              checkins: spot?._checkins || [],
-              inferred: spot?.intel
-                ? {
-                    noise: spot.intel.inferredNoise ?? null,
-                    noiseConfidence: spot.intel.inferredNoiseConfidence,
-                    hasWifi: spot.intel.hasWifi,
-                    wifiConfidence: spot.intel.wifiConfidence,
-                    goodForStudying: spot.intel.goodForStudying,
-                    goodForMeetings: spot.intel.goodForMeetings,
-                    goodForDates: spot.intel.goodForDates,
-                    goodForGroups: spot.intel.goodForGroups,
-                    instagramWorthy: spot.intel.instagramWorthy,
-                    foodQualitySignal: spot.intel.foodQualitySignal,
-                    aestheticVibe: spot.intel.aestheticVibe,
-                    musicAtmosphere: spot.intel.musicAtmosphere,
-                    avgRating: spot.intel.avgRating,
-                    reviewCount: spot.intel.reviewCount,
-                    priceLevel: spot.intel.priceLevel,
-                    isOpenNow: spot.intel.isOpenNow,
-                  }
-                : null,
-            });
+            const intel = await buildExploreSpotIntelligence(spot);
+            if (!intel) return null;
             return { intelKey, intel };
           } catch {
             return null;
@@ -1264,7 +1316,6 @@ export default function Explore() {
 
   useEffect(() => {
     if (!selectedSpot || !selectedSpotKey || selectedSpotIntelligence) return;
-    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
     const name = selectedSpot?.name || '';
     if (!name) return;
 
@@ -1273,34 +1324,11 @@ export default function Explore() {
     const task = InteractionManager.runAfterInteractions(() => {
       void (async () => {
         try {
-          const intel = await buildPlaceIntelligence({
-            placeName: name,
-            placeId,
-            location: selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location || null,
-            openNow: selectedSpot?.openNow,
-            types: selectedSpot?.types,
-            checkins: selectedSpot?._checkins || [],
-            inferred: selectedSpot?.intel
-              ? {
-                  noise: selectedSpot.intel.inferredNoise ?? null,
-                  noiseConfidence: selectedSpot.intel.inferredNoiseConfidence,
-                  hasWifi: selectedSpot.intel.hasWifi,
-                  wifiConfidence: selectedSpot.intel.wifiConfidence,
-                  goodForStudying: selectedSpot.intel.goodForStudying,
-                  goodForMeetings: selectedSpot.intel.goodForMeetings,
-                  goodForDates: selectedSpot.intel.goodForDates,
-                  goodForGroups: selectedSpot.intel.goodForGroups,
-                  instagramWorthy: selectedSpot.intel.instagramWorthy,
-                  foodQualitySignal: selectedSpot.intel.foodQualitySignal,
-                  aestheticVibe: selectedSpot.intel.aestheticVibe,
-                  musicAtmosphere: selectedSpot.intel.musicAtmosphere,
-                  avgRating: selectedSpot.intel.avgRating,
-                  reviewCount: selectedSpot.intel.reviewCount,
-                  priceLevel: selectedSpot.intel.priceLevel,
-                  isOpenNow: selectedSpot.intel.isOpenNow,
-                }
-              : null,
-          });
+          const intel = await buildExploreSpotIntelligence(selectedSpot);
+          if (!intel) {
+            if (active) setSelectedIntelState('error');
+            return;
+          }
           if (!active) return;
           setIntelligenceMap((prev) => {
             if (prev.has(selectedSpotKey)) return prev;
@@ -1875,7 +1903,7 @@ export default function Explore() {
 const styles = StyleSheet.create({
   container: { flex: 1, position: 'relative' },
   listContent: { paddingHorizontal: tokens.space.s20, paddingBottom: 140 },
-  header: { paddingTop: tokens.space.s20, paddingBottom: tokens.space.s16, paddingHorizontal: tokens.space.s20 },
+  header: { paddingTop: tokens.space.s20, paddingBottom: tokens.space.s16 },
   searchInput: {
     borderWidth: 1,
     borderRadius: tokens.radius.r14,
@@ -1995,7 +2023,7 @@ const styles = StyleSheet.create({
   },
   mapOverlayRow: {
     flexDirection: 'row',
-    marginTop: tokens.space.s10,
+    marginTop: tokens.space.s12,
     flexWrap: 'wrap',
   },
   mapOverlayChip: {

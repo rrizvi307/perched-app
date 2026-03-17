@@ -1,6 +1,5 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { tokens } from '@/constants/tokens';
@@ -17,7 +16,6 @@ import { resolvePhotoUri } from '@/services/photoSources';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function createdAtMs(checkin: any) {
   return toMillis(checkin?.createdAt) || 0;
@@ -49,7 +47,6 @@ export default function MyPostsScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const params = useLocalSearchParams();
-  const insets = useSafeAreaInsets();
   const focusId = typeof params.focus === 'string' ? params.focus : '';
 
   const text = useThemeColor({}, 'text');
@@ -148,19 +145,6 @@ export default function MyPostsScreen() {
   return (
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
-      <View style={[styles.topBar, { paddingTop: Math.max(tokens.space.s12, insets.top + 10) }]}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel="Back to profile"
-          style={({ pressed }) => [styles.backButton, pressed ? { opacity: 0.7 } : null]}
-        >
-          <IconSymbol name="chevron.left" size={22} color={muted} />
-          <Text style={{ color: muted, fontWeight: '600', marginLeft: 4 }}>Profile</Text>
-        </Pressable>
-      </View>
-
       <FlatList
         ref={(r) => {
           listRef.current = r;
@@ -255,8 +239,6 @@ export default function MyPostsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  topBar: { paddingHorizontal: tokens.space.s20 },
-  backButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
   content: { paddingHorizontal: tokens.space.s20, paddingBottom: 60 },
   card: {
     borderWidth: 1,

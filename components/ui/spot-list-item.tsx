@@ -98,6 +98,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     })
     .filter((signal) => typeof signal?.rating === 'number')
     .slice(0, 3);
+  const showMapThumbnail = !!(mapKey && coords);
 
   return (
     <Pressable
@@ -107,19 +108,15 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         { borderColor: border, backgroundColor: pressed ? highlight : card },
       ]}
     >
-      {mapKey && coords ? (
+      {showMapThumbnail ? (
         <SpotImage
           source={{
             uri: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=200x100&markers=color:red%7C${coords.lat},${coords.lng}${mapKey ? `&key=${mapKey}` : ''}`,
           }}
           style={styles.thumb}
         />
-      ) : (
-        <View style={[styles.thumb, { backgroundColor: border, alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={{ color: muted, fontSize: 11 }}>Map unavailable</Text>
-        </View>
-      )}
-      <View style={{ flex: 1, marginLeft: 12 }}>
+      ) : null}
+      <View style={{ flex: 1, marginLeft: showMapThumbnail ? 12 : 0 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
         {intelligence ? (
           <View style={styles.smartRow}>
@@ -546,4 +543,3 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 });
-

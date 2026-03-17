@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,10 +8,7 @@ import CelebrationOverlay from '@/components/ui/CelebrationOverlay';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
-import { H1, Body } from '@/components/ui/typography';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { tokens } from '@/constants/tokens';
 
 function getAchievementCategory(id: string) {
   if (id.startsWith('explorer_')) return 'exploration';
@@ -64,7 +61,6 @@ export default function AchievementsScreen() {
   const specialAchievements = unlocked.filter(
     (achievement) => !ACHIEVEMENTS.some((baseAchievement) => baseAchievement.id === achievement.id)
   );
-  const totalCount = ACHIEVEMENTS.length + specialAchievements.length;
 
   useEffect(() => {
     if (prevUnlockedCountRef.current === null) {
@@ -90,23 +86,6 @@ export default function AchievementsScreen() {
   return (
     <ThemedView style={{ flex: 1 }}>
       <Atmosphere variant="warm" />
-
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: Math.max(tokens.space.s12, insets.top + 10) }]}>
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [
-            styles.backButton,
-            { opacity: pressed ? 0.6 : 1 },
-          ]}
-        >
-          <IconSymbol name="chevron.left" size={24} color={text} />
-        </Pressable>
-        <H1 style={{ color: text, marginTop: 16 }}>Achievements</H1>
-        <Body style={{ color: muted, marginTop: 8 }}>
-          {unlockedCount} of {totalCount} unlocked
-        </Body>
-      </View>
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -206,18 +185,6 @@ export default function AchievementsScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: -10,
-  },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',

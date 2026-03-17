@@ -12,6 +12,7 @@ import * as winston from 'winston';
 import * as Joi from 'joi';
 import { validateSpotLive } from '../../services/spotSchema';
 import { normalizePhone } from '../../utils/phone';
+import { authorizeProxyRequest } from './proxyAuth';
 import { normalizeProviderError, shouldThrottleSigninAlert } from './signinAlertUtils';
 
 admin.initializeApp();
@@ -3897,21 +3898,16 @@ export const googlePlacesProxy = functions
   const requireAppCheck =
     !requireAppCheckRaw || !['0', 'false', 'no', 'off'].includes(requireAppCheckRaw.toLowerCase());
 
-  if (!hasSecretBypass) {
-    const uid = await verifyFirebaseUserFromRequest(req);
-    const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
-    let appCheckOk = false;
-    if (requireAppCheck || providedAppCheck) {
-      appCheckOk = await verifyAppCheckFromRequest(req);
-      if (!appCheckOk) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-    }
-    if (requireAuth && !uid && !appCheckOk) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+  const placesAccess = await authorizeProxyRequest(req, {
+    hasSecretBypass,
+    requireAuth,
+    requireAppCheck,
+    verifyUser: verifyFirebaseUserFromRequest,
+    verifyAppCheck: verifyAppCheckFromRequest,
+  });
+  if (!placesAccess.ok) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
   }
 
   const body = typeof req.body === 'string'
@@ -4077,21 +4073,16 @@ export const placeSignalsProxy = functions
   const enableFoursquare = foursquareKeyPresent &&
     !['0', 'false', 'no', 'off'].includes((enableFoursquareRaw || '').toLowerCase());
 
-  if (!hasSecretBypass) {
-    const uid = await verifyFirebaseUserFromRequest(req);
-    const providedAppCheck = req.get('X-Firebase-AppCheck') || '';
-    let appCheckOk = false;
-    if (requireAppCheck || providedAppCheck) {
-      appCheckOk = await verifyAppCheckFromRequest(req);
-      if (!appCheckOk) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
-    }
-    if (requireAuth && !uid && !appCheckOk) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+  const placeSignalsAccess = await authorizeProxyRequest(req, {
+    hasSecretBypass,
+    requireAuth,
+    requireAppCheck,
+    verifyUser: verifyFirebaseUserFromRequest,
+    verifyAppCheck: verifyAppCheckFromRequest,
+  });
+  if (!placeSignalsAccess.ok) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
   }
 
   const body = typeof req.body === 'string'

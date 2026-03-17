@@ -1085,9 +1085,8 @@ function deriveWeatherConfidence(code: number, precipitationMm: number): number 
 async function getProxyAuthHeaders() {
   const headers: Record<string, string> = {};
   try {
-    const { ensureFirebase } = await import('./firebaseClient');
-    const fb = ensureFirebase();
-    const user = fb?.auth?.()?.currentUser;
+    const { getCurrentFirebaseUser } = await import('./firebaseClient');
+    const user = getCurrentFirebaseUser();
     if (user && typeof user.getIdToken === 'function') {
       const idToken = await user.getIdToken();
       if (idToken) headers.Authorization = `Bearer ${idToken}`;
@@ -2123,4 +2122,3 @@ export function resetPlaceIntelligenceCacheStats() {
     placeIntelCacheCounters[key] = { hits: 0, misses: 0, sets: 0, evictions: 0 };
   });
 }
-

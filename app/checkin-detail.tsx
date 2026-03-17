@@ -1,6 +1,5 @@
 import { ThemedView } from '@/components/themed-view';
 import { Atmosphere } from '@/components/ui/atmosphere';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import SpotImage from '@/components/ui/spot-image';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { tokens } from '@/constants/tokens';
@@ -20,7 +19,6 @@ import { resolvePhotoUri } from '@/services/photoSources';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function resolvePhoto(checkin: any) {
   return resolvePhotoUri(checkin);
@@ -39,7 +37,6 @@ function formatWhen(createdAt: any) {
 export default function CheckinDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const insets = useSafeAreaInsets();
   const { showToast } = useToast();
   const { user } = useAuth();
 
@@ -107,8 +104,18 @@ export default function CheckinDetailScreen() {
   const where = whereBits.length ? whereBits.join(' · ') : item?.campusOrCity || '';
   const when = formatWhen(item?.createdAt);
   const remaining = item ? formatTimeRemaining(item) : '';
+  const showRemaining = Boolean(remaining && remaining !== 'Expired');
   const visibility = typeof item?.visibility === 'string' ? item.visibility : '';
-  const canDelete = !!item;
+  const canDelete = useMemo(() => {
+    if (!item || !user?.id) return false;
+    if (typeof item.userId === 'string' && item.userId === user.id) return true;
+    const itemHandle = typeof item.userHandle === 'string' ? item.userHandle.trim().toLowerCase() : '';
+    const userHandle = typeof user.handle === 'string' ? user.handle.trim().toLowerCase() : '';
+    if (itemHandle && userHandle && itemHandle === userHandle) return true;
+    const itemName = typeof item.userName === 'string' ? item.userName.trim().toLowerCase() : '';
+    const userName = typeof user.name === 'string' ? user.name.trim().toLowerCase() : '';
+    return !!(itemName && userName && itemName === userName);
+  }, [item, user?.handle, user?.id, user?.name]);
 
   const spotLink = useMemo(() => {
     const placeId = typeof item?.spotPlaceId === 'string' ? item.spotPlaceId : '';
@@ -147,7 +154,12 @@ export default function CheckinDetailScreen() {
   };
 
   async function doDelete() {
-    if (!item || deleting) return;
+    if (!item || deleting || !canDelete) {
+      if (item && !canDelete) {
+        showToast('You can only delete your own posts.', 'warning');
+      }
+      return;
+    }
     const run = async () => {
       setDeleting(true);
       try {
@@ -183,17 +195,6 @@ export default function CheckinDetailScreen() {
   return (
     <ThemedView style={styles.container}>
       <Atmosphere variant="cool" />
-      <View style={[styles.topBar, { paddingTop: Math.max(tokens.space.s12, insets.top + 10) }]}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.backButton, pressed ? { opacity: 0.7 } : null]}
-        >
-          <IconSymbol name="chevron.left" size={22} color={muted} />
-          <Text style={{ color: muted, fontWeight: '600', marginLeft: 4 }}>Back</Text>
-        </Pressable>
-      </View>
-
       <View style={styles.content}>
         <Label style={{ color: muted, marginBottom: 8 }}>Check-in</Label>
         <H1 style={{ color: text, marginBottom: 10 }}>{title}</H1>
@@ -214,7 +215,7 @@ export default function CheckinDetailScreen() {
             <View style={styles.meta}>
               <View style={[styles.row, gapStyle(10)]}>
                 {when ? <Text style={{ color: muted, fontWeight: '600' }}>{when}</Text> : null}
-                {remaining ? <Text style={{ color: muted, fontWeight: '600' }}>{remaining}</Text> : null}
+                {showRemaining ? <Text style={{ color: muted, fontWeight: '600' }}>{remaining}</Text> : null}
               </View>
               {where ? <Text style={{ color: muted, marginTop: 6 }}>{where}</Text> : null}
               {visibility ? <Text style={{ color: muted, marginTop: 6, fontWeight: '600' }}>{visibility.toUpperCase()}</Text> : null}
@@ -265,18 +266,17 @@ export default function CheckinDetailScreen() {
                     { borderColor: primary, backgroundColor: pressed ? withAlpha(primary, 0.15) : card },
                   ]}
                 >
-                  <IconSymbol name="square.and.arrow.up" size={18} color={primary} />
-                  <Text style={{ color: primary, fontWeight: '800', marginLeft: 6 }}>Share</Text>
+                  <Text style={{ color: primary, fontSize: 15, fontWeight: '800' }}>Share</Text>
                 </Pressable>
 
                 {spotLink ? (
-	                  <Pressable
-	                    onPress={() => router.push(spotLink as any)}
-	                    style={({ pressed }) => [
-	                      styles.actionButton,
-	                      { borderColor: border, backgroundColor: pressed ? highlight : card },
-	                    ]}
-	                  >
+                  <Pressable
+                    onPress={() => router.push(spotLink as any)}
+                    style={({ pressed }) => [
+                      styles.actionButton,
+                      { borderColor: border, backgroundColor: pressed ? highlight : card },
+                    ]}
+                  >
                     <Text style={{ color: text, fontWeight: '800' }}>View spot</Text>
                   </Pressable>
                 ) : null}
@@ -308,8 +308,6 @@ export default function CheckinDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  topBar: { paddingHorizontal: tokens.space.s20 },
-  backButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
   content: { paddingHorizontal: tokens.space.s20, paddingBottom: 50 },
   card: { borderWidth: 1, borderRadius: 22, overflow: 'hidden' },
   image: { width: '100%', height: 320 },
@@ -318,5 +316,15 @@ const styles = StyleSheet.create({
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap' },
   tag: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   actions: { flexDirection: 'row', flexWrap: 'wrap' },
-  actionButton: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minWidth: 112,
+  },
 });
