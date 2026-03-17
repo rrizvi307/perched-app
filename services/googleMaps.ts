@@ -201,8 +201,11 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 3200
 async function getProxyAuthHeaders() {
   const headers: Record<string, string> = {};
   try {
-    const { getCurrentFirebaseUser } = await import('./firebaseClient');
-    const user = getCurrentFirebaseUser();
+    const { getCurrentFirebaseUser, ensureFirebase } = await import('./firebaseClient');
+    const user =
+      getCurrentFirebaseUser?.() ||
+      ensureFirebase?.()?.auth?.()?.currentUser ||
+      null;
     if (user && typeof user.getIdToken === 'function') {
       const idToken = await user.getIdToken();
       if (idToken) headers.Authorization = `Bearer ${idToken}`;

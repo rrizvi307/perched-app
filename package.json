@@ -117,7 +117,8 @@
     "fast-xml-parser": "5.4.1",
     "minimatch": "10.2.4",
     "@tootallnate/once": "3.0.1",
-    "flatted": "3.4.0"
+    "flatted": "3.4.0",
+    "undici": "6.24.0"
   },
   "private": true
 }
