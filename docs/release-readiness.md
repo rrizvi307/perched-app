@@ -38,6 +38,7 @@ This is the public-safe release tracker for the current push toward App Store su
 - Final unification of place intelligence across client and backend paths.
 - Explore and recommendation scalability cleanup.
 - Media/privacy cleanup for older data that predates current rules.
+- Revisit the iOS Google Maps dependency migration before Q2 2026 ends. See [google-maps-ios-spm-migration.md](./google-maps-ios-spm-migration.md).
 
 ## Remaining Release Tasks
 

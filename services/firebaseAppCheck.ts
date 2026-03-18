@@ -1,8 +1,8 @@
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/app-check';
-import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
 import { observeIdTokenChanges } from './firebaseClient';
+import { getExpoExtra, getExpoExtraString } from './expoConfig';
 import { devLog } from './logger';
 
 const GLOBAL_APP_CHECK_TOKEN_KEY = 'FIREBASE_APP_CHECK_TOKEN';
@@ -20,10 +20,6 @@ function shouldEnableFirebaseAppCheck() {
   return !(typeof __DEV__ !== 'undefined' && __DEV__);
 }
 
-function getExpoExtra() {
-  return ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-}
-
 function getFirebaseAppId() {
   const extra = getExpoExtra();
   return (
@@ -36,11 +32,10 @@ function getFirebaseAppId() {
 }
 
 function getFunctionsRegion() {
-  const extra = getExpoExtra();
   return (
     (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
     (process.env.FIREBASE_FUNCTIONS_REGION as string) ||
-    (extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    getExpoExtraString('FIREBASE_FUNCTIONS_REGION') ||
     'us-central1'
   );
 }

@@ -1,4 +1,3 @@
-import Constants from 'expo-constants';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -25,6 +24,7 @@ import { savePushToken } from '@/services/firebaseClient';
 import { AppHeader } from '@/components/ui/app-header';
 import { devLog } from '@/services/logger';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
+import { getExpoFirebaseConfig } from '@/services/expoConfig';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
@@ -66,7 +66,7 @@ export default function RootLayout() {
 function InnerApp() {
   const { user } = useAuth();
   const colorScheme = useColorScheme();
-  const firebaseConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
+  const firebaseConfig = getExpoFirebaseConfig();
   const appState = useRef(AppState.currentState);
   const notificationsInitializedForUser = useRef<string | null>(null);
   const interactiveMarked = useRef(false);
@@ -96,7 +96,10 @@ function InnerApp() {
     },
   };
 
-  if (firebaseConfig && !(global as any).FIREBASE_CONFIG) {
+  if (
+    Object.values(firebaseConfig || {}).some((value) => typeof value === 'string' && value.trim().length > 0) &&
+    !(global as any).FIREBASE_CONFIG
+  ) {
     (global as any).FIREBASE_CONFIG = firebaseConfig;
   }
 

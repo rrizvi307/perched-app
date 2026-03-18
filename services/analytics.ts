@@ -1,7 +1,7 @@
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { addBreadcrumb } from './sentry';
+import { getExpoExtraString } from './expoConfig';
 import { devLog } from './logger';
 
 // Analytics event types for type safety
@@ -123,9 +123,9 @@ export interface UserProperties {
   checkinsCount?: number;
 }
 
-const SEGMENT_WRITE_KEY = Constants.expoConfig?.extra?.SEGMENT_WRITE_KEY || '';
-const MIXPANEL_TOKEN = Constants.expoConfig?.extra?.MIXPANEL_TOKEN || '';
-const ENV = Constants.expoConfig?.extra?.ENV || 'development';
+const SEGMENT_WRITE_KEY = getExpoExtraString('SEGMENT_WRITE_KEY') || '';
+const MIXPANEL_TOKEN = getExpoExtraString('MIXPANEL_TOKEN') || '';
+const ENV = getExpoExtraString('ENV') || 'development';
 
 let initialized = false;
 let currentUserId: string | null = null;

@@ -22,7 +22,8 @@
     "production": {
       "distribution": "store",
       "env": {
-        "INTEL_V1_ENABLED": "true"
+        "INTEL_V1_ENABLED": "true",
+        "ENV": "production"
       },
       "ios": {
         "buildConfiguration": "Release"

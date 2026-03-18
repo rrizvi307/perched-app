@@ -1,5 +1,5 @@
-import Constants from 'expo-constants';
 import { ensureFirebase } from '@/services/firebaseClient';
+import { getExpoFirebaseConfig } from './expoConfig';
 
 type DiagnosticStatus = 'ok' | 'fail' | 'skipped';
 
@@ -17,7 +17,12 @@ const ONE_BY_ONE_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
 
 export async function runFirebaseDiagnostics(): Promise<FirebaseDiagnosticsResult> {
-  const config = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG || (global as any)?.FIREBASE_CONFIG || {};
+  const config = {
+    ...getExpoFirebaseConfig(),
+    ...(((global as any)?.FIREBASE_CONFIG && typeof (global as any).FIREBASE_CONFIG === 'object')
+      ? (global as any).FIREBASE_CONFIG
+      : {}),
+  };
   const apiKeyPresent = typeof config?.apiKey === 'string' && config.apiKey.trim().length > 0;
   const result: FirebaseDiagnosticsResult = {
     config: {

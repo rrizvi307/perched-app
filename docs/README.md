@@ -7,6 +7,7 @@ This repo keeps the long-term docs set small.
 - [architecture.md](./architecture.md): high-level data, maps, and rules guidance for app and backend changes.
 - [app-store.md](./app-store.md): App Store metadata, reviewer notes template, and TestFlight smoke checklist.
 - [release-readiness.md](./release-readiness.md): current release tracker for App Store submission and near-term launch work.
+- [google-maps-ios-spm-migration.md](./google-maps-ios-spm-migration.md): deferred note on the Google Maps iOS move away from CocoaPods.
 - [privacy-policy.md](./privacy-policy.md): public privacy policy copy.
 - [terms-of-service.md](./terms-of-service.md): public terms copy.
 

@@ -5,6 +5,14 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+const REQUIRED_FIREBASE_CONFIG_KEYS = [
+  'apiKey',
+  'authDomain',
+  'projectId',
+  'storageBucket',
+  'messagingSenderId',
+  'appId',
+];
 const REQUIRED_SECRETS = [
   'FIREBASE_API_KEY',
   'FIREBASE_AUTH_DOMAIN',
@@ -66,6 +74,10 @@ function isSet(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isTruthy(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 function runStep(name, cmd, args) {
   process.stdout.write(`\n[preflight] ${name}\n`);
   const result = spawnSync(cmd, args, {
@@ -77,6 +89,32 @@ function runStep(name, cmd, args) {
     process.stderr.write(`[preflight] failed: ${name}\n`);
     process.exit(result.status || 1);
   }
+}
+
+function resolveExpoConfig(env) {
+  const appJsonPath = path.join(ROOT, 'app.json');
+  const appConfigPath = path.join(ROOT, 'app.config.js');
+
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  const baseConfig = appJson?.expo || {};
+  const previousEnv = {};
+  Object.keys(env || {}).forEach((key) => {
+    previousEnv[key] = process.env[key];
+    process.env[key] = env[key];
+  });
+
+  delete require.cache[require.resolve(appConfigPath)];
+  const exported = require(appConfigPath);
+  const resolved = typeof exported === 'function' ? exported({ config: baseConfig }) : exported;
+
+  Object.keys(env || {}).forEach((key) => {
+    if (previousEnv[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previousEnv[key];
+    }
+  });
+  return resolved || baseConfig;
 }
 
 function main() {
@@ -109,9 +147,50 @@ function main() {
     }
   }
 
+  process.stdout.write('\n[preflight] checking resolved Expo Firebase config\n');
+  const resolvedExpoConfig = resolveExpoConfig(merged);
+  const resolvedFirebaseConfig = resolvedExpoConfig?.extra?.FIREBASE_CONFIG || {};
+  const missingResolvedFirebase = REQUIRED_FIREBASE_CONFIG_KEYS.filter(
+    (key) => !isSet(resolvedFirebaseConfig[key]),
+  );
+  if (missingResolvedFirebase.length > 0) {
+    process.stderr.write('[preflight] resolved Expo config is missing Firebase keys:\n');
+    for (const key of missingResolvedFirebase) {
+      process.stderr.write(`- FIREBASE_CONFIG.${key}\n`);
+    }
+    process.stderr.write('\nThis means the release build can still ship with broken Firebase auth even if env vars exist.\n');
+    process.exit(1);
+  }
+
+  const resolvedEnv = String(resolvedExpoConfig?.extra?.ENV || '').trim();
+  if (!resolvedEnv) {
+    process.stderr.write('[preflight] resolved Expo config is missing extra.ENV\n');
+    process.exit(1);
+  }
+  if (resolvedEnv === 'development') {
+    process.stdout.write('[preflight] warning: resolved Expo ENV is "development". Confirm this is intentional for the release build.\n');
+  }
+
   runStep('TypeScript check', 'npm', ['run', 'typecheck']);
   runStep('Lint', 'npm', ['run', 'lint']);
   runStep('Tests', 'npm', ['run', 'test:unit', '--', '--runInBand']);
+
+  const hasSmokeCredentials =
+    (isSet(merged.SMOKE_TEST_EMAIL) || isSet(merged.APP_REVIEW_EMAIL)) &&
+    (isSet(merged.SMOKE_TEST_PASSWORD) || isSet(merged.APP_REVIEW_PASSWORD));
+  const requireAuthSmokeCheck = isTruthy(merged.REQUIRE_AUTH_SMOKE_CHECK);
+
+  if (hasSmokeCredentials) {
+    runStep('Firebase auth smoke check', 'npm', ['run', 'auth:smoke-check']);
+  } else if (requireAuthSmokeCheck) {
+    process.stderr.write(
+      '[preflight] auth smoke check required but SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are not set.\n'
+    );
+    process.exit(1);
+  } else {
+    process.stdout.write('\n[preflight] auth smoke check skipped: no smoke credentials set.\n');
+    process.stdout.write('[preflight] set SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD and REQUIRE_AUTH_SMOKE_CHECK=true to make this a hard gate.\n');
+  }
 
   process.stdout.write('\n[preflight] release preflight passed\n');
 }

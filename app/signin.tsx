@@ -70,6 +70,10 @@ export default function SignIn() {
           ? 'That account does not exist.'
           : code === 'auth/wrong-password'
             ? 'Incorrect password.'
+            : code === 'auth/network-request-failed'
+              ? 'Unable to reach Perched sign in right now. Check your connection and try again.'
+              : code === 'auth/configuration-incomplete'
+                ? 'Sign in is temporarily unavailable in this build. Please try again later.'
             : e?.message || 'Sign in failed';
       setError(msg);
     } finally {

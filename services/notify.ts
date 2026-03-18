@@ -1,10 +1,10 @@
-import Constants from 'expo-constants';
 import { ensureFirebase } from './firebaseClient';
+import { getExpoExtraString } from './expoConfig';
 import { devLog } from './logger';
 
 function getFunctionsRegion() {
   return (
-    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    getExpoExtraString('FIREBASE_FUNCTIONS_REGION') ||
     (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
     'us-central1'
   );

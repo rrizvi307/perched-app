@@ -1,10 +1,10 @@
 import * as Sentry from '@sentry/react-native';
-import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Updates from 'expo-updates';
+import { getExpoExtraString } from './expoConfig';
 
-const SENTRY_DSN = Constants.expoConfig?.extra?.SENTRY_DSN || '';
-const ENV = Constants.expoConfig?.extra?.ENV || 'development';
+const SENTRY_DSN = getExpoExtraString('SENTRY_DSN') || '';
+const ENV = getExpoExtraString('ENV') || 'development';
 
 let initialized = false;
 

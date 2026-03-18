@@ -21,6 +21,7 @@ This is the single runbook for Firebase setup, launch operations, and App Store 
 7. Add billing budget alerts before large-scale testing or launch.
 8. Smoke test auth, check-in creation, photo upload, and account deletion on a release build.
 9. Re-test verification email delivery and sign-in alert delivery whenever the transactional email setup changes.
+10. Keep a dedicated production smoke-test account and run the auth smoke check before every App Store submission.
 
 ## App Store Resubmission Checklist
 
@@ -85,7 +86,10 @@ Please re-review this submission. Thank you.
 ```bash
 npm run appstore:preflight
 npm run check:all
+npm run preflight
 ```
+
+For a hard release gate, set `SMOKE_TEST_EMAIL`, `SMOKE_TEST_PASSWORD`, and `REQUIRE_AUTH_SMOKE_CHECK=true` before running `npm run preflight`.
 
 ## Public Repo Safety
 

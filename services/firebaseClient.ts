@@ -8,7 +8,7 @@ import 'firebase/compat/storage';
 import 'firebase/compat/functions';
 import * as modularAuth from '@firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
+import NetInfo from '@react-native-community/netinfo';
 import { Platform } from 'react-native';
 import { spotKey } from '@/services/spotUtils';
 import { devLog } from '@/services/logger';
@@ -16,6 +16,8 @@ import { normalizePhone } from '@/utils/phone';
 import { recordPerfMetric } from './perfMonitor';
 import { withErrorBoundary } from './errorBoundary';
 import { registerSubscription } from './memoryMonitor';
+import { getExpoExtraString, getExpoFirebaseConfig } from './expoConfig';
+import { FIREBASE_REQUIRED_CONFIG_KEYS, getFirebaseConfigStatus as buildFirebaseConfigStatus } from './firebaseConfig';
 import {
   invalidateCacheOnCheckinCreate,
   invalidateCacheOnCheckinDelete,
@@ -24,11 +26,12 @@ import {
 } from './cacheInvalidation';
 import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
 import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
+import { addBreadcrumb, captureException } from './sentry';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
   // Try Expo config first (injected via app.config.js)
-  const expoConfig = (Constants.expoConfig as any)?.extra?.FIREBASE_CONFIG;
+  const expoConfig = getExpoFirebaseConfig();
   if (expoConfig && expoConfig[key]) {
     return expoConfig[key];
   }
@@ -89,12 +92,98 @@ function resolveFirebaseConfig() {
 }
 
 export function isFirebaseConfigured() {
-  // allow overriding via env/global at runtime
-  const config = resolveFirebaseConfig();
-  const key = (process.env.FIREBASE_API_KEY as string) || (process.env.FIREBASE_APIKEY as string) || (process.env.FIREBASE_CONFIG && (process.env.FIREBASE_CONFIG as any).apiKey) || config.apiKey || (global as any)?.FIREBASE_API_KEY || (global as any)?.FIREBASE_CONFIG?.apiKey;
-  if (!key) return false;
-  if (typeof key === 'string' && (key.trim() === '' || key.includes('REPLACE_ME'))) return false;
-  return true;
+  return getFirebaseConfigStatus().configured;
+}
+
+export function getFirebaseConfigStatus() {
+  return buildFirebaseConfigStatus(resolveFirebaseConfig());
+}
+
+function makeFirebaseConfigError(missingKeys: string[] = getFirebaseConfigStatus().missingKeys) {
+  const details = missingKeys.length ? missingKeys.join(', ') : FIREBASE_REQUIRED_CONFIG_KEYS.join(', ');
+  const error = new Error(`Firebase configuration incomplete. Missing: ${details}`);
+  (error as any).code = 'auth/configuration-incomplete';
+  (error as any).missingKeys = missingKeys.slice();
+  return error;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toError(error: any) {
+  if (error instanceof Error) return error;
+  return new Error(typeof error === 'string' ? error : 'Unknown Firebase error');
+}
+
+function shouldRetryFirebaseAuthError(error: any) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  return Platform.OS !== 'web' && (code === 'auth/network-request-failed' || code === 'auth/internal-error');
+}
+
+function normalizeFirebaseAuthError(error: any) {
+  if (String(error?.code || '') === 'auth/network-request-failed') {
+    const status = getFirebaseConfigStatus();
+    if (!status.configured) {
+      return makeFirebaseConfigError(status.missingKeys);
+    }
+  }
+  return error;
+}
+
+async function captureFirebaseAuthFailure(stage: string, error: any, context: Record<string, any> = {}) {
+  let connectivity: { isConnected?: boolean | null; isInternetReachable?: boolean | null } | null = null;
+  if (Platform.OS !== 'web') {
+    try {
+      const snapshot = await NetInfo.fetch();
+      connectivity = {
+        isConnected: snapshot?.isConnected ?? null,
+        isInternetReachable: snapshot?.isInternetReachable ?? null,
+      };
+    } catch {
+      connectivity = null;
+    }
+  }
+
+  const configStatus = getFirebaseConfigStatus();
+  const payload = {
+    stage,
+    platform: Platform.OS,
+    code: typeof error?.code === 'string' ? error.code : '',
+    message: typeof error?.message === 'string' ? error.message : String(error || ''),
+    firebaseConfigured: configStatus.configured,
+    firebaseMissingKeys: configStatus.missingKeys,
+    ...connectivity,
+    ...context,
+  };
+
+  addBreadcrumb(`firebase_auth_${stage}`, 'auth', payload);
+  captureException(toError(error), payload);
+}
+
+async function runFirebaseAuthOperationWithRetry<T>(stage: string, operation: () => Promise<T>) {
+  const retryDelaysMs = Platform.OS === 'web' ? [0] : [0, 350, 1200];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
+    const delayMs = retryDelaysMs[attempt];
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const retryable = shouldRetryFirebaseAuthError(error) && attempt < retryDelaysMs.length - 1;
+      await captureFirebaseAuthFailure(stage, error, { attempt: attempt + 1, retryable });
+      if (!retryable) {
+        throw normalizeFirebaseAuthError(error);
+      }
+    }
+  }
+
+  throw normalizeFirebaseAuthError(lastError);
 }
 
 let _initialized = false;
@@ -956,6 +1045,11 @@ export function ensureFirebase() {
   }
 
   try {
+    const configStatus = getFirebaseConfigStatus();
+    if (!configStatus.configured) {
+      _initError = makeFirebaseConfigError(configStatus.missingKeys);
+      return null;
+    }
     const firebaseApp = (firebase as any)?.default ?? firebase;
     if (!firebaseApp?.apps?.length) {
       firebaseApp.initializeApp(resolveFirebaseConfig());
@@ -1787,7 +1881,7 @@ async function getProfileAccessSnapshot(targetUserId: string) {
 
 function getFunctionsRegion() {
   return (
-    ((Constants.expoConfig as any)?.extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    getExpoExtraString('FIREBASE_FUNCTIONS_REGION') ||
     (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
     'us-central1'
   );
@@ -2854,39 +2948,43 @@ export async function clearPushToken(userId: string) {
 // Auth helpers
 export async function linkAnonymousWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
+  if (!fb) throw getFirebaseInitError() || makeFirebaseConfigError();
   await ensureAuthPersistenceConfigured(fb);
 
-  if (shouldUseModularAuth()) {
-    const auth = getModularFirebaseAuth(fb);
+  return runFirebaseAuthOperationWithRetry('link_anonymous_with_email', async () => {
+    if (shouldUseModularAuth()) {
+      const auth = getModularFirebaseAuth(fb);
+      const user = auth.currentUser;
+      if (!user) throw new Error('No authenticated user to link.');
+      const cred = modularAuth.EmailAuthProvider.credential(email, password);
+      const res = await modularAuth.linkWithCredential(user, cred);
+      return res.user;
+    }
+
+    const auth = fb.auth();
     const user = auth.currentUser;
     if (!user) throw new Error('No authenticated user to link.');
-    const cred = modularAuth.EmailAuthProvider.credential(email, password);
-    const res = await modularAuth.linkWithCredential(user, cred);
+
+    const cred = fb.auth.EmailAuthProvider.credential(email, password);
+    const res = await user.linkWithCredential(cred);
     return res.user;
-  }
-
-  const auth = fb.auth();
-  const user = auth.currentUser;
-  if (!user) throw new Error('No authenticated user to link.');
-
-  const cred = fb.auth.EmailAuthProvider.credential(email, password);
-  const res = await user.linkWithCredential(cred);
-  return res.user;
+  });
 }
 
 export async function signInWithEmail({ email, password }: { email: string; password: string }) {
   const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
+  if (!fb) throw getFirebaseInitError() || makeFirebaseConfigError();
   await ensureAuthPersistenceConfigured(fb);
-  if (shouldUseModularAuth()) {
-    const auth = getModularFirebaseAuth(fb);
-    const res = await modularAuth.signInWithEmailAndPassword(auth, email, password);
+  return runFirebaseAuthOperationWithRetry('sign_in_email_password', async () => {
+    if (shouldUseModularAuth()) {
+      const auth = getModularFirebaseAuth(fb);
+      const res = await modularAuth.signInWithEmailAndPassword(auth, email, password);
+      return res.user;
+    }
+    const auth = fb.auth();
+    const res = await auth.signInWithEmailAndPassword(email, password);
     return res.user;
-  }
-  const auth = fb.auth();
-  const res = await auth.signInWithEmailAndPassword(email, password);
-  return res.user;
+  });
 }
 
 function makeClientError(message: string, code: string) {
@@ -2954,11 +3052,13 @@ export async function createAccountWithEmail({
   ambiancePreference,
 }: any) {
   const fb = ensureFirebase();
-  if (!fb) throw new Error('Firebase not initialized.');
+  if (!fb) throw getFirebaseInitError() || makeFirebaseConfigError();
   await ensureAuthPersistenceConfigured(fb);
-  const res = shouldUseModularAuth()
-    ? await modularAuth.createUserWithEmailAndPassword(getModularFirebaseAuth(fb), email, password)
-    : await fb.auth().createUserWithEmailAndPassword(email, password);
+  const res = await runFirebaseAuthOperationWithRetry('create_user_email_password', async () => (
+    shouldUseModularAuth()
+      ? modularAuth.createUserWithEmailAndPassword(getModularFirebaseAuth(fb), email, password)
+      : fb.auth().createUserWithEmailAndPassword(email, password)
+  ));
   const uid = res.user.uid;
   try {
     await assertHandleAvailableForAccount(handle, uid);
