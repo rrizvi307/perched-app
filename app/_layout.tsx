@@ -17,7 +17,7 @@ import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
-import { initFirebaseAppCheck, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
+import { refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
 import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken } from '@/services/firebaseClient';
@@ -38,7 +38,6 @@ export default function RootLayout() {
     try {
       initErrorReporting();
       initAnalytics();
-      void initFirebaseAppCheck();
     } finally {
       void endPerfMark(initMarkId, true);
     }
@@ -102,11 +101,6 @@ function InnerApp() {
   ) {
     (global as any).FIREBASE_CONFIG = firebaseConfig;
   }
-
-  useEffect(() => {
-    if (!user?.id || isDemoMode()) return;
-    void refreshFirebaseAppCheckToken(true);
-  }, [user?.id]);
 
   useEffect(() => {
     let canceled = false;

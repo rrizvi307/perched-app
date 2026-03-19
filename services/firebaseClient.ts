@@ -131,6 +131,36 @@ function normalizeFirebaseAuthError(error: any) {
   return error;
 }
 
+async function suspendFirebaseAppCheckForAuthRetry(stage: string, error: any) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (Platform.OS === 'web' || (code !== 'auth/network-request-failed' && code !== 'auth/internal-error')) {
+    return false;
+  }
+
+  try {
+    const module = await import('./firebaseAppCheck');
+    if (typeof module?.suspendFirebaseAppCheck === 'function') {
+      module.suspendFirebaseAppCheck();
+      addBreadcrumb(`firebase_app_check_suspended_${stage}`, 'auth', {
+        stage,
+        code,
+      });
+      return true;
+    }
+  } catch (suspendError) {
+    addBreadcrumb(`firebase_app_check_suspend_failed_${stage}`, 'auth', {
+      stage,
+      code,
+      message:
+        suspendError instanceof Error
+          ? suspendError.message
+          : String(suspendError || ''),
+    });
+  }
+
+  return false;
+}
+
 async function captureFirebaseAuthFailure(stage: string, error: any, context: Record<string, any> = {}) {
   let connectivity: { isConnected?: boolean | null; isInternetReachable?: boolean | null } | null = null;
   if (Platform.OS !== 'web') {
@@ -176,7 +206,14 @@ async function runFirebaseAuthOperationWithRetry<T>(stage: string, operation: ()
     } catch (error) {
       lastError = error;
       const retryable = shouldRetryFirebaseAuthError(error) && attempt < retryDelaysMs.length - 1;
-      await captureFirebaseAuthFailure(stage, error, { attempt: attempt + 1, retryable });
+      const appCheckSuspended = retryable
+        ? await suspendFirebaseAppCheckForAuthRetry(stage, error)
+        : false;
+      await captureFirebaseAuthFailure(stage, error, {
+        attempt: attempt + 1,
+        retryable,
+        appCheckSuspended,
+      });
       if (!retryable) {
         throw normalizeFirebaseAuthError(error);
       }

@@ -59,10 +59,26 @@ function isAppCheckFailureBackoffActive() {
   return appCheckRetryAfterMs > Date.now();
 }
 
-function noteAppCheckFailure() {
+function teardownAppCheckListeners() {
+  tokenListenerUnsubscribe?.();
+  tokenListenerUnsubscribe = null;
+  authListenerUnsubscribe?.();
+  authListenerUnsubscribe = null;
+}
+
+export function suspendFirebaseAppCheck(backoffMs = APP_CHECK_FAILURE_BACKOFF_MS) {
+  teardownAppCheckListeners();
+  appCheckInitialized = false;
   setGlobalAppCheckToken('');
   appCheckTokenExpiryMs = 0;
-  appCheckRetryAfterMs = Date.now() + APP_CHECK_FAILURE_BACKOFF_MS;
+  appCheckRetryAfterMs =
+    typeof backoffMs === 'number' && Number.isFinite(backoffMs) && backoffMs > 0
+      ? Date.now() + backoffMs
+      : 0;
+}
+
+function noteAppCheckFailure() {
+  suspendFirebaseAppCheck(APP_CHECK_FAILURE_BACKOFF_MS);
 }
 
 export function getCurrentFirebaseAppCheckToken() {
@@ -172,12 +188,5 @@ export async function refreshFirebaseAppCheckToken(forceRefresh = false) {
 }
 
 export function resetFirebaseAppCheckForTests() {
-  appCheckInitialized = false;
-  appCheckTokenExpiryMs = 0;
-  appCheckRetryAfterMs = 0;
-  tokenListenerUnsubscribe?.();
-  tokenListenerUnsubscribe = null;
-  authListenerUnsubscribe?.();
-  authListenerUnsubscribe = null;
-  setAppCheckTokenState('');
+  suspendFirebaseAppCheck(0);
 }
