@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { ensureFirebase } from '../firebaseClient';
+import { ensureFirebase, getCurrentFirebaseIdToken } from '../firebaseClient';
 import {
   getGoogleMapsCacheStats,
   getPlaceDetails,
@@ -14,6 +14,13 @@ jest.mock('expo-constants', () => ({
       extra: {},
     },
   },
+}));
+
+jest.mock('../firebaseClient', () => ({
+  ensureFirebase: jest.fn(() => ({
+    auth: jest.fn(() => ({ currentUser: null })),
+  })),
+  getCurrentFirebaseIdToken: jest.fn(async () => ''),
 }));
 
 function mkFetchResponse(payload: any, ok = true) {
@@ -39,6 +46,7 @@ describe('googleMaps transport', () => {
         currentUser: null,
       })),
     });
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('');
   });
 
   afterEach(() => {
@@ -49,6 +57,7 @@ describe('googleMaps transport', () => {
   });
 
   it('prefers the backend proxy for authenticated place details', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-123');
     (ensureFirebase as jest.Mock).mockReturnValue({
       auth: jest.fn(() => ({
         currentUser: {
@@ -135,6 +144,7 @@ describe('googleMaps transport', () => {
   });
 
   it('uses the backend proxy for nearby search when the user is authenticated', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-456');
     (ensureFirebase as jest.Mock).mockReturnValue({
       auth: jest.fn(() => ({
         currentUser: {
@@ -220,6 +230,7 @@ describe('googleMaps transport', () => {
   });
 
   it('tracks details cache counters for misses, sets, and hits', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
     (ensureFirebase as jest.Mock).mockReturnValue({
       auth: jest.fn(() => ({
         currentUser: {

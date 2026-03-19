@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { ensureFirebase } from '../firebaseClient';
+import { ensureFirebase, getCurrentFirebaseIdToken } from '../firebaseClient';
 import {
   buildPlaceIntelligence,
   getPlaceIntelligenceCacheStats,
@@ -10,6 +10,7 @@ jest.mock('../firebaseClient', () => ({
   ensureFirebase: jest.fn(() => ({
     auth: jest.fn(() => ({ currentUser: null })),
   })),
+  getCurrentFirebaseIdToken: jest.fn(async () => ''),
 }));
 
 jest.mock('expo-constants', () => ({
@@ -49,6 +50,7 @@ describe('buildPlaceIntelligence', () => {
     (global as any).GOOGLE_MAPS_API_KEY = undefined;
     (Constants as any).expoConfig.extra = {};
     (global as any).fetch = jest.fn(async () => mkFetchResponse({ externalSignals: [] }, true));
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('');
   });
 
   afterEach(() => {
@@ -619,6 +621,7 @@ describe('buildPlaceIntelligence', () => {
 
   it('adds auth headers when user token and app check token exist', async () => {
     const token = 'token-123';
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue(token);
     (ensureFirebase as jest.Mock).mockReturnValue({
       auth: jest.fn(() => ({
         currentUser: {

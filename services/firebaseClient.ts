@@ -229,6 +229,8 @@ let _initError: any = null;
 let _reactNativeAuthConfigured = false;
 let _authPersistenceConfigured = false;
 let _authPersistencePromise: Promise<void> | null = null;
+let _cachedIdToken = '';
+let _idTokenListenerConfigured = false;
 const checkinsCache = new Map<string, { ts: number; payload: any }>();
 const usersByIdCache = new Map<string, { ts: number; payload: any[] }>();
 const userFriendsCache = new Map<string, { ts: number; payload: string[] }>();
@@ -321,6 +323,25 @@ function shouldUseModularAuth() {
   return Platform.OS !== 'web';
 }
 
+function setCachedFirebaseIdToken(token?: string | null) {
+  _cachedIdToken = typeof token === 'string' ? token.trim() : '';
+}
+
+async function cacheFirebaseIdTokenFromUser(user: any, forceRefresh = false) {
+  if (!user || typeof user.getIdToken !== 'function') {
+    setCachedFirebaseIdToken('');
+    return '';
+  }
+
+  try {
+    const token = await user.getIdToken(Boolean(forceRefresh));
+    setCachedFirebaseIdToken(token);
+    return _cachedIdToken;
+  } catch {
+    return _cachedIdToken;
+  }
+}
+
 function ensureReactNativeAuthConfigured(firebaseApp?: any) {
   const fb = firebaseApp || _firebaseApp;
   if (!fb?.auth || Platform.OS === 'web' || _reactNativeAuthConfigured) return;
@@ -349,6 +370,23 @@ function ensureReactNativeAuthConfigured(firebaseApp?: any) {
   // existing fb.auth() call sites working on React Native.
   void modularAuth.getAuth(modularApp);
   _reactNativeAuthConfigured = true;
+}
+
+function ensureFirebaseIdTokenListener(firebaseApp?: any) {
+  const fb = firebaseApp || _firebaseApp;
+  if (!fb?.auth || _idTokenListenerConfigured) return;
+
+  const handleUser = (user: any) => {
+    void cacheFirebaseIdTokenFromUser(user);
+  };
+
+  if (shouldUseModularAuth()) {
+    modularAuth.onIdTokenChanged(getModularFirebaseAuth(fb), handleUser);
+  } else {
+    fb.auth().onIdTokenChanged(handleUser);
+  }
+
+  _idTokenListenerConfigured = true;
 }
 
 function getModularFirebaseAuth(firebaseApp?: any) {
@@ -394,6 +432,13 @@ export function observeIdTokenChanges(listener: (user: any) => void) {
     return modularAuth.onIdTokenChanged(getModularFirebaseAuth(fb), listener);
   }
   return fb.auth().onIdTokenChanged(listener);
+}
+
+export async function getCurrentFirebaseIdToken(forceRefresh = false) {
+  const user = getCurrentFirebaseUser();
+  const liveToken = await cacheFirebaseIdTokenFromUser(user, forceRefresh);
+  if (liveToken) return liveToken;
+  return _cachedIdToken;
 }
 
 async function ensureAuthPersistenceConfigured(firebaseApp?: any) {
@@ -1077,6 +1122,7 @@ function removeLocalMutualFriend(map: any, userA: string, userB: string) {
 export function ensureFirebase() {
   if (_initialized) {
     ensureReactNativeAuthConfigured(_firebaseApp);
+    ensureFirebaseIdTokenListener(_firebaseApp);
     void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
   }
@@ -1093,6 +1139,7 @@ export function ensureFirebase() {
     }
     _firebaseApp = firebaseApp;
     ensureReactNativeAuthConfigured(_firebaseApp);
+    ensureFirebaseIdTokenListener(_firebaseApp);
     _initialized = true;
     void ensureAuthPersistenceConfigured(_firebaseApp);
     return _firebaseApp;
@@ -3016,10 +3063,12 @@ export async function signInWithEmail({ email, password }: { email: string; pass
     if (shouldUseModularAuth()) {
       const auth = getModularFirebaseAuth(fb);
       const res = await modularAuth.signInWithEmailAndPassword(auth, email, password);
+      await cacheFirebaseIdTokenFromUser(res.user, true);
       return res.user;
     }
     const auth = fb.auth();
     const res = await auth.signInWithEmailAndPassword(email, password);
+    await cacheFirebaseIdTokenFromUser(res.user, true);
     return res.user;
   });
 }

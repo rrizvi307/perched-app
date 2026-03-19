@@ -1085,15 +1085,21 @@ function deriveWeatherConfidence(code: number, precipitationMm: number): number 
 async function getProxyAuthHeaders() {
   const headers: Record<string, string> = {};
   try {
-    const { getCurrentFirebaseUser, ensureFirebase } = await import('./firebaseClient');
-    const user =
-      getCurrentFirebaseUser?.() ||
-      ensureFirebase?.()?.auth?.()?.currentUser ||
-      null;
-    if (user && typeof user.getIdToken === 'function') {
-      const idToken = await user.getIdToken();
-      if (idToken) headers.Authorization = `Bearer ${idToken}`;
+    const { getCurrentFirebaseIdToken, getCurrentFirebaseUser, ensureFirebase } = await import('./firebaseClient');
+    let idToken = '';
+    if (typeof getCurrentFirebaseIdToken === 'function') {
+      idToken = await getCurrentFirebaseIdToken();
     }
+    if (!idToken) {
+      const user =
+        getCurrentFirebaseUser?.() ||
+        ensureFirebase?.()?.auth?.()?.currentUser ||
+        null;
+      if (user && typeof user.getIdToken === 'function') {
+        idToken = await user.getIdToken();
+      }
+    }
+    if (idToken) headers.Authorization = `Bearer ${idToken}`;
   } catch {}
 
   const appCheckToken = getCurrentFirebaseAppCheckToken() || await refreshFirebaseAppCheckToken();
@@ -2083,9 +2089,24 @@ export function invalidatePlaceIntelligenceCache(placeId?: string): void {
 }
 
 export async function buildPlaceIntelligence(input: BuildIntelligenceInput): Promise<PlaceIntelligence> {
+  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number) =>
+    await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Place intelligence timed out')), timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      );
+    });
+
   return withErrorBoundary(
     'place_intelligence_build',
-    async () => buildPlaceIntelligenceCore(input),
+    async () => withTimeout(buildPlaceIntelligenceCore(input), 4500),
     getFallbackPlaceIntelligence()
   );
 }
