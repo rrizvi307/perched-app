@@ -49,7 +49,10 @@ function addProviderProxyBreadcrumb(message: string, data?: Record<string, unkno
   } catch {}
 }
 
-async function readProviderProxyAuthState(forceRefreshAppCheck = false): Promise<ProviderProxyAuthState> {
+async function readProviderProxyAuthState(options?: {
+  forceRefreshAuth?: boolean;
+  forceRefreshAppCheck?: boolean;
+}): Promise<ProviderProxyAuthState> {
   const headers: Record<string, string> = {};
   let hasAuth = false;
   let hasAppCheck = false;
@@ -57,7 +60,7 @@ async function readProviderProxyAuthState(forceRefreshAppCheck = false): Promise
   try {
     const { getCurrentFirebaseIdToken } = await import('./firebaseClient');
     if (typeof getCurrentFirebaseIdToken === 'function') {
-      const idToken = await getCurrentFirebaseIdToken();
+      const idToken = await getCurrentFirebaseIdToken(Boolean(options?.forceRefreshAuth));
       if (typeof idToken === 'string' && idToken.trim()) {
         headers.Authorization = `Bearer ${idToken.trim()}`;
         hasAuth = true;
@@ -69,7 +72,7 @@ async function readProviderProxyAuthState(forceRefreshAppCheck = false): Promise
 
   try {
     let appCheckToken = getCurrentFirebaseAppCheckToken();
-    if (!appCheckToken && forceRefreshAppCheck) {
+    if (!appCheckToken && options?.forceRefreshAppCheck) {
       appCheckToken = await refreshFirebaseAppCheckToken();
     }
     if (typeof appCheckToken === 'string' && appCheckToken.trim()) {
@@ -88,18 +91,34 @@ async function readProviderProxyAuthState(forceRefreshAppCheck = false): Promise
   };
 }
 
+export async function primeProviderProxyAccess(
+  forceRefresh = true,
+): Promise<ProviderProxyAuthState> {
+  const state = await readProviderProxyAuthState({
+    forceRefreshAuth: forceRefresh,
+    forceRefreshAppCheck: forceRefresh,
+  });
+  addProviderProxyBreadcrumb('provider_proxy_access_primed', {
+    authMode: state.authMode,
+    hasAuth: state.hasAuth,
+    hasAppCheck: state.hasAppCheck,
+    forceRefresh,
+  });
+  return state;
+}
+
 export async function waitForProviderProxyAccess(
   maxWaitMs = 2200,
   pollMs = 120,
 ): Promise<ProviderProxyAuthState> {
   const deadline = Date.now() + Math.max(0, maxWaitMs);
   let attempt = 0;
-  let lastState = await readProviderProxyAuthState(true);
+  let lastState = await primeProviderProxyAccess(true);
 
   while (!lastState.hasAuth && !lastState.hasAppCheck && Date.now() < deadline) {
     attempt += 1;
     await sleep(pollMs);
-    lastState = await readProviderProxyAuthState(false);
+    lastState = await readProviderProxyAuthState();
   }
 
   addProviderProxyBreadcrumb('provider_proxy_access_ready', {
@@ -123,47 +142,15 @@ function mapStatusToErrorCode(statusCode: number): ProviderProxyErrorCode {
   return 'proxy_provider_error';
 }
 
-export async function fetchProviderProxyJson<T>(
+async function executeProviderProxyRequest<T>(
   endpoint: string,
   body: Record<string, any>,
-  options?: {
-    action?: string;
-    timeoutMs?: number;
-    waitForAccessMs?: number;
-  },
+  authState: ProviderProxyAuthState,
+  action: string,
+  timeoutMs: number,
 ): Promise<ProviderProxyJsonResult<T>> {
-  const action = options?.action || 'request';
-  if (!endpoint) {
-    return {
-      data: null,
-      meta: {
-        action,
-        endpoint: '',
-        ok: false,
-        authMode: 'none',
-        errorCode: 'proxy_endpoint_missing',
-        errorMessage: 'Proxy endpoint missing',
-      },
-    };
-  }
-
-  const authState = await waitForProviderProxyAccess(options?.waitForAccessMs);
-  if (!authState.hasAuth && !authState.hasAppCheck) {
-    return {
-      data: null,
-      meta: {
-        action,
-        endpoint,
-        ok: false,
-        authMode: 'none',
-        errorCode: 'proxy_access_unavailable',
-        errorMessage: 'Proxy access unavailable',
-      },
-    };
-  }
-
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timeout = setTimeout(() => controller?.abort(), options?.timeoutMs ?? 3200);
+  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -246,6 +233,61 @@ export async function fetchProviderProxyJson<T>(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function fetchProviderProxyJson<T>(
+  endpoint: string,
+  body: Record<string, any>,
+  options?: {
+    action?: string;
+    timeoutMs?: number;
+    waitForAccessMs?: number;
+  },
+): Promise<ProviderProxyJsonResult<T>> {
+  const action = options?.action || 'request';
+  if (!endpoint) {
+    return {
+      data: null,
+      meta: {
+        action,
+        endpoint: '',
+        ok: false,
+        authMode: 'none',
+        errorCode: 'proxy_endpoint_missing',
+        errorMessage: 'Proxy endpoint missing',
+      },
+    };
+  }
+
+  const authState = await waitForProviderProxyAccess(options?.waitForAccessMs);
+  if (!authState.hasAuth && !authState.hasAppCheck) {
+    return {
+      data: null,
+      meta: {
+        action,
+        endpoint,
+        ok: false,
+        authMode: 'none',
+        errorCode: 'proxy_access_unavailable',
+        errorMessage: 'Proxy access unavailable',
+      },
+    };
+  }
+
+  const timeoutMs = options?.timeoutMs ?? 3200;
+  const initial = await executeProviderProxyRequest<T>(endpoint, body, authState, action, timeoutMs);
+  if (
+    initial.meta.ok ||
+    initial.meta.errorCode !== 'proxy_unauthorized'
+  ) {
+    return initial;
+  }
+
+  const refreshedState = await primeProviderProxyAccess(true);
+  if (!refreshedState.hasAuth && !refreshedState.hasAppCheck) {
+    return initial;
+  }
+  return executeProviderProxyRequest<T>(endpoint, body, refreshedState, action, timeoutMs);
 }
 
 export function getProviderProxyUserMessage(

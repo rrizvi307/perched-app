@@ -164,6 +164,38 @@ export function hasRenderablePlaceIntelligence(intelligence?: PlaceIntelligence 
   return false;
 }
 
+function isTransientAvailabilityReason(
+  reason?: PlaceIntelligence['dataAvailability']['reason'] | null,
+) {
+  return (
+    reason === 'proxy_access_unavailable' ||
+    reason === 'proxy_unauthorized' ||
+    reason === 'proxy_timeout' ||
+    reason === 'proxy_network_error' ||
+    reason === 'proxy_provider_error'
+  );
+}
+
+function shouldCacheProxyPayload(payload: ProxyPlacePayload) {
+  if (payload.dataAvailability.status === 'full' || payload.dataAvailability.status === 'degraded') {
+    return true;
+  }
+  return !isTransientAvailabilityReason(payload.dataAvailability.reason);
+}
+
+function shouldCachePlaceIntelligence(payload: PlaceIntelligence) {
+  if (isTransientAvailabilityReason(payload.dataAvailability.reason)) {
+    return false;
+  }
+  if (payload.dataAvailability.status === 'full' || payload.dataAvailability.status === 'degraded') {
+    return true;
+  }
+  if (hasRenderablePlaceIntelligence(payload)) {
+    return true;
+  }
+  return !isTransientAvailabilityReason(payload.dataAvailability.reason);
+}
+
 type BuildIntelligenceInput = {
   placeName: string;
   placeId?: string | null;
@@ -1281,7 +1313,9 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlac
         degradedProviders,
       },
     };
-    setBoundedMapEntry(proxySignalCache, cacheKey, { ts: Date.now(), payload: next }, PROXY_SIGNAL_CACHE_MAX);
+    if (shouldCacheProxyPayload(next)) {
+      setBoundedMapEntry(proxySignalCache, cacheKey, { ts: Date.now(), payload: next }, PROXY_SIGNAL_CACHE_MAX);
+    }
     return next;
   });
 }
@@ -2137,7 +2171,9 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     generatedAt: Date.now(),
   };
 
-  setBoundedMapEntry(intelligenceCache, cacheKey, { ts: Date.now(), payload }, INTELLIGENCE_CACHE_MAX);
+  if (shouldCachePlaceIntelligence(payload)) {
+    setBoundedMapEntry(intelligenceCache, cacheKey, { ts: Date.now(), payload }, INTELLIGENCE_CACHE_MAX);
+  }
   void emitIntelligenceTelemetry(cacheKey, input, payload, checkins);
   return payload;
 }

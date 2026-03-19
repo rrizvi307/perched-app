@@ -12,7 +12,7 @@ import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { getRecentSpots, getTopSpotsLocal } from '@/storage/local';
 import { requestForegroundLocation } from '@/services/location';
-import { getProviderProxyUserMessage } from '@/services/providerProxy';
+import { getProviderProxyUserMessage, primeProviderProxyAccess } from '@/services/providerProxy';
 import { haversine } from '@/utils/geo';
 import React, { useEffect, useState } from 'react';
 import { FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -198,6 +198,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
       setError(null);
       setNearbyError(null);
       setLoading(false);
+      void primeProviderProxyAccess(false);
     }
   }, [visible]);
 

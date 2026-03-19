@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "app.perched",
-      "buildNumber": "8",
+      "buildNumber": "9",
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Perched uses the camera to capture your check-in photo.",

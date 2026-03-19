@@ -659,6 +659,34 @@ describe('buildPlaceIntelligence', () => {
     expect(result.dataAvailability.reason).toBe('proxy_network_error');
   });
 
+  it('does not cache transient unavailable intelligence results for repeated spot opens', async () => {
+    (global as any).fetch = jest
+      .fn()
+      .mockImplementationOnce(async () => {
+        throw new Error('network down');
+      })
+      .mockImplementationOnce(async () =>
+        mkFetchResponse({
+          externalSignals: [{ source: 'yelp', rating: 4.6, reviewCount: 180 }],
+        }),
+      );
+
+    const input = {
+      placeName: 'Transient Failure Spot',
+      placeId: 'transient-failure-1',
+      location: { lat: 30, lng: -95 },
+      checkins: [mkCheckin()],
+    };
+
+    const first = await buildPlaceIntelligence(input);
+    const second = await buildPlaceIntelligence(input);
+
+    expect(first.dataAvailability.reason).toBe('proxy_network_error');
+    expect(second.externalSignals.length).toBeGreaterThan(0);
+    expect(second.dataAvailability.status).not.toBe('unavailable');
+    expect((global as any).fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('handles non-ok responses by returning no external signals', async () => {
     (global as any).fetch = jest.fn(async () => mkFetchResponse({}, false, 503));
     const result = await buildPlaceIntelligence({

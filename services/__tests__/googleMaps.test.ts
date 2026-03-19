@@ -251,6 +251,39 @@ describe('googleMaps transport', () => {
     expect((global as any).fetch).not.toHaveBeenCalled();
   });
 
+  it('retries once with refreshed proxy access when the proxy responds unauthorized', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-123');
+    (ensureFirebase as jest.Mock).mockReturnValue({
+      auth: jest.fn(() => ({
+        currentUser: {
+          getIdToken: jest.fn(async () => 'token-123'),
+        },
+      })),
+    });
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValueOnce(mkFetchResponse({ error: 'Unauthorized' }, false, 401))
+      .mockResolvedValueOnce(
+        mkFetchResponse({
+          place: {
+            placeId: 'retry-place',
+            name: 'Retry Cafe',
+            address: '9 Proxy Way',
+          },
+        }),
+      );
+
+    const result = await getPlaceDetails('retry-place');
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeId: 'retry-place',
+        name: 'Retry Cafe',
+      }),
+    );
+    expect((global as any).fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('tracks details cache counters for misses, sets, and hits', async () => {
     (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
     (ensureFirebase as jest.Mock).mockReturnValue({
