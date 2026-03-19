@@ -3,6 +3,7 @@ import { ensureFirebase, getCurrentFirebaseIdToken } from '../firebaseClient';
 import {
   buildPlaceIntelligence,
   getPlaceIntelligenceCacheStats,
+  hasRenderablePlaceIntelligence,
   resetPlaceIntelligenceCacheStats,
 } from '../placeIntelligence';
 
@@ -33,9 +34,10 @@ function mkCheckin(overrides: any = {}) {
   };
 }
 
-function mkFetchResponse(payload: any, ok = true) {
+function mkFetchResponse(payload: any, ok = true, status = ok ? 200 : 500) {
   return {
     ok,
+    status,
     json: async () => payload,
   };
 }
@@ -46,7 +48,7 @@ describe('buildPlaceIntelligence', () => {
     resetPlaceIntelligenceCacheStats();
     process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'true';
     (global as any).PLACE_INTEL_ENDPOINT = 'https://intel.test/proxy';
-    (global as any).FIREBASE_APP_CHECK_TOKEN = undefined;
+    (global as any).FIREBASE_APP_CHECK_TOKEN = 'app-check-test';
     (global as any).GOOGLE_MAPS_API_KEY = undefined;
     (Constants as any).expoConfig.extra = {};
     (global as any).fetch = jest.fn(async () => mkFetchResponse({ externalSignals: [] }, true));
@@ -86,11 +88,19 @@ describe('buildPlaceIntelligence', () => {
       ratingConsensus: 0,
       trustScore: 0,
     });
+    expect(result.providerPhotos).toEqual([]);
+    expect(result.dataAvailability).toEqual({
+      status: 'unavailable',
+      reason: 'missing_location',
+      authMode: 'none',
+      degradedProviders: [],
+    });
     expect(result.scoreBreakdown.wifi.source).toBe('none');
     expect(result.scoreBreakdown.noise.source).toBe('none');
     expect(typeof result.modelVersion).toBe('string');
     expect(typeof result.generatedAt).toBe('number');
     expect(result.generatedAt).toBeGreaterThan(0);
+    expect(hasRenderablePlaceIntelligence(result)).toBe(false);
   });
 
   it('keeps baseline work score non-zero for work-friendly venues without checkins', async () => {
@@ -102,6 +112,7 @@ describe('buildPlaceIntelligence', () => {
 
     expect(result.workScore).toBeGreaterThan(0);
     expect(result.scoreBreakdown.venueType.value).toBeGreaterThanOrEqual(20);
+    expect(hasRenderablePlaceIntelligence(result)).toBe(false);
   });
 
   it('keeps sparse check-in spots out of single-digit scores when only partial signals exist', async () => {
@@ -397,7 +408,45 @@ describe('buildPlaceIntelligence', () => {
     expect(result.externalSignalMeta.providerCount).toBe(1);
     expect(result.externalSignalMeta.totalReviewCount).toBe(120);
     expect(result.externalSignalMeta.trustScore).toBeGreaterThan(0);
+    expect(result.dataAvailability).toEqual({
+      status: 'full',
+      reason: undefined,
+      authMode: 'app_check',
+      degradedProviders: [],
+    });
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes provider photos and marks degraded providers from proxy payloads', async () => {
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        externalSignals: [{ source: 'yelp', rating: 4.5, reviewCount: 88 }],
+        providerPhotos: [
+          { source: 'yelp', url: 'https://images.example.com/yelp.jpg' },
+          { source: 'foursquare', url: 'http://images.example.com/bad.jpg' },
+          { source: 'foursquare', url: 'https://images.example.com/fsq.jpg' },
+        ],
+        degradedProviders: ['foursquare'],
+      })
+    );
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Photo Spot',
+      placeId: 'photo-spot-1',
+      location: { lat: 29.76, lng: -95.37 },
+      checkins: [mkCheckin()],
+    });
+
+    expect(result.providerPhotos).toEqual([
+      { source: 'yelp', url: 'https://images.example.com/yelp.jpg' },
+      { source: 'foursquare', url: 'https://images.example.com/fsq.jpg' },
+    ]);
+    expect(result.dataAvailability).toEqual({
+      status: 'degraded',
+      reason: 'provider_partial',
+      authMode: 'app_check',
+      degradedProviders: ['foursquare'],
+    });
   });
 
   it('includes live Google details in aggregate rating, hours, and open status', async () => {
@@ -606,10 +655,12 @@ describe('buildPlaceIntelligence', () => {
     });
 
     expect(result.externalSignals).toEqual([]);
+    expect(result.dataAvailability.status).toBe('unavailable');
+    expect(result.dataAvailability.reason).toBe('proxy_network_error');
   });
 
   it('handles non-ok responses by returning no external signals', async () => {
-    (global as any).fetch = jest.fn(async () => mkFetchResponse({}, false));
+    (global as any).fetch = jest.fn(async () => mkFetchResponse({}, false, 503));
     const result = await buildPlaceIntelligence({
       placeName: 'Bad Status Spot',
       placeId: 'bad-1',
@@ -617,6 +668,8 @@ describe('buildPlaceIntelligence', () => {
       checkins: [mkCheckin()],
     });
     expect(result.externalSignals).toEqual([]);
+    expect(result.dataAvailability.status).toBe('unavailable');
+    expect(result.dataAvailability.reason).toBe('proxy_provider_error');
   });
 
   it('adds auth headers when user token and app check token exist', async () => {

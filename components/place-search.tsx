@@ -2,11 +2,17 @@ import { Body, H2, Label } from '@/components/ui/typography';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { searchPlaces, searchPlacesNearby, searchPlacesWithBias } from '@/services/googleMaps';
+import {
+  searchPlacesResponse,
+  searchPlacesNearbyResponse,
+  searchPlacesWithBiasResponse,
+  type PlaceSearchResponse,
+} from '@/services/googleMaps';
 import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { getRecentSpots, getTopSpotsLocal } from '@/storage/local';
 import { requestForegroundLocation } from '@/services/location';
+import { getProviderProxyUserMessage } from '@/services/providerProxy';
 import { haversine } from '@/utils/geo';
 import React, { useEffect, useState } from 'react';
 import { FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -165,7 +171,7 @@ async function searchPlacesWithNativeGeocoder(
   }
 }
 
-export default function PlaceSearch({ visible, onClose, onSelect }: { visible: boolean; onClose: () => void; onSelect: (place: any) => void }) {
+export default function PlaceSearch({ visible, onClose, onSelect }: { visible: boolean; onClose: () => void; onSelect: (place: any) => void | Promise<void> }) {
   const insets = useSafeAreaInsets();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -175,6 +181,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
   const [loc, setLoc] = useState<{ lat: number; lng: number } | null>(null); 
   const [nearby, setNearby] = useState<any[]>([]);
   const [nearbyLoading, setNearbyLoading] = useState(false);
+  const [nearbyError, setNearbyError] = useState<string | null>(null);
   const bg = useThemeColor({}, 'background');
   const border = useThemeColor({}, 'border');
   const primary = useThemeColor({}, 'primary');
@@ -189,9 +196,19 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
       setQ('');
       setResults([]);
       setError(null);
+      setNearbyError(null);
       setLoading(false);
     }
   }, [visible]);
+
+  function getSearchErrorMessage(response: PlaceSearchResponse | null, fallbackMessage: string) {
+    const code = response?.diagnostics?.errorCode;
+    if (code === 'client_provider_error') return fallbackMessage;
+    if (typeof code === 'string') {
+      return getProviderProxyUserMessage(code, 'places');
+    }
+    return fallbackMessage;
+  }
 
   useEffect(() => {
     if (!visible) return;
@@ -233,7 +250,14 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     (async () => {
       try {
         setNearbyLoading(true);
-        const results = await searchPlacesNearby(loc.lat, loc.lng, 1200, 'study');
+        setNearbyError(null);
+        const response = await searchPlacesNearbyResponse(loc.lat, loc.lng, 1200, 'study');
+        const results = response.places;
+        if (response.status === 'error') {
+          setNearbyError(getSearchErrorMessage(response, 'Nearby suggestions are temporarily unavailable.'));
+        } else if (!results.length) {
+          setNearbyError('No nearby spots found right now. Try searching by name.');
+        }
         if (!alive) return;
         const enriched = results.map((r) => {
           if (!r.location) return { ...r, distanceKm: Infinity };
@@ -256,21 +280,29 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     try {
       setLoading(true);
       setError(null);
-      const res = loc
-        ? await searchPlacesWithBias(q, loc.lat, loc.lng, 12000, 8)
-        : await searchPlaces(q, 8);
-      if (res.length) {
-        setResults(res);
+      const primary = loc
+        ? await searchPlacesWithBiasResponse(q, loc.lat, loc.lng, 12000, 8)
+        : await searchPlacesResponse(q, 8);
+      if (primary.places.length) {
+        setResults(primary.places);
         setError(null);
         return;
       }
 
       if (loc) {
-        const globalResults = await searchPlaces(q, 8);
-        if (globalResults.length) {
-          setResults(globalResults);
+        const globalResults = await searchPlacesResponse(q, 8);
+        if (globalResults.places.length) {
+          setResults(globalResults.places);
           setError(null);
           return;
+        }
+        if (primary.status === 'error' || globalResults.status === 'error') {
+          setError(
+            getSearchErrorMessage(
+              primary.status === 'error' ? primary : globalResults,
+              'Unable to search places.',
+            ),
+          );
         }
       }
 
@@ -283,7 +315,13 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
 
       const fallback = buildFallbackResults(q, nearby, recents, topSpots);
       setResults(fallback);
-      setError(fallback.length ? null : 'No results found.');
+      setError(
+        fallback.length
+          ? null
+          : primary.status === 'error'
+            ? getSearchErrorMessage(primary, 'Unable to search places.')
+            : 'No results found.',
+      );
     } catch (e) {
       const raw = e instanceof Error ? e.message : 'Unable to search places.';
       const lowered = raw.toLowerCase();
@@ -319,8 +357,10 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
   }, [q, visible, doSearch]);
 
   async function handleSelect(place: any) {
-    onSelect(place);
-    onClose();
+    try {
+      await Promise.resolve(onSelect(place));
+      onClose();
+    } catch {}
   }
 
   async function resolveAndSelect(name: string) {
@@ -343,17 +383,25 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
       }
 
       const res = loc
-        ? await searchPlacesWithBias(name, loc.lat, loc.lng, 12000, 1)
-        : await searchPlaces(name, 1);
-      if (res.length) {
-        await handleSelect(res[0]);
+        ? await searchPlacesWithBiasResponse(name, loc.lat, loc.lng, 12000, 1)
+        : await searchPlacesResponse(name, 1);
+      if (res.places.length) {
+        await handleSelect(res.places[0]);
         return;
       }
       if (loc) {
-        const globalResults = await searchPlaces(name, 1);
-        if (globalResults.length) {
-          await handleSelect(globalResults[0]);
+        const globalResults = await searchPlacesResponse(name, 1);
+        if (globalResults.places.length) {
+          await handleSelect(globalResults.places[0]);
           return;
+        }
+        if (res.status === 'error' || globalResults.status === 'error') {
+          setError(
+            getSearchErrorMessage(
+              res.status === 'error' ? res : globalResults,
+              'Unable to verify spot. Try searching again.',
+            ),
+          );
         }
       }
       const nativeResults = await searchPlacesWithNativeGeocoder(name, loc, 1);
@@ -421,13 +469,14 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
             !q.trim() ? (
               <View style={{ marginBottom: tokens.space.s12 }}>
                 {nearbyLoading ? <Text style={{ color: muted, marginBottom: tokens.space.s8 }}>Finding nearby spots…</Text> : null}
+                {nearbyError ? <Text style={{ color: danger, marginBottom: tokens.space.s8 }}>{nearbyError}</Text> : null}
                 {nearby.length ? (
                   <View style={{ marginBottom: tokens.space.s12 }}>
                     <Label style={{ color: muted, marginBottom: tokens.space.s6 }}>Nearby suggestions</Label>
                     {nearby.map((r) => (
                       <Pressable
                         key={`nearby-${r.placeId}`}
-                        onPress={() => handleSelect(r)}
+                        onPress={() => { void handleSelect(r); }}
                         style={[styles.row, { borderColor: border, backgroundColor: card }]}
                       >
                         <Body style={{ color: text }}>{r.name}</Body>
@@ -446,13 +495,13 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
                         key={`recent-${r.placeId || r.name}`}
                         onPress={() => {
                           if (r.placeId) {
-                            handleSelect({
+                            void handleSelect({
                               placeId: r.placeId,
                               name: r.name,
                               location: r.location,
                             });
                           } else {
-                            resolveAndSelect(r.name);
+                            void resolveAndSelect(r.name);
                           }
                         }}
                         style={[styles.row, { borderColor: border, backgroundColor: card }]}
@@ -469,7 +518,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
             ) : null
           }
           renderItem={({ item }) => (
-            <Pressable onPress={() => { onSelect(item); onClose(); }} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
+            <Pressable onPress={() => { void handleSelect(item); }} style={[styles.row, { borderColor: border, backgroundColor: card }]}>
               <Body style={{ color: text }}>{item.name}</Body>
               {item.address ? <Body style={{ color: muted }}>{item.address}</Body> : null}
             </Pressable>

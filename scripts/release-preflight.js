@@ -70,6 +70,18 @@ function loadEnvFile(filePath) {
   }
 }
 
+function loadProductionEasEnv() {
+  const easPath = path.join(ROOT, 'eas.json');
+  if (!fs.existsSync(easPath)) return {};
+  try {
+    const eas = JSON.parse(fs.readFileSync(easPath, 'utf8'));
+    const env = eas?.build?.production?.env;
+    return env && typeof env === 'object' ? env : {};
+  } catch {
+    return {};
+  }
+}
+
 function isSet(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -122,8 +134,10 @@ function main() {
     ...loadEnvFile(path.join(ROOT, '.env')),
     ...loadEnvFile(path.join(ROOT, '.env.local')),
   };
+  const easProductionEnv = loadProductionEasEnv();
   const merged = {
     ...dotenvValues,
+    ...easProductionEnv,
     ...process.env,
   };
 
@@ -179,9 +193,11 @@ function main() {
     (isSet(merged.SMOKE_TEST_EMAIL) || isSet(merged.APP_REVIEW_EMAIL)) &&
     (isSet(merged.SMOKE_TEST_PASSWORD) || isSet(merged.APP_REVIEW_PASSWORD));
   const requireAuthSmokeCheck = isTruthy(merged.REQUIRE_AUTH_SMOKE_CHECK);
+  const requirePlaceProviderSmokeCheck = isTruthy(merged.REQUIRE_PLACE_PROVIDER_SMOKE_CHECK);
 
   if (hasSmokeCredentials) {
     runStep('Firebase auth smoke check', 'npm', ['run', 'auth:smoke-check']);
+    runStep('Place provider smoke check', 'npm', ['run', 'place-provider:smoke-check']);
   } else if (requireAuthSmokeCheck) {
     process.stderr.write(
       '[preflight] auth smoke check required but SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are not set.\n'
@@ -190,6 +206,13 @@ function main() {
   } else {
     process.stdout.write('\n[preflight] auth smoke check skipped: no smoke credentials set.\n');
     process.stdout.write('[preflight] set SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD and REQUIRE_AUTH_SMOKE_CHECK=true to make this a hard gate.\n');
+  }
+
+  if (!hasSmokeCredentials && requirePlaceProviderSmokeCheck) {
+    process.stderr.write(
+      '[preflight] place provider smoke check required but SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are not set.\n'
+    );
+    process.exit(1);
   }
 
   process.stdout.write('\n[preflight] release preflight passed\n');

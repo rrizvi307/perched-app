@@ -18,6 +18,7 @@
     "preflight": "node ./scripts/release-preflight.js",
     "preflight:release": "node ./scripts/release-preflight.js",
     "auth:smoke-check": "node ./scripts/auth-smoke-check.js",
+    "place-provider:smoke-check": "node ./scripts/place-provider-smoke-check.js",
     "appstore:preflight": "node ./scripts/appstore-review-preflight.js",
     "migrate:user-documents:split": "node ./scripts/migrate-user-document-split.js",
     "verify:user-documents:split": "node ./scripts/verify-user-document-split.js",

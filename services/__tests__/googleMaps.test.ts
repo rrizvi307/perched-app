@@ -1,10 +1,12 @@
 import Constants from 'expo-constants';
 import { ensureFirebase, getCurrentFirebaseIdToken } from '../firebaseClient';
 import {
+  canonicalizePlaceSelection,
   getGoogleMapsCacheStats,
   getPlaceDetails,
   resetGoogleMapsCacheStats,
   searchPlacesNearby,
+  searchPlacesResponse,
 } from '../googleMaps';
 
 jest.mock('expo-constants', () => ({
@@ -23,9 +25,10 @@ jest.mock('../firebaseClient', () => ({
   getCurrentFirebaseIdToken: jest.fn(async () => ''),
 }));
 
-function mkFetchResponse(payload: any, ok = true) {
+function mkFetchResponse(payload: any, ok = true, status = ok ? 200 : 500) {
   return {
     ok,
+    status,
     json: async () => payload,
   };
 }
@@ -229,6 +232,25 @@ describe('googleMaps transport', () => {
     );
   });
 
+  it('returns a typed proxy error instead of silent empty results when proxy access is unavailable', async () => {
+    process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS = 'false';
+    (global as any).fetch = jest.fn();
+
+    const result = await searchPlacesResponse('coffee shops', 5);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        places: [],
+        status: 'error',
+        diagnostics: expect.objectContaining({
+          source: 'proxy',
+          errorCode: 'proxy_access_unavailable',
+        }),
+      })
+    );
+    expect((global as any).fetch).not.toHaveBeenCalled();
+  });
+
   it('tracks details cache counters for misses, sets, and hits', async () => {
     (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
     (ensureFirebase as jest.Mock).mockReturnValue({
@@ -258,5 +280,67 @@ describe('googleMaps transport', () => {
     expect(stats.details.misses).toBeGreaterThanOrEqual(1);
     expect(stats.details.sets).toBeGreaterThanOrEqual(1);
     expect(stats.details.hits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('hydrates canonical place details when a selected place is missing coordinates', async () => {
+    (global as any).GOOGLE_MAPS_API_KEY = 'maps-key';
+    (global as any).fetch = jest.fn(async (url: string) => {
+      if (url.includes('places.googleapis.com/v1/places/canonical-place')) {
+        return mkFetchResponse({
+          id: 'canonical-place',
+          displayName: { text: 'Canonical Cafe' },
+          formattedAddress: '1 Verified Way',
+          location: { latitude: 29.72, longitude: -95.34 },
+        });
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const result = await canonicalizePlaceSelection({
+      placeId: 'canonical-place',
+      name: 'Canonical Cafe',
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeId: 'canonical-place',
+        name: 'Canonical Cafe',
+        location: { lat: 29.72, lng: -95.34 },
+      }),
+    );
+  });
+
+  it('resolves synthetic place ids to canonical Google place ids before posting', async () => {
+    (global as any).FIREBASE_APP_CHECK_TOKEN = 'app-check-456';
+    (global as any).fetch = jest.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      if (body.action === 'search_text') {
+        return mkFetchResponse({
+          places: [
+            {
+              placeId: 'resolved-google-place',
+              name: 'Resolved Cafe',
+              address: '200 Main St',
+              location: { lat: 29.721, lng: -95.341 },
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected proxy request ${JSON.stringify(body)}`);
+    });
+
+    const result = await canonicalizePlaceSelection({
+      placeId: 'native:resolved-cafe:29.7210:-95.3410',
+      name: 'Resolved Cafe',
+      location: { lat: 29.721, lng: -95.341 },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeId: 'resolved-google-place',
+        name: 'Resolved Cafe',
+        location: { lat: 29.721, lng: -95.341 },
+      }),
+    );
   });
 });

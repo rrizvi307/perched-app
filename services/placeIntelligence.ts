@@ -1,9 +1,13 @@
 import Constants from 'expo-constants';
 import { toMillis } from '@/services/checkinUtils';
-import { getCurrentFirebaseAppCheckToken, refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
 import { withErrorBoundary } from './errorBoundary';
 import { getPlaceDetails, type GooglePlaceReview } from './googleMaps';
 import { analyzeReviews, type ReviewNLPResult } from './nlpReviews';
+import {
+  fetchProviderProxyJson,
+  type ProviderProxyAuthMode,
+  type ProviderProxyErrorCode,
+} from './providerProxy';
 import { computeVibeScores, getPrimaryVibe, type VibeScores, type VibeType } from './vibeScoring';
 
 export type ExternalSource = 'google' | 'foursquare' | 'yelp';
@@ -15,6 +19,11 @@ export type ExternalPlaceSignal = {
   reviewCount?: number;
   priceLevel?: string;
   categories?: string[];
+};
+
+export type ExternalPlacePhoto = {
+  source: Exclude<ExternalSource, 'google'>;
+  url: string;
 };
 
 export type ExternalSignalMeta = {
@@ -98,7 +107,14 @@ export type PlaceIntelligence = {
   };
   highlights: string[];
   externalSignals: ExternalPlaceSignal[];
+  providerPhotos: ExternalPlacePhoto[];
   externalSignalMeta: ExternalSignalMeta;
+  dataAvailability: {
+    status: 'full' | 'degraded' | 'unavailable';
+    reason?: ProviderProxyErrorCode | 'missing_location' | 'missing_endpoint' | 'provider_partial';
+    authMode?: ProviderProxyAuthMode;
+    degradedProviders: ExternalSource[];
+  };
   contextSignals: ContextSignal[];
   crowdForecast: CrowdForecastPoint[];
   useCases: string[];
@@ -106,6 +122,47 @@ export type PlaceIntelligence = {
   modelVersion: string;
   generatedAt: number;
 };
+
+function getAvailabilityProviderLabel(source: ExternalSource): string {
+  if (source === 'foursquare') return 'Foursquare';
+  if (source === 'yelp') return 'Yelp';
+  return 'Google';
+}
+
+export function getPlaceIntelligenceAvailabilityMessage(
+  availability?: PlaceIntelligence['dataAvailability'] | null,
+): string | null {
+  if (!availability || availability.status === 'full') return null;
+
+  if (availability.status === 'degraded' && availability.degradedProviders.length) {
+    const providers = availability.degradedProviders.map(getAvailabilityProviderLabel);
+    return `Live data is limited right now. ${providers.join(' + ')} ${providers.length === 1 ? 'is' : 'are'} unavailable.`;
+  }
+
+  switch (availability.reason) {
+    case 'missing_endpoint':
+      return 'This build is missing live place enrichment configuration.';
+    case 'missing_location':
+      return 'Live place enrichment needs a valid location.';
+    case 'proxy_access_unavailable':
+      return 'Live place enrichment is still warming up. Try again in a moment.';
+    case 'proxy_unauthorized':
+      return 'Live place enrichment needs a fresh session. Try again in a moment.';
+    case 'proxy_timeout':
+      return 'Live place enrichment timed out. Check your connection and retry.';
+    default:
+      return 'Live place enrichment is temporarily unavailable. Showing on-device signals.';
+  }
+}
+
+export function hasRenderablePlaceIntelligence(intelligence?: PlaceIntelligence | null) {
+  if (!intelligence) return false;
+  if (intelligence.dataAvailability.status !== 'unavailable') return true;
+  if ((intelligence.reliability?.sampleSize || 0) > 0) return true;
+  if ((intelligence.externalSignals || []).length > 0) return true;
+  if (typeof intelligence.aggregateRating === 'number') return true;
+  return false;
+}
 
 type BuildIntelligenceInput = {
   placeName: string;
@@ -153,6 +210,8 @@ const intelligenceCache = new Map<string, { ts: number; payload: PlaceIntelligen
 type ProxyPlacePayload = {
   externalSignals: ExternalPlaceSignal[];
   googleSnapshot: GooglePlaceSignalSnapshot | null;
+  providerPhotos: ExternalPlacePhoto[];
+  dataAvailability: PlaceIntelligence['dataAvailability'];
 };
 
 const proxySignalCache = new Map<string, { ts: number; payload: ProxyPlacePayload }>();
@@ -320,12 +379,19 @@ function getFallbackPlaceIntelligence(): PlaceIntelligence {
     },
     highlights: [],
     externalSignals: [],
+    providerPhotos: [],
     externalSignalMeta: {
       providerCount: 0,
       providerDiversity: 0,
       totalReviewCount: 0,
       ratingConsensus: 0,
       trustScore: 0,
+    },
+    dataAvailability: {
+      status: 'unavailable',
+      reason: 'missing_endpoint',
+      authMode: 'none',
+      degradedProviders: [],
     },
     contextSignals: [],
     crowdForecast: [],
@@ -1082,34 +1148,6 @@ function deriveWeatherConfidence(code: number, precipitationMm: number): number 
   return 0.5;
 }
 
-async function getProxyAuthHeaders() {
-  const headers: Record<string, string> = {};
-  try {
-    const { getCurrentFirebaseIdToken, getCurrentFirebaseUser, ensureFirebase } = await import('./firebaseClient');
-    let idToken = '';
-    if (typeof getCurrentFirebaseIdToken === 'function') {
-      idToken = await getCurrentFirebaseIdToken();
-    }
-    if (!idToken) {
-      const user =
-        getCurrentFirebaseUser?.() ||
-        ensureFirebase?.()?.auth?.()?.currentUser ||
-        null;
-      if (user && typeof user.getIdToken === 'function') {
-        idToken = await user.getIdToken();
-      }
-    }
-    if (idToken) headers.Authorization = `Bearer ${idToken}`;
-  } catch {}
-
-  const appCheckToken = getCurrentFirebaseAppCheckToken() || await refreshFirebaseAppCheckToken();
-  if (typeof appCheckToken === 'string' && appCheckToken.trim().length > 0) {
-    headers['X-Firebase-AppCheck'] = appCheckToken.trim();
-  }
-
-  return headers;
-}
-
 function withInflight<T>(map: Map<string, Promise<T>>, key: string, fn: () => Promise<T>) {
   const current = map.get(key);
   if (current) return current;
@@ -1155,37 +1193,93 @@ function normalizeExternalSignals(value: unknown): ExternalPlaceSignal[] {
     .filter(Boolean) as ExternalPlaceSignal[];
 }
 
+function normalizeProviderPhotos(value: unknown): ExternalPlacePhoto[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item: any) => {
+      if (!item || (item.source !== 'yelp' && item.source !== 'foursquare')) return null;
+      const url = typeof item.url === 'string' ? item.url.trim() : '';
+      if (!url.startsWith('https://')) return null;
+      return {
+        source: item.source as ExternalPlacePhoto['source'],
+        url,
+      } satisfies ExternalPlacePhoto;
+    })
+    .filter(Boolean) as ExternalPlacePhoto[];
+}
+
 async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlacePayload> {
-  if (!input.placeName || !input.location) return { externalSignals: [], googleSnapshot: null };
+  if (!input.placeName || !input.location) {
+    return {
+      externalSignals: [],
+      googleSnapshot: null,
+      providerPhotos: [],
+      dataAvailability: {
+        status: 'unavailable',
+        reason: 'missing_location',
+        authMode: 'none',
+        degradedProviders: [],
+      },
+    };
+  }
   const endpoint = getPlaceSignalEndpoint();
-  if (!endpoint) return { externalSignals: [], googleSnapshot: null };
+  if (!endpoint) {
+    return {
+      externalSignals: [],
+      googleSnapshot: null,
+      providerPhotos: [],
+      dataAvailability: {
+        status: 'unavailable',
+        reason: 'missing_endpoint',
+        authMode: 'none',
+        degradedProviders: [],
+      },
+    };
+  }
   const cacheKey = `${input.placeId || ''}:${input.placeName}:${input.location.lat.toFixed(3)}:${input.location.lng.toFixed(3)}`;
   const cached = getFreshCacheEntry(proxySignalCache, cacheKey, INTELLIGENCE_TTL_MS);
   if (cached) {
     return cached.payload;
   }
   return withInflight(proxyInflight, cacheKey, async () => {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(await getProxyAuthHeaders()),
-    };
-    const payload = await fetchWithTimeout(
+    const payload = await fetchProviderProxyJson<{
+      externalSignals?: unknown[];
+      googleSnapshot?: unknown;
+      providerPhotos?: unknown[];
+      degradedProviders?: unknown[];
+    }>(
       endpoint,
       {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          placeName: input.placeName,
-          placeId: input.placeId || undefined,
-          location: input.location,
-        }),
+        placeName: input.placeName,
+        placeId: input.placeId || undefined,
+        location: input.location,
       },
-      2400,
+      { action: 'place_signals', timeoutMs: 2400 },
     );
+    const degradedProviders = Array.isArray(payload.data?.degradedProviders)
+      ? payload.data?.degradedProviders.filter(
+        (item): item is ExternalSource =>
+          item === 'google' || item === 'yelp' || item === 'foursquare',
+      )
+      : [];
     const next: ProxyPlacePayload = {
-      externalSignals: normalizeExternalSignals(payload?.externalSignals),
-      googleSnapshot: normalizeGoogleProxySnapshot(payload?.googleSnapshot),
+      externalSignals: normalizeExternalSignals(payload.data?.externalSignals),
+      googleSnapshot: normalizeGoogleProxySnapshot(payload.data?.googleSnapshot),
+      providerPhotos: normalizeProviderPhotos(payload.data?.providerPhotos),
+      dataAvailability: {
+        status: payload.meta.ok
+          ? degradedProviders.length
+            ? 'degraded'
+            : 'full'
+          : 'unavailable',
+        reason: payload.meta.ok
+          ? degradedProviders.length
+            ? 'provider_partial'
+            : undefined
+          : payload.meta.errorCode,
+        authMode: payload.meta.authMode,
+        degradedProviders,
+      },
     };
     setBoundedMapEntry(proxySignalCache, cacheKey, { ts: Date.now(), payload: next }, PROXY_SIGNAL_CACHE_MAX);
     return next;
@@ -2032,7 +2126,9 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     recommendations,
     highlights: highlights.slice(0, 4),
     externalSignals,
+    providerPhotos: proxyPayload.providerPhotos,
     externalSignalMeta,
+    dataAvailability: proxyPayload.dataAvailability,
     contextSignals,
     crowdForecast,
     useCases,

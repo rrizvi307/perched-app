@@ -3181,12 +3181,22 @@ export const syncPlaceTagAggregates = functions.firestore
   });
 
 type ExternalSource = 'foursquare' | 'yelp';
+type PlaceSignalSource = ExternalSource | 'google';
 type ExternalPlaceSignal = {
   source: ExternalSource;
   rating?: number;
   reviewCount?: number;
   priceLevel?: string;
   categories?: string[];
+};
+type ExternalPlacePhoto = {
+  source: ExternalSource;
+  url: string;
+};
+type ExternalProviderPayload = {
+  signal: ExternalPlaceSignal | null;
+  photos: ExternalPlacePhoto[];
+  degraded: boolean;
 };
 
 type GooglePlaceReview = {
@@ -3220,7 +3230,15 @@ type GooglePlaceResult = {
 };
 
 const PLACE_SIGNAL_TTL_MS = 30 * 60 * 1000;
-const placeSignalCache = new Map<string, { ts: number; payload: { externalSignals: ExternalPlaceSignal[]; googleSnapshot: GooglePlaceSnapshot | null } }>();
+const placeSignalCache = new Map<string, {
+  ts: number;
+  payload: {
+    externalSignals: ExternalPlaceSignal[];
+    googleSnapshot: GooglePlaceSnapshot | null;
+    providerPhotos: ExternalPlacePhoto[];
+    degradedProviders: PlaceSignalSource[];
+  };
+}>();
 const GOOGLE_PLACES_PROXY_TTL_MS = 5 * 60 * 1000;
 const googlePlacesProxyCache = new Map<string, { ts: number; payload: any }>();
 function parseCloudRuntimeConfig() {
@@ -3508,6 +3526,50 @@ function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
   return payload.filter(Boolean);
 }
 
+function normalizeExternalPhoto(source: ExternalSource, url: unknown): ExternalPlacePhoto | null {
+  if (typeof url !== 'string') return null;
+  const normalized = url.trim();
+  if (!normalized.startsWith('https://')) return null;
+  return { source, url: normalized };
+}
+
+function dedupeProviderPhotos(...sets: ExternalPlacePhoto[][]): ExternalPlacePhoto[] {
+  const seen = new Set<string>();
+  const photos: ExternalPlacePhoto[] = [];
+  for (const set of sets) {
+    for (const photo of set) {
+      const key = `${photo.source}:${photo.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      photos.push(photo);
+    }
+  }
+  return photos.slice(0, 6);
+}
+
+function normalizeCategoryNames(
+  value: unknown,
+  pickName: (item: any) => string | null,
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const categories = value
+    .map((item: any) => pickName(item))
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  return categories.length ? categories : undefined;
+}
+
+function normalizeFoursquareCategories(value: unknown): string[] | undefined {
+  return normalizeCategoryNames(value, (item: any) =>
+    typeof item?.name === 'string' ? item.name : null,
+  );
+}
+
+function normalizeYelpCategories(value: unknown): string[] | undefined {
+  return normalizeCategoryNames(value, (item: any) =>
+    typeof item?.title === 'string' ? item.title : null,
+  );
+}
+
 async function fetchGooglePlaceSignalServer(placeId: string): Promise<GooglePlaceSnapshot | null> {
   const normalizedPlaceId = asId(placeId);
   if (!normalizedPlaceId) return null;
@@ -3774,7 +3836,11 @@ async function searchGoogleLocationsServer(
     .slice(0, effectiveLimit);
 }
 
-async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
+async function fetchFoursquareSignalServer(
+  placeName: string,
+  lat: number,
+  lng: number,
+): Promise<ExternalProviderPayload> {
   // Prefer env/runtime config (works with functions.runWith secrets), then fallback to Secret Manager.
   let key = readFirstNonEmpty(
     process.env.FOURSQUARE_API_KEY,
@@ -3786,32 +3852,78 @@ async function fetchFoursquareSignalServer(placeName: string, lat: number, lng: 
   if (!key) {
     key = await getCachedSecret('FOURSQUARE_API_KEY');
   }
-  if (!key) return null;
+  if (!key) return { signal: null, photos: [], degraded: false };
   const ll = `${lat},${lng}`;
   const params = new URLSearchParams({ query: placeName, ll, limit: '1' });
   const url = `https://api.foursquare.com/v3/places/search?${params.toString()}`;
-  const json = await fetchJsonWithTimeout(url, {
+  const searchResponse = await fetchJsonResponseWithTimeout(url, {
     headers: {
       Accept: 'application/json',
       Authorization: key,
     },
   });
-  const place = Array.isArray((json as any)?.results) ? (json as any).results[0] : null;
-  if (!place) return null;
-  const categories = Array.isArray(place.categories)
-    ? place.categories
-      .map((c: any) => (typeof c?.name === 'string' ? c.name : null))
-      .filter((v: any) => typeof v === 'string')
-    : undefined;
-  return {
+  if (!searchResponse || !searchResponse.ok) {
+    return { signal: null, photos: [], degraded: true };
+  }
+  const place = Array.isArray((searchResponse.json as any)?.results)
+    ? (searchResponse.json as any).results[0]
+    : null;
+  if (!place) return { signal: null, photos: [], degraded: false };
+
+  const baseSignal: ExternalPlaceSignal = {
     source: 'foursquare',
     rating: typeof place.rating === 'number' ? place.rating / 2 : undefined,
     priceLevel: parsePriceLevel(place.price?.toString()),
-    categories,
+    categories: normalizeFoursquareCategories(place.categories),
+  };
+
+  const detailId = asId(place.fsq_id ?? place.id);
+  if (!detailId) {
+    return { signal: baseSignal, photos: [], degraded: false };
+  }
+
+  const detailResponse = await fetchJsonResponseWithTimeout(
+    `https://api.foursquare.com/v3/places/${encodeURIComponent(detailId)}?fields=rating,price,photos,categories`,
+    {
+      headers: {
+        Accept: 'application/json',
+        Authorization: key,
+      },
+    },
+  );
+  if (!detailResponse || !detailResponse.ok) {
+    return { signal: baseSignal, photos: [], degraded: true };
+  }
+
+  const detail = detailResponse.json || {};
+  const detailPhotos = Array.isArray((detail as any)?.photos)
+    ? (detail as any).photos
+      .map((photo: any) =>
+        normalizeExternalPhoto(
+          'foursquare',
+          photo?.prefix && photo?.suffix ? `${photo.prefix}original${photo.suffix}` : null,
+        ),
+      )
+      .filter(Boolean) as ExternalPlacePhoto[]
+    : [];
+
+  return {
+    signal: {
+      source: 'foursquare',
+      rating: typeof (detail as any)?.rating === 'number' ? (detail as any).rating / 2 : baseSignal.rating,
+      priceLevel: parsePriceLevel((detail as any)?.price?.toString()) ?? baseSignal.priceLevel,
+      categories: normalizeFoursquareCategories((detail as any)?.categories) ?? baseSignal.categories,
+    },
+    photos: detailPhotos,
+    degraded: false,
   };
 }
 
-async function fetchYelpSignalServer(placeName: string, lat: number, lng: number): Promise<ExternalPlaceSignal | null> {
+async function fetchYelpSignalServer(
+  placeName: string,
+  lat: number,
+  lng: number,
+): Promise<ExternalProviderPayload> {
   // Prefer env/runtime config (works with functions.runWith secrets), then fallback to Secret Manager.
   let key = readFirstNonEmpty(
     process.env.YELP_API_KEY,
@@ -3823,7 +3935,7 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
   if (!key) {
     key = await getCachedSecret('YELP_API_KEY');
   }
-  if (!key) return null;
+  if (!key) return { signal: null, photos: [], degraded: false };
   // `businesses/matches` now requires address fields; use search with location bias instead.
   const params = new URLSearchParams({
     term: placeName,
@@ -3833,25 +3945,31 @@ async function fetchYelpSignalServer(placeName: string, lat: number, lng: number
     sort_by: 'best_match',
   });
   const url = `https://api.yelp.com/v3/businesses/search?${params.toString()}`;
-  const json = await fetchJsonWithTimeout(url, {
+  const response = await fetchJsonResponseWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${key}`,
       Accept: 'application/json',
     },
   });
-  const business = Array.isArray((json as any)?.businesses) ? (json as any).businesses[0] : null;
-  if (!business) return null;
-  const categories = Array.isArray(business.categories)
-    ? business.categories
-      .map((c: any) => (typeof c?.title === 'string' ? c.title : null))
-      .filter((v: any) => typeof v === 'string')
-    : undefined;
+  if (!response || !response.ok) {
+    return { signal: null, photos: [], degraded: true };
+  }
+  const business = Array.isArray((response.json as any)?.businesses)
+    ? (response.json as any).businesses[0]
+    : null;
+  if (!business) return { signal: null, photos: [], degraded: false };
   return {
-    source: 'yelp',
-    rating: typeof business.rating === 'number' ? business.rating : undefined,
-    reviewCount: typeof business.review_count === 'number' ? business.review_count : undefined,
-    priceLevel: parsePriceLevel(business.price),
-    categories,
+    signal: {
+      source: 'yelp',
+      rating: typeof business.rating === 'number' ? business.rating : undefined,
+      reviewCount: typeof business.review_count === 'number' ? business.review_count : undefined,
+      priceLevel: parsePriceLevel(business.price),
+      categories: normalizeYelpCategories(business.categories),
+    },
+    photos: dedupeProviderPhotos(
+      [normalizeExternalPhoto('yelp', business.image_url)].filter(Boolean) as ExternalPlacePhoto[],
+    ),
+    degraded: false,
   };
 }
 
@@ -4115,11 +4233,24 @@ export const placeSignalsProxy = functions
   try {
     const [googleSnapshot, foursquare, yelp] = await Promise.all([
       fetchGooglePlaceSignalServer(placeId),
-      enableFoursquare ? fetchFoursquareSignalServer(placeName, lat, lng) : Promise.resolve(null),
-      fetchYelpSignalServer(placeName, lat, lng),
+      enableFoursquare
+        ? fetchFoursquareSignalServer(placeName, lat, lng).catch((error) => {
+          console.warn('placeSignalsProxy foursquare lookup degraded', error);
+          return { signal: null, photos: [], degraded: true } satisfies ExternalProviderPayload;
+        })
+        : Promise.resolve({ signal: null, photos: [], degraded: false } satisfies ExternalProviderPayload),
+      fetchYelpSignalServer(placeName, lat, lng).catch((error) => {
+        console.warn('placeSignalsProxy yelp lookup degraded', error);
+        return { signal: null, photos: [], degraded: true } satisfies ExternalProviderPayload;
+      }),
     ]);
-    const externalSignals = parseExternalSignals([foursquare, yelp]);
-    const payload = { externalSignals, googleSnapshot };
+    const degradedProviders: PlaceSignalSource[] = [];
+    if (foursquare.degraded) degradedProviders.push('foursquare');
+    if (yelp.degraded) degradedProviders.push('yelp');
+
+    const externalSignals = parseExternalSignals([foursquare.signal, yelp.signal]);
+    const providerPhotos = dedupeProviderPhotos(foursquare.photos, yelp.photos);
+    const payload = { externalSignals, googleSnapshot, providerPhotos, degradedProviders };
     placeSignalCache.set(cacheKey, { ts: Date.now(), payload });
     res.status(200).json({ ...payload, cacheHit: false });
     return;

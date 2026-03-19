@@ -9,7 +9,7 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { getCheckinsForSpotRemote, getCheckinsRemote, getOutgoingFriendRequests, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
+import { getOutgoingFriendRequests, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
 import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';
@@ -17,6 +17,7 @@ import { classifySpotCategory, normalizeSpotName, spotKey } from '@/services/spo
 import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { resolvePhotoUri } from '@/services/photoSources';
+import { resolveSpotVisual } from '@/services/spotVisuals';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
@@ -25,7 +26,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { logEvent } from '@/services/logEvent';
 import { useToast } from '@/contexts/ToastContext';
-import { buildPlaceIntelligence, PlaceIntelligence } from '@/services/placeIntelligence';
+import {
+  buildPlaceIntelligence,
+  hasRenderablePlaceIntelligence,
+  getPlaceIntelligenceAvailabilityMessage,
+  PlaceIntelligence,
+} from '@/services/placeIntelligence';
+import { filterVisibleSpotCheckins, loadSpotTimeline, matchesSpotIdentity } from '@/services/spotRepository';
 import { runAfterInteractions } from '@/services/performance';
 import { safeImpact } from '@/utils/haptics';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
@@ -119,6 +126,18 @@ export default function SpotDetail() {
   const { showToast } = useToast();
   const placeId = typeof params.placeId === 'string' ? params.placeId : '';
   const nameParam = typeof params.name === 'string' ? params.name : '';
+  const routeLat = typeof params.lat === 'string' ? Number(params.lat) : null;
+  const routeLng = typeof params.lng === 'string' ? Number(params.lng) : null;
+  const routeLocation = useMemo(
+    () =>
+      typeof routeLat === 'number' &&
+      Number.isFinite(routeLat) &&
+      typeof routeLng === 'number' &&
+      Number.isFinite(routeLng)
+        ? { lat: routeLat, lng: routeLng }
+        : null,
+    [routeLat, routeLng],
+  );
   const [place, setPlace] = useState<any | null>(null);
   const [checkins, setCheckins] = useState<any[]>([]);
   const [friendsHere, setFriendsHere] = useState<any[]>([]);
@@ -141,7 +160,11 @@ export default function SpotDetail() {
   const saveScale = useSharedValue(1);
   const displayScore = useSharedValue(0);
   const displayName = place?.name || nameParam || 'Spot';
-  const coords = place?.location || checkins.find((c) => c.spotLatLng)?.spotLatLng || checkins.find((c) => c.location)?.location;
+  const coords =
+    place?.location ||
+    routeLocation ||
+    checkins.find((c) => c.spotLatLng)?.spotLatLng ||
+    checkins.find((c) => c.location)?.location;
   const category = classifySpotCategory(displayName, place?.types);
   const normalizedName = normalizeSpotName(displayName);
   const placeKey = spotKey(placeId || undefined, displayName || 'unknown');
@@ -153,24 +176,12 @@ export default function SpotDetail() {
   const canTag = useMemo(() => {
     if (!user) return false;
     return checkins.some((c) => {
-      const name = c.spotName || c.spot || '';
-      return c.userId === user.id && spotKey(c.spotPlaceId, name) === placeKey;
+      return c.userId === user.id && matchesSpotIdentity(c, { placeId: placeId || null, name: displayName, location: coords || null });
     });
-  }, [checkins, placeKey, user]);
+  }, [checkins, coords, displayName, placeId, user]);
   const visibleCheckins = useMemo(() => {
-    // Never expire check-ins in spot view; enforce only privacy visibility.
-    const allowed = checkins.filter((c) => {
-      if (!c.visibility) return true;
-      if (c.visibility === 'public') return true;
-      if (!user) return false;
-      if (c.userId === user.id) return true;
-      if (c.visibility === 'friends' || c.visibility === 'close') {
-        return friendIdSet.has(c.userId);
-      }
-      return true;
-    });
-    return allowed.sort((a, b) => checkinCreatedAtMs(b) - checkinCreatedAtMs(a));
-  }, [checkins, friendIdSet, user]);
+    return filterVisibleSpotCheckins(checkins, user?.id, friendIdSet).sort((a, b) => checkinCreatedAtMs(b) - checkinCreatedAtMs(a));
+  }, [checkins, friendIdSet, user?.id]);
   const aggregatedTagScores = useMemo(() => {
     const scores: Record<string, number> = {};
     visibleCheckins.forEach((c: any) => {
@@ -364,17 +375,15 @@ export default function SpotDetail() {
       setLoadingInitial(true);
       const fetchMarkId = startPerfMark('spot_fetch_checkins');
       try {
-        const res = placeId
-          ? await getCheckinsForSpotRemote(placeId, SPOT_CHECKINS_LIMIT)
-          : await getCheckinsRemote(SPOT_CHECKINS_LIMIT);
-        void endPerfMark(fetchMarkId, true, { limit: SPOT_CHECKINS_LIMIT });
-        const items = (res.items || []);
-        const targetKey = spotKey(placeId || undefined, nameParam || '');
-        const filtered = items.filter((it: any) => {
-          const name = it.spotName || it.spot || '';
-          return spotKey(it.spotPlaceId, name) === targetKey;
+        const res = await loadSpotTimeline({
+          placeId: placeId || undefined,
+          name: displayName || nameParam || undefined,
+          location: coords || routeLocation || undefined,
+          limit: SPOT_CHECKINS_LIMIT,
+          aliasNames: [nameParam, displayName],
         });
-        setCheckins(filtered);
+        void endPerfMark(fetchMarkId, true, { limit: SPOT_CHECKINS_LIMIT });
+        setCheckins(Array.isArray(res.items) ? res.items : []);
       } catch (error) {
         void endPerfMark(fetchMarkId, false, { limit: SPOT_CHECKINS_LIMIT, error: String(error) });
         setCheckins([]);
@@ -382,7 +391,7 @@ export default function SpotDetail() {
         setLoadingInitial(false);
       }
     })();
-  }, [placeId, nameParam]);
+  }, [coords, displayName, nameParam, placeId, routeLocation]);
 
   useEffect(() => {
     if (loadingInitial || aboveFoldMarkedRef.current) return;
@@ -526,6 +535,23 @@ export default function SpotDetail() {
     const center = `${coords.lat},${coords.lng}`;
     return `https://maps.googleapis.com/maps/api/staticmap?center=${center}&zoom=15&size=800x350&scale=2&markers=color:red%7C${center}&key=${key}`;
   }, [coords]);
+  const heroVisual = useMemo(
+    () =>
+      resolveSpotVisual({
+        checkins: visibleCheckins,
+        intelligence,
+        fallbackMapUrl: mapUrl,
+      }),
+    [visibleCheckins, intelligence, mapUrl],
+  );
+  const intelligenceAvailabilityMessage = useMemo(
+    () => getPlaceIntelligenceAvailabilityMessage(intelligence?.dataAvailability),
+    [intelligence],
+  );
+  const renderableIntelligence = useMemo(
+    () => hasRenderablePlaceIntelligence(intelligence),
+    [intelligence],
+  );
 
   const orderedCheckins = visibleCheckins;
   const densityBars = useMemo(() => {
@@ -542,7 +568,7 @@ export default function SpotDetail() {
   }, [orderedCheckins]);
 
   useEffect(() => {
-    if (intelligence?.workScore != null) {
+    if (renderableIntelligence && intelligence?.workScore != null) {
       displayScore.value = 0;
       displayScore.value = withTiming(intelligence.workScore, {
         duration: 800,
@@ -552,7 +578,7 @@ export default function SpotDetail() {
       displayScore.value = 0;
       setDisplayScoreText('0');
     }
-  }, [displayScore, intelligence?.workScore]);
+  }, [displayScore, intelligence?.workScore, renderableIntelligence]);
 
   useAnimatedReaction(
     () => Math.round(displayScore.value),
@@ -603,21 +629,32 @@ export default function SpotDetail() {
         ) : intelligence ? (
           <PolishedCard variant="elevated" style={{ ...styles.intelCard, borderColor: border }}>
             <Text style={{ color: muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1.1 }}>Smart snapshot</Text>
-            <View style={styles.intelRow}>
-              <Pressable onPress={() => setShowBreakdown(true)} style={styles.intelItem}>
-                <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{displayScoreText}</Text>
-                <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
-              </Pressable>
-              <View style={styles.intelItem}>
-                <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
-                <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
+            {intelligenceAvailabilityMessage ? (
+              <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
+                {intelligenceAvailabilityMessage}
+              </Text>
+            ) : null}
+            {renderableIntelligence ? (
+              <View style={styles.intelRow}>
+                <Pressable onPress={() => setShowBreakdown(true)} style={styles.intelItem}>
+                  <Text style={{ color: text, fontWeight: '800', fontSize: 22 }}>{displayScoreText}</Text>
+                  <Text style={{ color: muted, fontSize: 12 }}>Work score</Text>
+                </Pressable>
+                <View style={styles.intelItem}>
+                  <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.crowdLevel}</Text>
+                  <Text style={{ color: muted, fontSize: 12 }}>Crowd now</Text>
+                </View>
+                <View style={styles.intelItem}>
+                  <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.bestTime}</Text>
+                  <Text style={{ color: muted, fontSize: 12 }}>Best time</Text>
+                </View>
               </View>
-              <View style={styles.intelItem}>
-                <Text style={{ color: text, fontWeight: '700', textTransform: 'capitalize' }}>{intelligence.bestTime}</Text>
-                <Text style={{ color: muted, fontSize: 12 }}>Best time</Text>
-              </View>
-            </View>
-            {intelligence.highlights.length ? (
+            ) : (
+              <Text style={{ color: muted, marginTop: 10, fontSize: 12 }}>
+                We do not have enough live provider or community signal for a trustworthy score yet.
+              </Text>
+            )}
+            {renderableIntelligence && intelligence.highlights.length ? (
               <View style={styles.intelChipRow}>
                 {intelligence.highlights.map((item) => (
                   <View key={`hl-${item}`} style={[styles.intelChip, { borderColor: border }]}>
@@ -626,7 +663,7 @@ export default function SpotDetail() {
                 ))}
               </View>
             ) : null}
-            {intelligence.useCases.length ? (
+            {renderableIntelligence && intelligence.useCases.length ? (
               <View style={styles.useCaseRow}>
                 {intelligence.useCases.map((item) => (
                   <View key={`uc-${item}`} style={[styles.useCaseChip, { borderColor: border }]}>
@@ -635,7 +672,7 @@ export default function SpotDetail() {
                 ))}
               </View>
             ) : null}
-            {intelligence.crowdForecast.length ? (
+            {renderableIntelligence && intelligence.crowdForecast.length ? (
               <View style={styles.forecastRow}>
                 {intelligence.crowdForecast.slice(0, 4).map((point) => {
                   const tone = point.level === 'low'
@@ -654,9 +691,11 @@ export default function SpotDetail() {
                 })}
               </View>
             ) : null}
-            <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
-              Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
-            </Text>
+            {renderableIntelligence ? (
+              <Text style={{ color: muted, marginTop: 8, fontSize: 12 }}>
+                Confidence: {Math.round((intelligence.confidence || 0) * 100)}%
+              </Text>
+            ) : null}
             {typeof intelligence.aggregateRating === 'number' ? (
               <Text style={{ color: muted, marginTop: 6, fontSize: 12 }}>
                 Rating: {intelligence.aggregateRating.toFixed(1)} stars
@@ -713,13 +752,13 @@ export default function SpotDetail() {
             />
           ))}
         </View>
-        {mapUrl ? (
+        {heroVisual.uri ? (
           <Pressable
             onPress={() => {
               void handleOpenMaps('spot_map_card');
             }}
           >
-            <SpotImage source={{ uri: mapUrl }} style={styles.map} />
+            <SpotImage source={{ uri: heroVisual.uri }} style={styles.map} />
           </Pressable>
         ) : (
           <View style={[styles.map, { backgroundColor: card, borderColor: border }]} />
@@ -889,7 +928,7 @@ export default function SpotDetail() {
         )}
       </Animated.ScrollView>
 
-      {intelligence ? (
+      {renderableIntelligence && intelligence ? (
         <ScoreBreakdownSheet
           visible={showBreakdown}
           intelligence={intelligence}

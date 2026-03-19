@@ -21,10 +21,11 @@ import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { publishCheckin } from '@/services/feedEvents';
 import { recordPlaceEventRemote, recordPlaceTagRemote } from '@/services/firebaseClient';
-import { getMapsKey, searchPlacesNearby } from '@/services/googleMaps';
+import { canonicalizePlaceSelection, getMapsKey, searchPlacesNearbyResponse } from '@/services/googleMaps';
 import { devLog } from '@/services/logger';
 import { logEvent } from '@/services/logEvent';
 import { requestForegroundLocation } from '@/services/location';
+import { getProviderProxyUserMessage } from '@/services/providerProxy';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { clearCheckinDraft, enqueuePendingCheckin, getCheckinDraft, getLastCheckinAt, getPermissionPrimerSeen, recordPlaceEvent, recordPlaceTag, saveCheckin, saveCheckinDraft, setLastCheckinAt, setPermissionPrimerSeen } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
@@ -135,6 +136,7 @@ export default function CheckinScreen() {
 	const [detectedCandidates, setDetectedCandidates] = useState<any[]>([]);
 	const [detecting, setDetecting] = useState(false);
 	const [detectionError, setDetectionError] = useState<string | null>(null);
+	const [resolvingPlaceSelection, setResolvingPlaceSelection] = useState(false);
 	const [imageExif, setImageExif] = useState<any | null>(null);
 	const [postStatus, setPostStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'error' | 'success' } | null>(null);
 	const [pendingRemote, setPendingRemote] = useState<any | null>(null);
@@ -402,6 +404,32 @@ export default function CheckinScreen() {
 		logEvent('checkin_started', user?.id);
 	}, [openCamera, user?.id]);
 
+	const handlePlaceSelect = useCallback(async (place: any) => {
+		setResolvingPlaceSelection(true);
+		setPostStatus(null);
+		try {
+			const resolved = await canonicalizePlaceSelection(place);
+			if (!resolved?.placeId || !resolved?.location) {
+				setPostStatus({ message: 'Please choose a verified spot with a real location.', tone: 'warning' });
+				showToast('Pick a verified spot from search results.', 'warning');
+				throw new Error('place_verification_failed');
+			}
+			setPlaceInfo(resolved);
+			setDetectedPlace(null);
+			setDetectedCandidates([]);
+			if (resolved?.name) setSpot(resolved.name);
+		} catch (error) {
+			if (error instanceof Error && error.message === 'place_verification_failed') {
+				throw error;
+			}
+			setPostStatus({ message: 'Unable to verify that spot right now. Try again.', tone: 'error' });
+			showToast('Unable to verify that spot right now.', 'error');
+			throw new Error('place_verification_failed');
+		} finally {
+			setResolvingPlaceSelection(false);
+		}
+	}, [showToast]);
+
 	useEffect(() => {
 		return () => {
 			activeRef.current = false;
@@ -500,16 +528,26 @@ export default function CheckinScreen() {
 					setDetecting(false);
 					return;
 				}
-			const primary = await searchPlacesNearby(loc.lat, loc.lng, 220);
-			let results = primary;
+			const primary = await searchPlacesNearbyResponse(loc.lat, loc.lng, 220);
+			let results = [...primary.places];
 			if (results.length < 3) {
-				const fallback = await searchPlacesNearby(loc.lat, loc.lng, 800, 'general');
+				const fallback = await searchPlacesNearbyResponse(loc.lat, loc.lng, 800, 'general');
 				const seen = new Set(results.map((r) => r.placeId));
-				fallback.forEach((r) => {
+				fallback.places.forEach((r) => {
 					if (!seen.has(r.placeId)) results.push(r);
 				});
+				if (!results.length && (primary.status === 'error' || fallback.status === 'error')) {
+					const failure = primary.status === 'error' ? primary : fallback;
+					const code = failure.diagnostics?.errorCode;
+					setDetectionError(
+						code === 'client_provider_error'
+							? 'Spot search is temporarily unavailable.'
+							: getProviderProxyUserMessage(code, 'places'),
+					);
+				}
 			}
 			if (!results.length) {
+				setDetectionError('No nearby spots found. Try searching by name.');
 				await logEvent('place_detected', user?.id, { success: false, reason: 'no_results' });
 				setDetecting(false);
 				return;
@@ -646,7 +684,7 @@ export default function CheckinScreen() {
 				router.replace('/verify');
 				return;
 			}
-			if (!spot || !activePlace?.placeId) {
+			if (!spot || !activePlace?.placeId || !activePlace?.location) {
 				setPostStatus({ message: 'Please select a spot from lookup.', tone: 'warning' });
 				return;
 			}
@@ -987,13 +1025,7 @@ export default function CheckinScreen() {
 			<PlaceSearch
 				visible={placeModal}
 				onClose={() => setPlaceModal(false)}
-				onSelect={(p) => {
-					setPlaceInfo(p);
-					setDetectedPlace(null);
-					setDetectedCandidates([]);
-					if (p?.name) setSpot(p.name);
-					setPostStatus(null);
-				}}
+				onSelect={handlePlaceSelect}
 			/>
 					<KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0} style={{ flex: 1 }}>
 						<View style={styles.scrollContainer}>
@@ -1807,20 +1839,34 @@ export default function CheckinScreen() {
 								style={({ pressed }) => [
 									styles.saveButton,
 									{ backgroundColor: primary },
-									loading ? { opacity: 0.6 } : null,
+									loading || resolvingPlaceSelection ? { opacity: 0.6 } : null,
 									pressed ? { opacity: 0.85 } : null,
 								]}
 								onPress={handlePost}
-								disabled={loading || !spot || !activePlace?.placeId}
+								disabled={loading || resolvingPlaceSelection || !spot || !activePlace?.placeId || !activePlace?.location}
 								accessibilityRole="button"
-								accessibilityLabel={loading ? 'Posting check-in' : !spot || !activePlace?.placeId ? 'Select a spot before posting' : 'Post check-in'}
+								accessibilityLabel={
+									loading
+										? 'Posting check-in'
+										: resolvingPlaceSelection
+											? 'Verifying spot'
+											: !spot || !activePlace?.placeId || !activePlace?.location
+												? 'Select a verified spot before posting'
+												: 'Post check-in'
+								}
 							>
 								<View style={styles.ctaRow}>
-									{!loading && spot && activePlace?.placeId ? (
+									{!loading && !resolvingPlaceSelection && spot && activePlace?.placeId && activePlace?.location ? (
 										<IconSymbol name="plus" size={18} color="#FFFFFF" />
 									) : null}
 									<Text style={[styles.saveButtonText, { color: '#FFFFFF' }]}>
-										{loading ? 'Posting...' : !spot || !activePlace?.placeId ? 'Select a spot' : 'Post check-in'}
+										{loading
+											? 'Posting...'
+											: resolvingPlaceSelection
+												? 'Verifying spot...'
+												: !spot || !activePlace?.placeId || !activePlace?.location
+													? 'Select a verified spot'
+													: 'Post check-in'}
 									</Text>
 								</View>
 							</Pressable>

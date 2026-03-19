@@ -1,6 +1,7 @@
 import SpotImage from '@/components/ui/spot-image';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import type { PlaceIntelligence } from '@/services/placeIntelligence';
+import { hasRenderablePlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
+import { resolveSpotVisual } from '@/services/spotVisuals';
 import { getDiscoveryIntentMeta, type DiscoveryIntentFilter } from '@/services/discoveryIntents';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
@@ -71,10 +72,10 @@ const SpotListItem = React.memo<SpotListItemProps>(({
   const intelV1Enabled = rawIntelFlag === true || rawIntelFlag === 'true' || rawIntelFlag === 1 || rawIntelFlag === '1';
 
   const coords = item.example?.spotLatLng || item.example?.location;
-  const intelNoise = item?.display?.noise || item?.live?.noise || item?.intel?.inferredNoise;
-  const intelNoiseSource = item?.display?.noiseSource || (item?.live?.noise ? 'live' : item?.intel?.inferredNoise ? 'inferred' : null);
-  const intelRating = intelligence?.aggregateRating ?? item?.intel?.avgRating ?? item?.rating;
-  const intelPrice = intelligence?.priceLevel ?? item?.intel?.priceLevel;
+  const showRenderableIntelligence = hasRenderablePlaceIntelligence(intelligence);
+  const renderableIntelligence = showRenderableIntelligence ? intelligence : null;
+  const intelRating = renderableIntelligence?.aggregateRating ?? null;
+  const intelPrice = renderableIntelligence?.priceLevel ?? null;
   const workScore = intelligence?.workScore;
   const workScoreTone = typeof workScore === 'number'
     ? workScore >= 78
@@ -83,7 +84,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         ? '#F59E0B'
         : '#F97316'
     : muted;
-  const smartHighlight = intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null;
+  const smartHighlight = showRenderableIntelligence ? intelligence?.highlights?.[0] || intelligence?.useCases?.[0] || null : null;
   const intentMeta = getDiscoveryIntentMeta(activeIntent);
   const intentPercent = typeof intentScore === 'number' ? Math.round(intentScore * 100) : null;
   const providerSignals = (intelligence?.externalSignals || [])
@@ -98,7 +99,15 @@ const SpotListItem = React.memo<SpotListItemProps>(({
     })
     .filter((signal) => typeof signal?.rating === 'number')
     .slice(0, 3);
-  const showMapThumbnail = !!(mapKey && coords);
+  const fallbackMapUrl = mapKey && coords
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=200x100&markers=color:red%7C${coords.lat},${coords.lng}${mapKey ? `&key=${mapKey}` : ''}`
+    : null;
+  const spotVisual = resolveSpotVisual({
+    checkins: Array.isArray(item?._checkins) ? item._checkins : [],
+    intelligence,
+    fallbackMapUrl,
+  });
+  const showThumbnail = !!spotVisual.uri;
 
   return (
     <Pressable
@@ -108,17 +117,15 @@ const SpotListItem = React.memo<SpotListItemProps>(({
         { borderColor: border, backgroundColor: pressed ? highlight : card },
       ]}
     >
-      {showMapThumbnail ? (
+      {showThumbnail ? (
         <SpotImage
-          source={{
-            uri: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=200x100&markers=color:red%7C${coords.lat},${coords.lng}${mapKey ? `&key=${mapKey}` : ''}`,
-          }}
+          source={{ uri: spotVisual.uri! }}
           style={styles.thumb}
         />
       ) : null}
-      <View style={{ flex: 1, marginLeft: showMapThumbnail ? 12 : 0 }}>
+      <View style={{ flex: 1, marginLeft: showThumbnail ? 12 : 0 }}>
         <Text style={{ color: text, fontWeight: '700' }} numberOfLines={1}>{item.name}</Text>
-        {intelligence ? (
+        {renderableIntelligence ? (
           <View style={styles.smartRow}>
             <Pressable
               onPress={onScorePress}
@@ -133,13 +140,13 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             >
               <View style={[styles.workScoreDot, { backgroundColor: workScoreTone }]} />
               <Text style={{ color: workScoreTone, fontSize: 11, fontWeight: '800' }}>
-                {Math.round(intelligence.workScore)} Work Score
+                {Math.round(renderableIntelligence.workScore)} Work Score
               </Text>
             </Pressable>
-            {intelligence.bestTime !== 'anytime' ? (
+            {renderableIntelligence.bestTime !== 'anytime' ? (
               <View style={[styles.bestTimeChip, { borderColor: border }]}>
                 <Text style={{ color: muted, fontSize: 10, fontWeight: '700', textTransform: 'capitalize' }}>
-                  Best {intelligence.bestTime}
+                  Best {renderableIntelligence.bestTime}
                 </Text>
               </View>
             ) : null}
@@ -284,17 +291,8 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             ) : null}
           </View>
         )}
-        {intelV1Enabled && (intelNoise || intelRating || intelPrice) ? (
+        {intelV1Enabled && renderableIntelligence && (intelRating || intelPrice) ? (
           <View style={styles.metricsRow}>
-            {intelNoise ? (
-              <View style={[styles.metricBadge, { backgroundColor: withAlpha(intelNoiseSource === 'live' ? '#22C55E' : '#64748B', 0.15) }]}>
-                <Text style={{ fontSize: 10 }}>{intelNoiseSource === 'live' ? '🔴' : '📊'}</Text>
-                <Text style={{ color: intelNoiseSource === 'live' ? '#22C55E' : '#64748B', fontSize: 10, fontWeight: '700', marginLeft: 2 }}>
-                  {String(intelNoise)}
-                  {intelNoiseSource === 'inferred' ? ' (inferred)' : ''}
-                </Text>
-              </View>
-            ) : null}
             {typeof intelRating === 'number' ? (
               <View style={[styles.metricBadge, { backgroundColor: withAlpha('#F59E0B', 0.15) }]}>
                 <Text style={{ fontSize: 10 }}>⭐</Text>
@@ -333,7 +331,7 @@ const SpotListItem = React.memo<SpotListItemProps>(({
             ))}
           </View>
         ) : null}
-        {intelV1Enabled && !intelNoise && !intelRating && !intelPrice ? (
+        {intelV1Enabled && renderableIntelligence && !intelRating && !intelPrice ? (
           <Text style={{ color: muted, marginTop: 6, fontSize: 11 }}>No ratings yet</Text>
         ) : null}
         {tags.length > 0 && (

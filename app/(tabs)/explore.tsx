@@ -9,7 +9,6 @@ import {
 import { Atmosphere } from '@/components/ui/atmosphere';
 import ScoreBreakdownSheet from '@/components/ui/ScoreBreakdownSheet';
 import SpotListItem from '@/components/ui/spot-list-item';
-import { SpotIntelligence } from '@/components/ui/SpotIntelligence';
 import { RecommendationsCard } from '@/components/ui/recommendations-card';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -22,12 +21,12 @@ import { useToast } from '@/contexts/ToastContext';
 import {
   ensureFirebase,
   getBlockedUsers,
-  getCheckinsForSpotRemote,
   getCheckinsRemote,
   getPlaceTagRemote,
   getUserFriendsCached,
 } from '@/services/firebaseClient';
 import { resolvePhotoUri } from '@/services/photoSources';
+import { resolveSpotVisual } from '@/services/spotVisuals';
 import {
   CLIENT_FILTERS,
   DEFAULT_FILTERS,
@@ -40,10 +39,22 @@ import {
 } from '@/services/filterPolicy';
 import { requestForegroundLocation } from '@/services/location';
 import { normalizeSpotForExplore, normalizeSpotsForExplore } from '@/services/spotNormalizer';
-import { buildPlaceIntelligence, type PlaceIntelligence } from '@/services/placeIntelligence';
+import {
+  buildPlaceIntelligence,
+  hasRenderablePlaceIntelligence,
+  getPlaceIntelligenceAvailabilityMessage,
+  type PlaceIntelligence,
+} from '@/services/placeIntelligence';
 import { openInMaps } from '@/services/mapsLinks';
 import { getMapsKey } from '@/services/googleMaps';
-import { spotKey } from '@/services/spotUtils';
+import {
+  getCanonicalSpotKey,
+  groupSpotCheckins,
+  loadSpotTimeline,
+  mergeSpotSummaries,
+  readSpotLocation,
+  readSpotPlaceId,
+} from '@/services/spotRepository';
 import { syncPendingCheckins } from '@/services/syncPending';
 import {
   DISCOVERY_INTENT_FILTER_OPTIONS,
@@ -119,6 +130,21 @@ async function mapWithConcurrencyLimit<T, R>(
   );
 
   return results;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(fallback), ms);
+    promise
+      .then((value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timeout);
+        resolve(fallback);
+      });
+  });
 }
 
 const EXPLORE_REMOTE_CHECKIN_LIMIT = 600;
@@ -322,16 +348,25 @@ function getSpotInferredSignals(spot: any) {
 }
 
 async function buildExploreSpotIntelligence(spot: any): Promise<PlaceIntelligence | null> {
-  const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
+  const placeId = readSpotPlaceId(spot);
   const placeName = spot?.name || '';
   if (!placeName) return null;
 
   const fallbackCheckins = Array.isArray(spot?._checkins) ? spot._checkins : [];
   const [checkinsResult, tagScoresResult] = await Promise.allSettled([
-    placeId
-      ? getCheckinsForSpotRemote(placeId, EXPLORE_INTELLIGENCE_CHECKIN_LIMIT)
-      : Promise.resolve({ items: fallbackCheckins }),
-    getPlaceTagRemote(placeId || undefined, placeName),
+    withTimeout(
+      loadSpotTimeline({
+        placeId: placeId || undefined,
+        name: placeName,
+        location: readSpotLocation(spot) || undefined,
+        limit: EXPLORE_INTELLIGENCE_CHECKIN_LIMIT,
+        seedCheckins: fallbackCheckins,
+        aliasNames: [spot?.example?.spotName, placeName],
+      }),
+      3200,
+      { items: fallbackCheckins, source: fallbackCheckins.length ? 'seed' : 'none' },
+    ),
+    withTimeout(getPlaceTagRemote(placeId || undefined, placeName), 2200, null),
   ]);
 
   const checkins =
@@ -347,7 +382,7 @@ async function buildExploreSpotIntelligence(spot: any): Promise<PlaceIntelligenc
   return buildPlaceIntelligence({
     placeName,
     placeId,
-    location: spot?.example?.spotLatLng || spot?.example?.location || spot?.location || null,
+    location: readSpotLocation(spot),
     openNow: spot?.openNow,
     types: spot?.types,
     checkins,
@@ -357,35 +392,11 @@ async function buildExploreSpotIntelligence(spot: any): Promise<PlaceIntelligenc
 }
 
 function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number } | null) {
-  const grouped: Record<string, any> = {};
+  const grouped = groupSpotCheckins(items);
 
-  items.forEach((item) => {
-    const name = item.spotName || item.spot || 'Unknown';
-    const key = spotKey(item.spotPlaceId, name);
-
-    if (!grouped[key]) {
-      grouped[key] = {
-        key,
-        name,
-        count: 0,
-        example: item,
-        seededCount: 0,
-        isSeeded: false,
-        _checkins: [],
-      };
-    }
-
-    grouped[key].count += 1;
-    if (isSeededCheckin(item)) {
-      grouped[key].seededCount += 1;
-      grouped[key].isSeeded = true;
-    }
-    grouped[key]._checkins.push(item);
-  });
-
-  const spots = Object.values(grouped).map((spot: any) => {
+  const spots = grouped.map((spot: any) => {
     const metrics = aggregateSpotMetrics(spot._checkins || []);
-    const coords = spot.example?.spotLatLng || spot.example?.location;
+    const coords = readSpotLocation(spot);
     const distance =
       focus && typeof coords?.lat === 'number' && typeof coords?.lng === 'number'
         ? haversine(focus, { lat: coords.lat, lng: coords.lng })
@@ -393,8 +404,12 @@ function buildSpotsFromCheckins(items: any[], focus: { lat: number; lng: number 
 
     return {
       ...spot,
+      key: getCanonicalSpotKey(spot),
+      seededCount: Array.isArray(spot._checkins) ? spot._checkins.filter((item: any) => isSeededCheckin(item)).length : 0,
+      isSeeded: Array.isArray(spot._checkins) ? spot._checkins.some((item: any) => isSeededCheckin(item)) : false,
       ...metrics,
       distance,
+      latestCheckinAt: spot?._checkins?.[0]?.createdAt || spot?._checkins?.[0]?.timestamp || null,
     };
   });
 
@@ -932,33 +947,10 @@ export default function Explore() {
     const enrichedSpots = normalizeSpotsForExplore(intelSpots) as any[];
     if (!enrichedSpots.length) return checkinSpots;
 
-    const keyed = new Map<string, any>();
-    const keyFor = (item: any) => {
-      const placeId = item?.example?.spotPlaceId || item?.placeId || item?.example?.placeId;
-      return spotKey(placeId, item?.name || 'spot');
-    };
-
-    checkinSpots.forEach((item: any) => {
-      keyed.set(keyFor(item), item);
-    });
-
-    enrichedSpots.forEach((item: any) => {
-      const key = keyFor(item);
-      const existing = keyed.get(key);
-      if (existing) {
-        keyed.set(key, {
-          ...existing,
-          ...item,
-          example: item?.example || existing?.example,
-          count: item?.count ?? existing?.count,
-          hereNowCount: item?.hereNowCount ?? existing?.hereNowCount,
-        });
-      } else {
-        keyed.set(key, item);
-      }
-    });
-
-    return Array.from(keyed.values());
+    return mergeSpotSummaries(checkinSpots, enrichedSpots).map((item) => ({
+      ...item,
+      key: getCanonicalSpotKey(item),
+    }));
   }, [intelV1Enabled, intelFetched, intelSpots, spots]);
 
   const filteredSpots = useMemo(() => {
@@ -1066,8 +1058,7 @@ export default function Explore() {
 
   const listKeyExtractor = useCallback((item: any) => {
     if (item?.key) return item.key;
-    const placeId = item?.example?.spotPlaceId || item?.placeId || item?.example?.placeId;
-    return spotKey(placeId, item?.name || 'spot');
+    return getCanonicalSpotKey(item);
   }, []);
 
   const handleRegionChange = useCallback((region: any) => {
@@ -1111,7 +1102,7 @@ export default function Explore() {
       if (count === 1) {
         const spot = bucket.spots[0];
         return {
-          key: spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot'),
+          key: getCanonicalSpotKey(spot),
           count,
           lat,
           lng,
@@ -1204,7 +1195,7 @@ export default function Explore() {
   const spotTagsMap = useMemo(() => {
     const map = new Map<string, string[]>();
     filteredSpots.forEach((spot) => {
-      const key = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
+      const key = getCanonicalSpotKey(spot);
       map.set(key, buildSpotTags(spot, intelligenceMap.get(key) || null));
     });
     return map;
@@ -1213,18 +1204,15 @@ export default function Explore() {
   useEffect(() => {
     let active = true;
     const spotsToProcess = listData.slice(0, 12).filter((spot) => {
-      const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
       const name = spot?.name || '';
-      return Boolean(name) && !intelligenceMap.has(spotKey(placeId, name));
+      return Boolean(name) && !intelligenceMap.has(getCanonicalSpotKey(spot));
     });
     if (!spotsToProcess.length) return;
 
     const task = InteractionManager.runAfterInteractions(() => {
       void (async () => {
         const entries = await mapWithConcurrencyLimit(spotsToProcess, 4, async (spot) => {
-          const placeId = spot?.example?.spotPlaceId || spot?.placeId || '';
-          const name = spot?.name || '';
-          const intelKey = spotKey(placeId, name);
+          const intelKey = getCanonicalSpotKey(spot);
           try {
             const intel = await buildExploreSpotIntelligence(spot);
             if (!intel) return null;
@@ -1257,32 +1245,36 @@ export default function Explore() {
 
   const selectedSpotKey = useMemo(() => {
     if (!selectedSpot) return null;
-    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
     const name = selectedSpot?.name || '';
     if (!name) return null;
-    return spotKey(placeId, name);
+    return getCanonicalSpotKey(selectedSpot);
   }, [selectedSpot]);
 
   const selectedSpotIntelligence = useMemo(() => {
     if (!selectedSpotKey) return null;
     return intelligenceMap.get(selectedSpotKey) || null;
   }, [selectedSpotKey, intelligenceMap]);
-  const shouldRenderLegacyIntel = useMemo(() => {
-    if (!selectedSpot) return false;
-    if (selectedSpotIntelligence) return false;
-    const intel = selectedSpot?.intel || {};
-    const display = selectedSpot?.display || {};
-    return Boolean(
-      intel?.priceLevel ||
-        typeof intel?.avgRating === 'number' ||
-        intel?.inferredNoise ||
-        intel?.hasWifi ||
-        intel?.goodForStudying ||
-        intel?.goodForMeetings ||
-        display?.noise ||
-        display?.busyness
-    );
-  }, [selectedSpot, selectedSpotIntelligence]);
+  const selectedSpotAvailabilityMessage = useMemo(
+    () => getPlaceIntelligenceAvailabilityMessage(selectedSpotIntelligence?.dataAvailability),
+    [selectedSpotIntelligence],
+  );
+  const selectedSpotHasRenderableIntel = useMemo(
+    () => hasRenderablePlaceIntelligence(selectedSpotIntelligence),
+    [selectedSpotIntelligence],
+  );
+  const selectedSpotVisual = useMemo(() => {
+    if (!selectedSpot) return { uri: null, source: 'none' as const };
+    const coords = readSpotLocation(selectedSpot);
+    const fallbackMapUrl =
+      mapKey && typeof coords?.lat === 'number' && typeof coords?.lng === 'number'
+        ? `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=900x260&scale=2&markers=color:red%7C${coords.lat},${coords.lng}&key=${mapKey}`
+        : null;
+    return resolveSpotVisual({
+      checkins: Array.isArray(selectedSpot?._checkins) ? selectedSpot._checkins : [],
+      intelligence: selectedSpotIntelligence,
+      fallbackMapUrl,
+    });
+  }, [mapKey, selectedSpot, selectedSpotIntelligence]);
   const breakdownIntelligence = useMemo(
     () => (breakdownSpotKey ? intelligenceMap.get(breakdownSpotKey) || null : null),
     [breakdownSpotKey, intelligenceMap],
@@ -1290,7 +1282,7 @@ export default function Explore() {
   const breakdownCheckinCount = useMemo(() => {
     if (!breakdownSpotKey) return 0;
     const target = listData.find((spot) => {
-      const key = spotKey(spot?.example?.spotPlaceId || spot?.placeId || '', spot?.name || '');
+      const key = getCanonicalSpotKey(spot);
       return key === breakdownSpotKey;
     });
     return target?._checkins?.length ?? 0;
@@ -1550,7 +1542,7 @@ export default function Explore() {
                       const spot = cluster.spot;
                       const coords = spot?._coords || spot?.example?.spotLatLng || spot?.example?.location || spot?.location;
                       if (typeof coords?.lat !== 'number' || typeof coords?.lng !== 'number') return null;
-                      const markerKey = spotKey(spot?.example?.spotPlaceId || spot?.placeId, spot?.name || 'spot');
+                      const markerKey = getCanonicalSpotKey(spot);
                       return (
                         <Marker
                           key={markerKey}
@@ -1617,7 +1609,7 @@ export default function Explore() {
           </View>
         }
         renderItem={({ item, index }) => {
-          const key = spotKey(item?.example?.spotPlaceId || item?.placeId, item?.name || 'spot');
+          const key = getCanonicalSpotKey(item);
           const tags = spotTagsMap.get(key) || [];
           const intelligence = intelligenceMap.get(key) || null;
           return (
@@ -1636,8 +1628,7 @@ export default function Explore() {
               intentReason={Array.isArray(item?.intentReasons) ? item.intentReasons[0] : null}
               onPress={() => openSpotSheet(item)}
               onScorePress={() => {
-                const scoreKey = spotKey(item?.example?.spotPlaceId || item?.placeId || '', item?.name || '');
-                setBreakdownSpotKey(scoreKey);
+                setBreakdownSpotKey(getCanonicalSpotKey(item));
               }}
               describeSpot={describeSpot}
               formatDistance={formatDistance}
@@ -1667,20 +1658,16 @@ export default function Explore() {
             onPress={(event: any) => event?.stopPropagation?.()}
           >
             <View style={styles.sheetHandle} />
+            {selectedSpotVisual.uri ? (
+              <SpotImage source={{ uri: selectedSpotVisual.uri }} style={styles.sheetHero} />
+            ) : null}
             <Text style={[styles.sheetTitle, { color: text }]}>{selectedSpot.name}</Text>
             <Text style={{ color: muted, marginTop: 6 }}>
               {selectedSpot.description || describeSpot(selectedSpot.name, selectedSpot.example?.address)}
               {selectedSpot.distance !== undefined ? ` · ${formatDistance(selectedSpot.distance)}` : ''}
             </Text>
 
-            {shouldRenderLegacyIntel ? (
-              <SpotIntelligence
-                intel={selectedSpot?.intel}
-                display={selectedSpot?.display}
-                liveCheckinCount={selectedSpot?.live?.checkinCount || selectedSpot?.checkinCount || selectedSpot?.count || 0}
-                containerStyle={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}
-              />
-            ) : selectedIntelState === 'loading' ? (
+            {selectedIntelState === 'loading' ? (
               <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
                 <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Refreshing intelligence…</Text>
                 <Text style={{ color: muted }}>Fetching live + inferred signals for this spot.</Text>
@@ -1692,11 +1679,23 @@ export default function Explore() {
                   Live enrichment failed right now. Try again shortly or open the spot page.
                 </Text>
               </View>
+            ) : selectedSpotIntelligence && !selectedSpotHasRenderableIntel ? (
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
+                <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Live intelligence is still warming up</Text>
+                <Text style={{ color: muted }}>
+                  We do not have enough provider or community signal yet for a trustworthy work score.
+                </Text>
+              </View>
             ) : null}
 
-            {selectedSpotIntelligence ? (
+            {selectedSpotIntelligence && selectedSpotHasRenderableIntel ? (
               <View style={[styles.snapshotCard, { borderColor: border, backgroundColor: withAlpha(primary, 0.06) }]}>
                 <Text style={[styles.snapshotLabel, { color: muted }]}>Smart snapshot</Text>
+                {selectedSpotAvailabilityMessage ? (
+                  <Text style={{ color: muted, fontSize: 12, marginTop: 6 }}>
+                    {selectedSpotAvailabilityMessage}
+                  </Text>
+                ) : null}
                 <View style={styles.snapshotRow}>
                   <View style={styles.snapshotItem}>
                     <Text style={{ color: getWorkScoreColor(selectedSpotIntelligence.workScore), fontWeight: '800', fontSize: 20 }}>
@@ -1744,7 +1743,7 @@ export default function Explore() {
               </View>
             ) : null}
 
-            {selectedSpotIntelligence ? (
+            {selectedSpotIntelligence && selectedSpotHasRenderableIntel ? (
               <>
                 <View style={styles.sheetMetaRow}>
                   {typeof selectedSpotIntelligence.aggregateRating === 'number' ? (
@@ -1813,19 +1812,18 @@ export default function Explore() {
                   </View>
                 ) : null}
               </>
-            ) : typeof selectedSpot?.intel?.avgRating === 'number' ? (
-              <Text style={{ color: muted, marginTop: 8 }}>
-                {`${selectedSpot.intel.avgRating.toFixed(1)} stars`}
-              </Text>
             ) : null}
 
             <View style={styles.sheetActions}>
               <Pressable
                 onPress={() => {
                   try {
-                    const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
+                    const placeId = readSpotPlaceId(selectedSpot);
                     const name = selectedSpot?.name || '';
-                    router.push(`/checkin?spot=${encodeURIComponent(name)}&placeId=${encodeURIComponent(placeId)}`);
+                    const coords = readSpotLocation(selectedSpot);
+                    const latParam = typeof coords?.lat === 'number' ? `&lat=${coords.lat}` : '';
+                    const lngParam = typeof coords?.lng === 'number' ? `&lng=${coords.lng}` : '';
+                    router.push(`/checkin?spot=${encodeURIComponent(name)}&placeId=${encodeURIComponent(placeId)}${latParam}${lngParam}`);
                     closeSpotSheet();
                   } catch {}
                 }}
@@ -1839,9 +1837,9 @@ export default function Explore() {
 
               <Pressable
                 onPress={async () => {
-                  const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId;
+                  const placeId = readSpotPlaceId(selectedSpot);
                   const name = selectedSpot?.name || 'Spot';
-                  const coords = selectedSpot?.example?.spotLatLng || selectedSpot?.example?.location || selectedSpot?.location;
+                  const coords = readSpotLocation(selectedSpot);
                   const markId = startPerfMark('maps_open_latency', { source: 'explore_sheet_open_maps' });
                   try {
                     const result = await openInMaps({ placeId, coords, name });
@@ -1863,10 +1861,13 @@ export default function Explore() {
             <Pressable
               onPress={() => {
                 try {
-                  const placeId = selectedSpot?.example?.spotPlaceId || selectedSpot?.placeId || '';
+                  const placeId = readSpotPlaceId(selectedSpot);
+                  const coords = readSpotLocation(selectedSpot);
+                  const latParam = typeof coords?.lat === 'number' ? `&lat=${coords.lat}` : '';
+                  const lngParam = typeof coords?.lng === 'number' ? `&lng=${coords.lng}` : '';
                   startPerfMark('spot_navigation');
                   void markPerfEvent('spot_nav_start', { source: 'explore_sheet' });
-                  router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(selectedSpot.name || '')}`);
+                  router.push(`/spot?placeId=${encodeURIComponent(placeId)}&name=${encodeURIComponent(selectedSpot.name || '')}${latParam}${lngParam}`);
                   closeSpotSheet();
                 } catch {}
               }}
@@ -2069,6 +2070,12 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 999,
     backgroundColor: withAlpha('#000000', 0.2),
+    marginBottom: tokens.space.s12,
+  },
+  sheetHero: {
+    width: '100%',
+    height: 180,
+    borderRadius: tokens.radius.r16,
     marginBottom: tokens.space.s12,
   },
   sheetTitle: {
