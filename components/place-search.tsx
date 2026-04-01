@@ -14,7 +14,7 @@ import { getRecentSpots, getTopSpotsLocal } from '@/storage/local';
 import { requestForegroundLocation } from '@/services/location';
 import { getProviderProxyUserMessage, primeProviderProxyAccess } from '@/services/providerProxy';
 import { haversine } from '@/utils/geo';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { geocodeAsync, reverseGeocodeAsync, type LocationGeocodedAddress } from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -190,6 +190,8 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
   const card = useThemeColor({}, 'card');
   const muted = useThemeColor({}, 'muted');
   const [error, setError] = useState<string | null>(null);
+  const nearbyAbortRef = useRef<AbortController | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (visible) {
@@ -198,9 +200,13 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
       setError(null);
       setNearbyError(null);
       setLoading(false);
-      void primeProviderProxyAccess(false);
+      void primeProviderProxyAccess(true);
     }
   }, [visible]);
+
+  function isAbortedResponse(response: PlaceSearchResponse | null) {
+    return response?.diagnostics?.errorCode === 'proxy_aborted';
+  }
 
   function getSearchErrorMessage(response: PlaceSearchResponse | null, fallbackMessage: string) {
     const code = response?.diagnostics?.errorCode;
@@ -216,7 +222,13 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     (async () => {
       try {
         const pos = await requestForegroundLocation();
-        if (pos) setLoc(pos);
+        if (pos) {
+          setLoc(pos);
+          setNearbyError(null);
+        } else {
+          setLoc(null);
+          setNearbyError('Location unavailable. Search by spot name instead.');
+        }
       } catch {}
     })();
   }, [visible]);
@@ -244,46 +256,58 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     })();
   }, [visible, loc]);
 
+  const fetchNearby = useCallback(async (location: { lat: number; lng: number }) => {
+    // Cancel any in-flight nearby request.
+    nearbyAbortRef.current?.abort();
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    nearbyAbortRef.current = controller;
+    try {
+      setNearbyLoading(true);
+      setNearbyError(null);
+      const response = await searchPlacesNearbyResponse(location.lat, location.lng, 1200, 'study', controller?.signal);
+      // If this request was superseded, silently discard.
+      if (isAbortedResponse(response) || controller?.signal?.aborted) return;
+      const results = response.places;
+      if (response.status === 'error') {
+        setNearbyError(getSearchErrorMessage(response, 'Nearby suggestions are temporarily unavailable. Tap to retry.'));
+      } else if (!results.length) {
+        setNearbyError('No nearby spots found right now. Try searching by name.');
+      }
+      const enriched = results.map((r) => {
+        if (!r.location) return { ...r, distanceKm: Infinity };
+        return { ...r, distanceKm: haversine(location, r.location) };
+      }).sort((a, b) => (a.distanceKm || 9999) - (b.distanceKm || 9999));
+      setNearby(enriched.slice(0, 8));
+    } catch {
+      setNearby([]);
+      setNearbyError('Nearby suggestions failed. Tap to retry.');
+    } finally {
+      setNearbyLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!visible || !loc) return;
     if (q.trim().length) return;
-    let alive = true;
-    (async () => {
-      try {
-        setNearbyLoading(true);
-        setNearbyError(null);
-        const response = await searchPlacesNearbyResponse(loc.lat, loc.lng, 1200, 'study');
-        const results = response.places;
-        if (response.status === 'error') {
-          setNearbyError(getSearchErrorMessage(response, 'Nearby suggestions are temporarily unavailable.'));
-        } else if (!results.length) {
-          setNearbyError('No nearby spots found right now. Try searching by name.');
-        }
-        if (!alive) return;
-        const enriched = results.map((r) => {
-          if (!r.location) return { ...r, distanceKm: Infinity };
-          return { ...r, distanceKm: haversine(loc, r.location) };
-        }).sort((a, b) => (a.distanceKm || 9999) - (b.distanceKm || 9999));
-        setNearby(enriched.slice(0, 8));
-      } catch {
-        if (alive) setNearby([]);
-      } finally {
-        if (alive) setNearbyLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [visible, loc, q]);
+    void fetchNearby(loc);
+    return () => { nearbyAbortRef.current?.abort(); };
+  }, [visible, loc, q, fetchNearby]);
 
-  const doSearch = React.useCallback(async () => {
+  const doSearch = useCallback(async () => {
     if (!q) return;
+    // Cancel any superseded search.
+    searchAbortRef.current?.abort();
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    searchAbortRef.current = controller;
+    const signal = controller?.signal;
     try {
       setLoading(true);
       setError(null);
       const primary = loc
-        ? await searchPlacesWithBiasResponse(q, loc.lat, loc.lng, 12000, 8)
-        : await searchPlacesResponse(q, 8);
+        ? await searchPlacesWithBiasResponse(q, loc.lat, loc.lng, 12000, 8, signal)
+        : await searchPlacesResponse(q, 8, signal);
+      // If superseded, silently discard.
+      if (isAbortedResponse(primary) || signal?.aborted) return;
       if (primary.places.length) {
         setResults(primary.places);
         setError(null);
@@ -291,7 +315,8 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
       }
 
       if (loc) {
-        const globalResults = await searchPlacesResponse(q, 8);
+        const globalResults = await searchPlacesResponse(q, 8, signal);
+        if (isAbortedResponse(globalResults) || signal?.aborted) return;
         if (globalResults.places.length) {
           setResults(globalResults.places);
           setError(null);
@@ -307,7 +332,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
         }
       }
 
+      if (signal?.aborted) return;
       const nativeResults = await searchPlacesWithNativeGeocoder(q, loc, 8);
+      if (signal?.aborted) return;
       if (nativeResults.length) {
         setResults(nativeResults);
         setError(null);
@@ -331,7 +358,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           ? 'Maps API key rejected. Enable Places API and allow this platform in key restrictions.'
           : raw;
       devLog('place search error', e);
+      if (signal?.aborted) return;
       const nativeResults = await searchPlacesWithNativeGeocoder(q, loc, 8);
+      if (signal?.aborted) return;
       if (nativeResults.length) {
         setResults(nativeResults);
         setError(null);
@@ -354,7 +383,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     const id = setTimeout(() => {
       if (q.trim().length >= 2) void doSearch();
     }, 350);
-    return () => clearTimeout(id);
+    return () => { clearTimeout(id); searchAbortRef.current?.abort(); };
   }, [q, visible, doSearch]);
 
   async function handleSelect(place: any) {
@@ -470,7 +499,11 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
             !q.trim() ? (
               <View style={{ marginBottom: tokens.space.s12 }}>
                 {nearbyLoading ? <Text style={{ color: muted, marginBottom: tokens.space.s8 }}>Finding nearby spots…</Text> : null}
-                {nearbyError ? <Text style={{ color: danger, marginBottom: tokens.space.s8 }}>{nearbyError}</Text> : null}
+                {nearbyError ? (
+                  <Pressable onPress={() => { if (loc) void fetchNearby(loc); }}>
+                    <Text style={{ color: danger, marginBottom: tokens.space.s8 }}>{nearbyError}</Text>
+                  </Pressable>
+                ) : null}
                 {nearby.length ? (
                   <View style={{ marginBottom: tokens.space.s12 }}>
                     <Label style={{ color: muted, marginBottom: tokens.space.s6 }}>Nearby suggestions</Label>

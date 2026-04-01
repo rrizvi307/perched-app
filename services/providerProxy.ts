@@ -9,7 +9,8 @@ export type ProviderProxyErrorCode =
   | 'proxy_unauthorized'
   | 'proxy_timeout'
   | 'proxy_network_error'
-  | 'proxy_provider_error';
+  | 'proxy_provider_error'
+  | 'proxy_aborted';
 
 export type ProviderProxyAuthState = {
   authMode: ProviderProxyAuthMode;
@@ -32,6 +33,23 @@ export type ProviderProxyJsonResult<T> = {
   data: T | null;
   meta: ProviderProxyFetchMeta;
 };
+
+/** True when the error originated from an externally-cancelled AbortSignal (not a timeout). */
+export function isAbortedProxyResult(result: ProviderProxyJsonResult<unknown>): boolean {
+  return !result.meta.ok && result.meta.errorCode === 'proxy_aborted';
+}
+
+/** True when the error is transient and should not be cached or surface sticky UI state. */
+export function isTransientProxyError(code?: ProviderProxyErrorCode | 'proxy_aborted'): boolean {
+  return (
+    code === 'proxy_access_unavailable' ||
+    code === 'proxy_unauthorized' ||
+    code === 'proxy_timeout' ||
+    code === 'proxy_network_error' ||
+    code === 'proxy_provider_error' ||
+    code === 'proxy_aborted'
+  );
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,17 +126,57 @@ export async function primeProviderProxyAccess(
 }
 
 export async function waitForProviderProxyAccess(
-  maxWaitMs = 2200,
-  pollMs = 120,
+  maxWaitMs = 6500,
+  pollMs = 160,
 ): Promise<ProviderProxyAuthState> {
   const deadline = Date.now() + Math.max(0, maxWaitMs);
   let attempt = 0;
-  let lastState = await primeProviderProxyAccess(true);
+
+  // Fast path: check if cached tokens are already available (seeded from
+  // AsyncStorage on cold start). This avoids the network round-trip of
+  // force-refreshing on the very first request. If the cached token is
+  // stale the server returns 401 and the retry logic handles it.
+  let lastState = await readProviderProxyAuthState({
+    forceRefreshAuth: false,
+    forceRefreshAppCheck: false,
+  });
+
+  if (lastState.hasAuth || lastState.hasAppCheck) {
+    addProviderProxyBreadcrumb('provider_proxy_access_ready', {
+      authMode: lastState.authMode,
+      hasAuth: lastState.hasAuth,
+      hasAppCheck: lastState.hasAppCheck,
+      attempts: 0,
+      source: 'cached',
+    });
+    return lastState;
+  }
+
+  // No cached tokens — force-refresh and wait for auth hydration.
+  lastState = await primeProviderProxyAccess(true);
+
+  if (!lastState.hasAuth && !lastState.hasAppCheck) {
+    try {
+      const { waitForFirebaseAuthReady } = await import('./firebaseClient');
+      if (typeof waitForFirebaseAuthReady === 'function') {
+        await waitForFirebaseAuthReady(Math.min(4000, Math.max(0, maxWaitMs)));
+        lastState = await readProviderProxyAuthState({
+          forceRefreshAuth: true,
+          forceRefreshAppCheck: true,
+        });
+      }
+    } catch (error) {
+      devLog('provider proxy auth hydration wait failed', error);
+    }
+  }
 
   while (!lastState.hasAuth && !lastState.hasAppCheck && Date.now() < deadline) {
     attempt += 1;
     await sleep(pollMs);
-    lastState = await readProviderProxyAuthState();
+    lastState = await readProviderProxyAuthState({
+      forceRefreshAuth: attempt <= 2 || attempt % 5 === 0,
+      forceRefreshAppCheck: attempt === 1,
+    });
   }
 
   addProviderProxyBreadcrumb('provider_proxy_access_ready', {
@@ -148,9 +206,24 @@ async function executeProviderProxyRequest<T>(
   authState: ProviderProxyAuthState,
   action: string,
   timeoutMs: number,
+  externalSignal?: AbortSignal | null,
 ): Promise<ProviderProxyJsonResult<T>> {
+  // If the caller already aborted before we start, short-circuit.
+  if (externalSignal?.aborted) {
+    return {
+      data: null,
+      meta: { action, endpoint, ok: false, authMode: authState.authMode, errorCode: 'proxy_aborted', errorMessage: 'Request cancelled' },
+    };
+  }
+
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller?.abort(); }, timeoutMs);
+
+  // Link the external signal so the caller can cancel the request.
+  const onExternalAbort = () => controller?.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -207,18 +280,22 @@ async function executeProviderProxyRequest<T>(
       },
     };
   } catch (error) {
+    const isAbort = typeof (error as any)?.name === 'string' && (error as any).name === 'AbortError';
+    // Distinguish caller-cancelled from timeout-triggered abort.
+    const errorCode: ProviderProxyErrorCode = isAbort
+      ? (timedOut ? 'proxy_timeout' : 'proxy_aborted')
+      : 'proxy_network_error';
     const abortMessage = getAbortMessage(error);
-    const errorCode =
-      typeof (error as any)?.name === 'string' && (error as any).name === 'AbortError'
-        ? 'proxy_timeout'
-        : 'proxy_network_error';
-    addProviderProxyBreadcrumb('provider_proxy_request_exception', {
-      action,
-      endpoint,
-      authMode: authState.authMode,
-      errorCode,
-      message: abortMessage,
-    });
+    // External aborts are expected (superseded requests) — log at breadcrumb level only.
+    if (errorCode !== 'proxy_aborted') {
+      addProviderProxyBreadcrumb('provider_proxy_request_exception', {
+        action,
+        endpoint,
+        authMode: authState.authMode,
+        errorCode,
+        message: abortMessage,
+      });
+    }
     return {
       data: null,
       meta: {
@@ -232,6 +309,7 @@ async function executeProviderProxyRequest<T>(
     };
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -242,9 +320,12 @@ export async function fetchProviderProxyJson<T>(
     action?: string;
     timeoutMs?: number;
     waitForAccessMs?: number;
+    signal?: AbortSignal | null;
   },
 ): Promise<ProviderProxyJsonResult<T>> {
   const action = options?.action || 'request';
+  const signal = options?.signal ?? null;
+
   if (!endpoint) {
     return {
       data: null,
@@ -256,6 +337,14 @@ export async function fetchProviderProxyJson<T>(
         errorCode: 'proxy_endpoint_missing',
         errorMessage: 'Proxy endpoint missing',
       },
+    };
+  }
+
+  // If externally aborted before we even start, bail immediately.
+  if (signal?.aborted) {
+    return {
+      data: null,
+      meta: { action, endpoint, ok: false, authMode: 'none', errorCode: 'proxy_aborted', errorMessage: 'Request cancelled' },
     };
   }
 
@@ -275,19 +364,27 @@ export async function fetchProviderProxyJson<T>(
   }
 
   const timeoutMs = options?.timeoutMs ?? 3200;
-  const initial = await executeProviderProxyRequest<T>(endpoint, body, authState, action, timeoutMs);
-  if (
-    initial.meta.ok ||
-    initial.meta.errorCode !== 'proxy_unauthorized'
-  ) {
+  const initial = await executeProviderProxyRequest<T>(endpoint, body, authState, action, timeoutMs, signal);
+
+  // Never retry externally-cancelled requests.
+  if (initial.meta.errorCode === 'proxy_aborted') return initial;
+
+  // Success or non-retryable error — return immediately.
+  if (initial.meta.ok) return initial;
+
+  const retryableErrors: ProviderProxyErrorCode[] = ['proxy_unauthorized', 'proxy_timeout', 'proxy_network_error'];
+  if (!retryableErrors.includes(initial.meta.errorCode!)) {
     return initial;
   }
 
-  const refreshedState = await primeProviderProxyAccess(true);
+  // For auth errors, force-refresh tokens. For transient errors, just retry once.
+  const refreshedState = initial.meta.errorCode === 'proxy_unauthorized'
+    ? await primeProviderProxyAccess(true)
+    : authState;
   if (!refreshedState.hasAuth && !refreshedState.hasAppCheck) {
     return initial;
   }
-  return executeProviderProxyRequest<T>(endpoint, body, refreshedState, action, timeoutMs);
+  return executeProviderProxyRequest<T>(endpoint, body, refreshedState, action, timeoutMs, signal);
 }
 
 export function getProviderProxyUserMessage(

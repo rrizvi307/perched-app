@@ -6,6 +6,7 @@ import {
   getPlaceDetails,
   resetGoogleMapsCacheStats,
   searchPlacesNearby,
+  searchPlacesNearbyResponse,
   searchPlacesResponse,
 } from '../googleMaps';
 
@@ -144,6 +145,23 @@ describe('googleMaps transport', () => {
     );
     expect((global as any).fetch).toHaveBeenCalledTimes(1);
     expect((global as any).fetch.mock.calls[0][0]).toContain('places.googleapis.com/v1/places/direct-place');
+  });
+
+  it('does not auto-enable direct Google calls in dev without an explicit override', async () => {
+    delete process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS;
+    (global as any).GOOGLE_MAPS_API_KEY = 'maps-key';
+
+    const result = await searchPlacesResponse('coffee shops', 5);
+
+    expect(result).toMatchObject({
+      places: [],
+      status: 'error',
+      diagnostics: expect.objectContaining({
+        source: 'proxy',
+        errorCode: 'proxy_access_unavailable',
+      }),
+    });
+    expect((global as any).fetch).not.toHaveBeenCalled();
   });
 
   it('uses the backend proxy for nearby search when the user is authenticated', async () => {
@@ -375,5 +393,48 @@ describe('googleMaps transport', () => {
         location: { lat: 29.721, lng: -95.341 },
       }),
     );
+  });
+
+  it('returns error with proxy_aborted when search is externally cancelled', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await searchPlacesResponse('test query', 5, controller.signal);
+    expect(result.status).toBe('error');
+    expect(result.diagnostics?.errorCode).toBe('proxy_aborted');
+    expect(result.places).toEqual([]);
+  });
+
+  it('returns error with proxy_aborted when nearby search is externally cancelled', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await searchPlacesNearbyResponse(29.76, -95.37, 1500, 'study', controller.signal);
+    expect(result.status).toBe('error');
+    expect(result.diagnostics?.errorCode).toBe('proxy_aborted');
+    expect(result.places).toEqual([]);
+  });
+
+  it('aborted search does not cache results or replace good state', async () => {
+    (getCurrentFirebaseIdToken as jest.Mock).mockResolvedValue('token-789');
+    // First: successful search
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        places: [{ placeId: 'good-1', name: 'Good Cafe', address: '1 St', location: { lat: 29.7, lng: -95.3 } }],
+      }),
+    );
+    const good = await searchPlacesResponse('cached query', 5);
+    expect(good.status).toBe('ok');
+
+    // Second: aborted search for same query
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = await searchPlacesResponse('cached query', 5, controller.signal);
+    // Aborted result should not replace cached good result — returns cached
+    // (the cache is checked before the proxy call, so a cached result wins)
+    expect(aborted.status).toBe('ok');
+    expect(aborted.places).toHaveLength(1);
   });
 });

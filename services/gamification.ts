@@ -437,11 +437,16 @@ function buildStatsFromCheckins(checkins: any[], seed: UserStats): UserStats {
 
   let streakDays = 0;
   if (sortedDaysAsc.length > 0) {
-    const daySet = new Set(sortedDaysAsc);
-    let cursor = sortedDaysAsc[sortedDaysAsc.length - 1];
-    while (daySet.has(cursor)) {
-      streakDays += 1;
-      cursor -= DAY_MS;
+    const lastCheckinDay = sortedDaysAsc[sortedDaysAsc.length - 1];
+    const todayStart = toDayStart(Date.now());
+    // Streak is only active if the most recent check-in was today or yesterday
+    if (lastCheckinDay >= todayStart - DAY_MS) {
+      const daySet = new Set(sortedDaysAsc);
+      let cursor = lastCheckinDay;
+      while (daySet.has(cursor)) {
+        streakDays += 1;
+        cursor -= DAY_MS;
+      }
     }
   }
 

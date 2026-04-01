@@ -1,11 +1,13 @@
 import firebase from 'firebase/compat/app';
 import 'firebase/compat/app-check';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureFirebase } from './firebaseClient';
 import { observeIdTokenChanges } from './firebaseClient';
 import { getExpoExtra, getExpoExtraString } from './expoConfig';
 import { devLog } from './logger';
 
 const GLOBAL_APP_CHECK_TOKEN_KEY = 'FIREBASE_APP_CHECK_TOKEN';
+const APP_CHECK_STORAGE_KEY = '@perched_cached_app_check';
 const APP_CHECK_CALLABLE = 'issueAppCheckToken';
 const APP_CHECK_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const APP_CHECK_FAILURE_BACKOFF_MS = 10 * 60 * 1000;
@@ -52,7 +54,49 @@ function setAppCheckTokenState(token?: string | null, expireTimeMillis?: number 
       : 0;
   if (typeof token === 'string' && token.trim()) {
     appCheckRetryAfterMs = 0;
+    // Persist for cold-start reuse
+    try {
+      void AsyncStorage.setItem(
+        APP_CHECK_STORAGE_KEY,
+        JSON.stringify({ token: token.trim(), expiryMs: appCheckTokenExpiryMs }),
+      ).catch(() => {});
+    } catch {}
+  } else {
+    // Clear from storage when token is empty (sign-out / suspension).
+    try { void AsyncStorage.removeItem(APP_CHECK_STORAGE_KEY).catch(() => {}); } catch {}
   }
+}
+
+/**
+ * Seed the in-memory App Check token from AsyncStorage.
+ * Call early during cold start so proxy requests can use a
+ * cached (likely still valid) App Check token immediately.
+ */
+export async function seedCachedAppCheckToken() {
+  if (getCurrentFirebaseAppCheckToken()) return; // Already populated
+  try {
+    const raw = await AsyncStorage.getItem(APP_CHECK_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.token === 'string' && parsed.token.trim()) {
+      // Only restore if not yet expired (with buffer)
+      const expiryMs = typeof parsed.expiryMs === 'number' ? parsed.expiryMs : 0;
+      if (!expiryMs || Date.now() < expiryMs - APP_CHECK_REFRESH_BUFFER_MS) {
+        setGlobalAppCheckToken(parsed.token);
+        appCheckTokenExpiryMs = expiryMs;
+      }
+    }
+  } catch {}
+}
+
+/**
+ * Clear the persisted App Check token from AsyncStorage.
+ * Called on sign-out so cold start does not reuse stale session state.
+ */
+export function clearPersistedAppCheckToken() {
+  setGlobalAppCheckToken('');
+  appCheckTokenExpiryMs = 0;
+  try { void AsyncStorage.removeItem(APP_CHECK_STORAGE_KEY).catch(() => {}); } catch {}
 }
 
 function isAppCheckFailureBackoffActive() {

@@ -1,4 +1,3 @@
-import Constants from 'expo-constants';
 import { toMillis } from '@/services/checkinUtils';
 import { withErrorBoundary } from './errorBoundary';
 import { getPlaceDetails, type GooglePlaceReview } from './googleMaps';
@@ -9,6 +8,7 @@ import {
   type ProviderProxyErrorCode,
 } from './providerProxy';
 import { computeVibeScores, getPrimaryVibe, type VibeScores, type VibeType } from './vibeScoring';
+import { getExpoExtra, getExpoExtraString, getExpoFunctionEndpoint } from './expoConfig';
 
 export type ExternalSource = 'google' | 'foursquare' | 'yelp';
 export type OpenStatusSource = 'google' | 'input' | 'legacy' | 'unknown';
@@ -137,6 +137,10 @@ export function getPlaceIntelligenceAvailabilityMessage(
   if (availability.status === 'degraded' && availability.degradedProviders.length) {
     const providers = availability.degradedProviders.map(getAvailabilityProviderLabel);
     return `Live data is limited right now. ${providers.join(' + ')} ${providers.length === 1 ? 'is' : 'are'} unavailable.`;
+  }
+
+  if (availability.status === 'degraded') {
+    return 'Live data is limited right now. Showing available provider and community signals.';
   }
 
   switch (availability.reason) {
@@ -964,44 +968,17 @@ function parsePriceLevel(value?: string) {
   return normalized;
 }
 
-function getExpoExtra() {
-  return ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-}
-
-function getFunctionsProjectId() {
-  const extra = getExpoExtra();
-  return (
-    (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string) ||
-    (process.env.FIREBASE_PROJECT_ID as string) ||
-    (extra?.FIREBASE_CONFIG?.projectId as string) ||
-    ((global as any)?.FIREBASE_CONFIG?.projectId as string) ||
-    ''
-  );
-}
-
 function getFunctionsRegion() {
-  const extra = getExpoExtra();
   return (
     (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
     (process.env.FIREBASE_FUNCTIONS_REGION as string) ||
-    (extra?.FIREBASE_FUNCTIONS_REGION as string) ||
+    getExpoExtraString('FIREBASE_FUNCTIONS_REGION') ||
     'us-central1'
   );
 }
 
 function getPlaceSignalEndpoint() {
-  const extra = getExpoExtra();
-  const explicit =
-    (process.env.EXPO_PUBLIC_PLACE_INTEL_ENDPOINT as string) ||
-    (process.env.PLACE_INTEL_ENDPOINT as string) ||
-    (extra?.PLACE_INTEL_ENDPOINT as string) ||
-    ((global as any)?.PLACE_INTEL_ENDPOINT as string) ||
-    '';
-  if (explicit) return explicit;
-  const projectId = getFunctionsProjectId();
-  if (!projectId) return '';
-  const region = getFunctionsRegion();
-  return `https://${region}-${projectId}.cloudfunctions.net/placeSignalsProxy`;
+  return getExpoFunctionEndpoint(['PLACE_INTEL_ENDPOINT'], 'placeSignalsProxy');
 }
 
 function readBoolFlag(value: unknown) {
@@ -1241,7 +1218,12 @@ function normalizeProviderPhotos(value: unknown): ExternalPlacePhoto[] {
 }
 
 async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlacePayload> {
-  if (!input.placeName || !input.location) {
+  const resolvedLocation =
+    input.location ||
+    (input.placeId ? (await getPlaceDetails(input.placeId))?.location : undefined) ||
+    null;
+
+  if (!input.placeName || !resolvedLocation) {
     return {
       externalSignals: [],
       googleSnapshot: null,
@@ -1268,7 +1250,7 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlac
       },
     };
   }
-  const cacheKey = `${input.placeId || ''}:${input.placeName}:${input.location.lat.toFixed(3)}:${input.location.lng.toFixed(3)}`;
+  const cacheKey = `${input.placeId || ''}:${input.placeName}:${resolvedLocation.lat.toFixed(3)}:${resolvedLocation.lng.toFixed(3)}`;
   const cached = getFreshCacheEntry(proxySignalCache, cacheKey, INTELLIGENCE_TTL_MS);
   if (cached) {
     return cached.payload;
@@ -1284,9 +1266,9 @@ async function getProxySignals(input: BuildIntelligenceInput): Promise<ProxyPlac
       {
         placeName: input.placeName,
         placeId: input.placeId || undefined,
-        location: input.location,
+        location: resolvedLocation,
       },
-      { action: 'place_signals', timeoutMs: 2400 },
+      { action: 'place_signals', timeoutMs: 4200, waitForAccessMs: 4200 },
     );
     const degradedProviders = Array.isArray(payload.data?.degradedProviders)
       ? payload.data?.degradedProviders.filter(
@@ -2142,6 +2124,26 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     meetingsConfidence,
   };
 
+  // If the proxy is unavailable but we have community data, treat as degraded rather
+  // than unavailable so the snapshot still renders with on-device signals.
+  const resolvedAvailability: PlaceIntelligence['dataAvailability'] = (() => {
+    const base = proxyPayload.dataAvailability;
+    const hasGoogleSignal =
+      typeof googleSnapshot?.rating === 'number' ||
+      typeof googleSnapshot?.reviewCount === 'number' ||
+      typeof googleSnapshot?.openNow === 'boolean' ||
+      !!(Array.isArray(googleSnapshot?.hours) && googleSnapshot.hours.length) ||
+      !!(Array.isArray(googleSnapshot?.types) && googleSnapshot.types.length);
+    if (
+      base.status === 'unavailable' &&
+      isTransientAvailabilityReason(base.reason) &&
+      (checkins.length > 0 || hasGoogleSignal)
+    ) {
+      return { ...base, status: 'degraded' as const };
+    }
+    return base;
+  })();
+
   const payload: PlaceIntelligence = {
     workScore,
     vibeScores,
@@ -2162,7 +2164,7 @@ async function buildPlaceIntelligenceCore(input: BuildIntelligenceInput): Promis
     externalSignals,
     providerPhotos: proxyPayload.providerPhotos,
     externalSignalMeta,
-    dataAvailability: proxyPayload.dataAvailability,
+    dataAvailability: resolvedAvailability,
     contextSignals,
     crowdForecast,
     useCases,

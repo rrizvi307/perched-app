@@ -323,8 +323,35 @@ function shouldUseModularAuth() {
   return Platform.OS !== 'web';
 }
 
+const ID_TOKEN_STORAGE_KEY = '@perched_cached_id_token';
+
 function setCachedFirebaseIdToken(token?: string | null) {
   _cachedIdToken = typeof token === 'string' ? token.trim() : '';
+  // Persist to AsyncStorage so cold starts can reuse the token immediately.
+  // Clear from storage when token is empty (sign-out / token revocation).
+  try {
+    if (_cachedIdToken) {
+      void AsyncStorage.setItem(ID_TOKEN_STORAGE_KEY, _cachedIdToken).catch(() => {});
+    } else {
+      void AsyncStorage.removeItem(ID_TOKEN_STORAGE_KEY).catch(() => {});
+    }
+  } catch {}
+}
+
+/**
+ * Seed the in-memory ID token cache from AsyncStorage.
+ * Call this as early as possible during app cold start so that
+ * proxy requests can use a cached (likely still valid) token
+ * without waiting for auth hydration + network refresh.
+ */
+export async function seedCachedIdToken() {
+  if (_cachedIdToken) return; // Already populated by auth listener
+  try {
+    const stored = await AsyncStorage.getItem(ID_TOKEN_STORAGE_KEY);
+    if (typeof stored === 'string' && stored.trim()) {
+      _cachedIdToken = stored.trim();
+    }
+  } catch {}
 }
 
 async function cacheFirebaseIdTokenFromUser(user: any, forceRefresh = false) {
@@ -432,6 +459,31 @@ export function observeIdTokenChanges(listener: (user: any) => void) {
     return modularAuth.onIdTokenChanged(getModularFirebaseAuth(fb), listener);
   }
   return fb.auth().onIdTokenChanged(listener);
+}
+
+export async function waitForFirebaseAuthReady(timeoutMs = 4000) {
+  const currentUser = getCurrentFirebaseUser();
+  if (currentUser) return currentUser;
+
+  return new Promise<any | null>((resolve) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    const finish = (user: any | null) => {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      resolve(user);
+    };
+
+    const timer = setTimeout(() => {
+      finish(getCurrentFirebaseUser());
+    }, Math.max(0, timeoutMs));
+
+    unsubscribe = observeAuthStateChanges((user) => {
+      clearTimeout(timer);
+      finish(user || null);
+    });
+  });
 }
 
 export async function getCurrentFirebaseIdToken(forceRefresh = false) {
@@ -3283,6 +3335,13 @@ export async function updateCurrentUserPassword(newPassword: string) {
 export async function deleteCurrentUser() {
   const user = getCurrentFirebaseUser();
   if (!user) throw new Error('No authenticated user');
+  // Clear persisted tokens before deleting the account.
+  setCachedFirebaseIdToken('');
+  try { void AsyncStorage.removeItem(ID_TOKEN_STORAGE_KEY).catch(() => {}); } catch {}
+  try {
+    const { clearPersistedAppCheckToken } = await import('./firebaseAppCheck');
+    clearPersistedAppCheckToken();
+  } catch {}
   if (shouldUseModularAuth()) {
     await modularAuth.deleteUser(user);
     return;
@@ -3293,6 +3352,14 @@ export async function deleteCurrentUser() {
 export async function signOutCurrentUser() {
   const fb = ensureFirebase();
   if (!fb) return;
+  // Clear persisted auth tokens so a subsequent cold start does not
+  // reuse stale session state from the signed-out user.
+  setCachedFirebaseIdToken('');
+  try { void AsyncStorage.removeItem(ID_TOKEN_STORAGE_KEY).catch(() => {}); } catch {}
+  try {
+    const { clearPersistedAppCheckToken } = await import('./firebaseAppCheck');
+    clearPersistedAppCheckToken();
+  } catch {}
   if (shouldUseModularAuth()) {
     await modularAuth.signOut(getModularFirebaseAuth(fb));
     return;

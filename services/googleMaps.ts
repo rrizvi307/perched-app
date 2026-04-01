@@ -11,6 +11,10 @@ import {
   type ProviderProxyErrorCode,
 } from '@/services/providerProxy';
 import { isClientProviderCallsEnabled } from '@/services/runtimeFlags';
+import {
+  getExpoExtra,
+  getExpoFunctionEndpoint,
+} from '@/services/expoConfig';
 
 export function getMapsKey() {
   if (!isClientProviderCallsEnabled()) {
@@ -165,43 +169,8 @@ export async function canonicalizePlaceSelection(
   return details || canonical;
 }
 
-function getExpoExtra() {
-  return ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-}
-
-function getFunctionsProjectId() {
-  const extra = getExpoExtra();
-  return (
-    (process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID as string) ||
-    (process.env.FIREBASE_PROJECT_ID as string) ||
-    (extra?.FIREBASE_CONFIG?.projectId as string) ||
-    ((global as any)?.FIREBASE_CONFIG?.projectId as string) ||
-    ''
-  );
-}
-
-function getFunctionsRegion() {
-  const extra = getExpoExtra();
-  return (
-    (process.env.EXPO_PUBLIC_FIREBASE_FUNCTIONS_REGION as string) ||
-    (process.env.FIREBASE_FUNCTIONS_REGION as string) ||
-    (extra?.FIREBASE_FUNCTIONS_REGION as string) ||
-    'us-central1'
-  );
-}
-
 function getGooglePlacesProxyEndpoint() {
-  const extra = getExpoExtra();
-  const explicit =
-    (process.env.EXPO_PUBLIC_GOOGLE_PLACES_ENDPOINT as string) ||
-    (process.env.GOOGLE_PLACES_ENDPOINT as string) ||
-    (extra?.GOOGLE_PLACES_ENDPOINT as string) ||
-    ((global as any)?.GOOGLE_PLACES_ENDPOINT as string) ||
-    '';
-  if (explicit) return explicit;
-  const projectId = getFunctionsProjectId();
-  if (!projectId) return '';
-  return `https://${getFunctionsRegion()}-${projectId}.cloudfunctions.net/googlePlacesProxy`;
+  return getExpoFunctionEndpoint(['GOOGLE_PLACES_ENDPOINT'], 'googlePlacesProxy');
 }
 
 const searchCache = new Map<string, { ts: number; payload: PlaceSearchResult[] }>();
@@ -326,7 +295,7 @@ type GooglePlacesProxyPayload = {
   city?: string | null;
 };
 
-async function fetchGooglePlacesProxy(action: string, payload: Record<string, any>, timeoutMs = 3200) {
+async function fetchGooglePlacesProxy(action: string, payload: Record<string, any>, timeoutMs = 4200, signal?: AbortSignal | null) {
   const endpoint = getGooglePlacesProxyEndpoint();
   if (!endpoint) {
     return {
@@ -344,7 +313,7 @@ async function fetchGooglePlacesProxy(action: string, payload: Record<string, an
   return fetchProviderProxyJson<GooglePlacesProxyPayload>(
     endpoint,
     { action, ...payload },
-    { action, timeoutMs },
+    { action, timeoutMs, waitForAccessMs: 4200, signal },
   );
 }
 
@@ -674,12 +643,16 @@ async function runDirectSearchPlacesNearby(
   return normalizePlaceResults(json.results, 20);
 }
 
-export async function searchPlacesResponse(query: string, limit = 6): Promise<PlaceSearchResponse> {
+export async function searchPlacesResponse(query: string, limit = 6, signal?: AbortSignal | null): Promise<PlaceSearchResponse> {
   const cacheKey = `places:${query}:${limit}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
   if (cached) return okResponse(cached, buildDiagnostics('none'));
   try {
-    const proxied = await fetchGooglePlacesProxy('search_text', { query, limit }, 2600);
+    const proxied = await fetchGooglePlacesProxy('search_text', { query, limit }, 2600, signal);
+    // If externally cancelled, return a non-fatal aborted result.
+    if (proxied.meta.errorCode === 'proxy_aborted') {
+      return errorResponse(buildDiagnostics('proxy', { errorCode: 'proxy_aborted' }));
+    }
     if (proxied.meta.ok) {
       const proxiedPlaces = normalizePlaceResults(proxied.data?.places, limit);
       if (proxiedPlaces.length) {
@@ -726,8 +699,8 @@ export async function searchPlacesResponse(query: string, limit = 6): Promise<Pl
   }
 }
 
-export async function searchPlaces(query: string, limit = 6): Promise<PlaceSearchResult[]> {
-  const response = await searchPlacesResponse(query, limit);
+export async function searchPlaces(query: string, limit = 6, signal?: AbortSignal | null): Promise<PlaceSearchResult[]> {
+  const response = await searchPlacesResponse(query, limit, signal);
   return response.places;
 }
 
@@ -737,6 +710,7 @@ export async function searchPlacesWithBiasResponse(
   lng: number,
   radiusMeters = 8000,
   limit = 8,
+  signal?: AbortSignal | null,
 ): Promise<PlaceSearchResponse> {
   const cacheKey = `textbias:${query}:${lat.toFixed(3)}:${lng.toFixed(3)}:${radiusMeters}:${limit}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
@@ -746,7 +720,11 @@ export async function searchPlacesWithBiasResponse(
       'search_text',
       { query, limit, lat, lng, radius: radiusMeters },
       2600,
+      signal,
     );
+    if (proxied.meta.errorCode === 'proxy_aborted') {
+      return errorResponse(buildDiagnostics('proxy', { errorCode: 'proxy_aborted' }));
+    }
     if (proxied.meta.ok) {
       const proxiedPlaces = normalizePlaceResults(proxied.data?.places, limit);
       if (proxiedPlaces.length) {
@@ -799,8 +777,9 @@ export async function searchPlacesWithBias(
   lng: number,
   radiusMeters = 8000,
   limit = 8,
+  signal?: AbortSignal | null,
 ): Promise<PlaceSearchResult[]> {
-  const response = await searchPlacesWithBiasResponse(query, lat, lng, radiusMeters, limit);
+  const response = await searchPlacesWithBiasResponse(query, lat, lng, radiusMeters, limit, signal);
   return response.places;
 }
 
@@ -858,6 +837,7 @@ export async function searchPlacesNearbyResponse(
   lng: number,
   radius = 1500,
   intent: 'study' | 'general' = 'study',
+  signal?: AbortSignal | null,
 ): Promise<PlaceSearchResponse> {
   const cacheKey = `nearby:${lat.toFixed(3)}:${lng.toFixed(3)}:${radius}:${intent}`;
   const cached = cacheGet(searchCache, cacheKey, 120000);
@@ -867,7 +847,11 @@ export async function searchPlacesNearbyResponse(
       'nearby',
       { lat, lng, radius, intent },
       2600,
+      signal,
     );
+    if (proxied.meta.errorCode === 'proxy_aborted') {
+      return errorResponse(buildDiagnostics('proxy', { errorCode: 'proxy_aborted' }));
+    }
     if (proxied.meta.ok) {
       const proxiedPlaces = normalizePlaceResults(proxied.data?.places, 20);
       if (proxiedPlaces.length) {
@@ -919,8 +903,9 @@ export async function searchPlacesNearby(
   lng: number,
   radius = 1500,
   intent: 'study' | 'general' = 'study',
+  signal?: AbortSignal | null,
 ): Promise<PlaceSearchResult[]> {
-  const response = await searchPlacesNearbyResponse(lat, lng, radius, intent);
+  const response = await searchPlacesNearbyResponse(lat, lng, radius, intent, signal);
   return response.places;
 }
 

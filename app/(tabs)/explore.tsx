@@ -46,7 +46,7 @@ import {
   type PlaceIntelligence,
 } from '@/services/placeIntelligence';
 import { openInMaps } from '@/services/mapsLinks';
-import { getMapsKey } from '@/services/googleMaps';
+import { getMapsKey, searchPlacesNearbyResponse, type PlaceSearchResult } from '@/services/googleMaps';
 import {
   getCanonicalSpotKey,
   groupSpotCheckins,
@@ -107,6 +107,44 @@ function haversine(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
+function buildProviderSpotShell(
+  place: PlaceSearchResult,
+  focus: { lat: number; lng: number },
+) {
+  const location =
+    typeof place?.location?.lat === 'number' && typeof place?.location?.lng === 'number'
+      ? place.location
+      : null;
+  if (!location || !place.placeId || !place.name) return null;
+
+  return {
+    id: `provider:${place.placeId}`,
+    key: `place:${place.placeId}`,
+    placeId: place.placeId,
+    googlePlaceId: place.placeId,
+    name: place.name,
+    address: place.address || '',
+    location,
+    lat: location.lat,
+    lng: location.lng,
+    distance: haversine(focus, location),
+    count: 0,
+    rating: typeof place.rating === 'number' ? place.rating : undefined,
+    priceLevel: typeof place.priceLevel === 'string' ? place.priceLevel : null,
+    openNow: typeof place.openNow === 'boolean' ? place.openNow : undefined,
+    types: Array.isArray(place.types) ? place.types : [],
+    hereNowCount: 0,
+    _checkins: [],
+    example: {
+      spotName: place.name,
+      spotPlaceId: place.placeId,
+      spotLatLng: location,
+      location,
+      address: place.address || '',
+    },
+  };
+}
+
 async function mapWithConcurrencyLimit<T, R>(
   items: T[],
   limit: number,
@@ -154,9 +192,15 @@ const EXPLORE_SPOT_FALLBACK_LIMIT = 140;
 function formatDistance(distanceKm?: number) {
   if (distanceKm === undefined || distanceKm === Infinity) return '';
   const miles = distanceKm * 0.621371;
-  const walkMinutes = Math.max(1, Math.round((distanceKm / 5) * 60));
   if (miles < 0.1) return '< 1 min walk';
-  return `${miles.toFixed(1)} mi · ${walkMinutes} min walk`;
+  // Walking distance threshold: ~1.5 miles (~2.4 km)
+  if (miles <= 1.5) {
+    const walkMinutes = Math.max(1, Math.round((distanceKm / 5) * 60));
+    return `${miles.toFixed(1)} mi · ${walkMinutes} min walk`;
+  }
+  // Beyond walking distance: show drive time (~30 mph urban average)
+  const driveMinutes = Math.max(1, Math.round((distanceKm / 48) * 60));
+  return `${miles.toFixed(1)} mi · ${driveMinutes} min drive`;
 }
 
 function describeSpot(name?: string, address?: string) {
@@ -188,16 +232,25 @@ function buildSpotTags(spot: any, intelligence?: PlaceIntelligence | null) {
 
   if (liveOpenKnown && intelligence?.openNow === true) tags.push('Open now');
   if (liveOpenKnown && intelligence?.openNow === false) tags.push('Closed now');
+  // Provider-inferred tags from Yelp / Google Places intelligence
+  if (intelligence?.priceLevel) tags.push(intelligence.priceLevel);
+  if (typeof intelligence?.aggregateRating === 'number' && intelligence.aggregateRating >= 4.0) {
+    tags.push('Highly rated');
+  }
+  if (intelligence?.useCases?.length) {
+    tags.push(...intelligence.useCases.slice(0, 2));
+  }
   if (intelligence?.recommendations?.goodForStudying && (intelligence.recommendations.studyingConfidence || 0) >= 0.6) {
     tags.push('Good for studying');
   }
   if (intelligence?.recommendations?.goodForMeetings && (intelligence.recommendations.meetingsConfidence || 0) >= 0.58) {
     tags.push('Good for meetings');
   }
+  // Community signal from user check-ins
   if (spot?.display?.noise && (checkinCount >= 2 || (intelligence?.confidence || 0) >= 0.55)) {
     tags.push(String(spot.display.noise));
   }
-  return Array.from(new Set(tags)).slice(0, 3);
+  return Array.from(new Set(tags)).slice(0, 4);
 }
 
 function getEffectiveSpotRating(spot: any) {
@@ -732,6 +785,27 @@ export default function Explore() {
         .filter(Boolean)
         .sort((a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity));
 
+      if (!normalized.length) {
+        try {
+          const providerNearby = await searchPlacesNearbyResponse(
+            userLat,
+            userLng,
+            Math.round(radiusMeters),
+            'study',
+          );
+          const providerSpots = providerNearby.places
+            .map((place) => buildProviderSpotShell(place, { lat: userLat, lng: userLng }))
+            .filter(Boolean)
+            .sort((a: any, b: any) => (a.distance || Infinity) - (b.distance || Infinity));
+
+          if (providerSpots.length > 0) {
+            return normalizeSpotsForExplore(providerSpots as any[]);
+          }
+        } catch {
+          // Fall through to the existing empty-state handling below.
+        }
+      }
+
       if (activeFirestoreFilters.length > MAX_FIRESTORE_FILTERS) {
         showToast('Some filters were applied client-side for speed.', 'info');
       }
@@ -1041,7 +1115,8 @@ export default function Explore() {
   }, [displaySpots, deferredQuery, filters, parsedQuery, rankingIntent]);
 
   const maxSpotCount = useMemo(() => Math.max(1, ...spots.map((spot) => spot.count || 0)), [spots]);
-  const listData = useMemo(() => filteredSpots, [filteredSpots]);
+  const TOP_NEARBY_LIMIT = 6;
+  const listData = useMemo(() => filteredSpots.slice(0, TOP_NEARBY_LIMIT), [filteredSpots]);
   const markerCandidates = useMemo(() => filteredSpots, [filteredSpots]);
   const mapPreview = useMemo(() => {
     if (!mapKey || !mapCenter) return null;
@@ -1487,7 +1562,7 @@ export default function Explore() {
 
             <Text style={{ color: muted, fontSize: 12, marginTop: 8 }}>
               {filteredSpots.length
-                ? `Showing ${filteredSpots.length} spot${filteredSpots.length === 1 ? '' : 's'}${rankingIntent !== 'any' ? ` • ranked for ${getDiscoveryIntentMeta(rankingIntent).shortLabel.toLowerCase()}` : ''}`
+                ? `Top ${Math.min(TOP_NEARBY_LIMIT, filteredSpots.length)} nearby${filteredSpots.length > TOP_NEARBY_LIMIT ? ` of ${filteredSpots.length} spots` : ' spots'}${rankingIntent !== 'any' ? ` · ranked for ${getDiscoveryIntentMeta(rankingIntent).shortLabel.toLowerCase()}` : ''}`
                 : 'No spots match current filters.'}
             </Text>
 
@@ -1668,22 +1743,22 @@ export default function Explore() {
             </Text>
 
             {selectedIntelState === 'loading' ? (
-              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05), padding: tokens.space.s12 }]}>
                 <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Refreshing intelligence…</Text>
                 <Text style={{ color: muted }}>Fetching live + inferred signals for this spot.</Text>
               </View>
             ) : selectedIntelState === 'error' ? (
-              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05), padding: tokens.space.s12 }]}>
                 <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Intelligence temporarily unavailable</Text>
                 <Text style={{ color: muted }}>
                   Live enrichment failed right now. Try again shortly or open the spot page.
                 </Text>
               </View>
             ) : selectedSpotIntelligence && !selectedSpotHasRenderableIntel ? (
-              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05) }]}>
-                <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>Live intelligence is still warming up</Text>
+              <View style={[styles.intelSection, { borderColor: border, backgroundColor: withAlpha(primary, 0.05), padding: tokens.space.s12 }]}>
+                <Text style={{ color: text, fontWeight: '700', marginBottom: 4 }}>No intelligence available yet</Text>
                 <Text style={{ color: muted }}>
-                  We do not have enough provider or community signal yet for a trustworthy work score.
+                  Open the spot page or check back shortly for provider ratings and community signals.
                 </Text>
               </View>
             ) : null}

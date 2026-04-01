@@ -1,8 +1,10 @@
 import Constants from 'expo-constants';
+import * as googleMaps from '../googleMaps';
 import { ensureFirebase, getCurrentFirebaseIdToken } from '../firebaseClient';
 import {
   buildPlaceIntelligence,
   getPlaceIntelligenceCacheStats,
+  getPlaceIntelligenceAvailabilityMessage,
   hasRenderablePlaceIntelligence,
   resetPlaceIntelligenceCacheStats,
 } from '../placeIntelligence';
@@ -101,6 +103,78 @@ describe('buildPlaceIntelligence', () => {
     expect(typeof result.generatedAt).toBe('number');
     expect(result.generatedAt).toBeGreaterThan(0);
     expect(hasRenderablePlaceIntelligence(result)).toBe(false);
+  });
+
+  it('hydrates missing location from Google place details before requesting provider signals', async () => {
+    const detailsSpy = jest
+      .spyOn(googleMaps, 'getPlaceDetails')
+      .mockResolvedValue({
+        placeId: 'derived-location-1',
+        name: 'Derived Location Cafe',
+        location: { lat: 29.72, lng: -95.34 },
+        rating: 4.4,
+        ratingCount: 120,
+      });
+    (global as any).fetch = jest.fn(async () =>
+      mkFetchResponse({
+        externalSignals: [{ source: 'yelp', rating: 4.6, reviewCount: 210 }],
+        providerPhotos: [{ source: 'yelp', url: 'https://images.test/cafe.jpg' }],
+      })
+    );
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Derived Location Cafe',
+      placeId: 'derived-location-1',
+      checkins: [],
+    });
+
+    expect(detailsSpy).toHaveBeenCalledWith('derived-location-1');
+    expect((global as any).fetch).toHaveBeenCalledWith(
+      'https://intel.test/proxy',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"lat":29.72'),
+      }),
+    );
+    expect(result.externalSignals.map((signal) => signal.source)).toEqual(
+      expect.arrayContaining(['google', 'yelp']),
+    );
+    expect(result.providerPhotos).toEqual([
+      { source: 'yelp', url: 'https://images.test/cafe.jpg' },
+    ]);
+    detailsSpy.mockRestore();
+  });
+
+  it('treats transient proxy failures as degraded when Google still provides signal', async () => {
+    const detailsSpy = jest
+      .spyOn(googleMaps, 'getPlaceDetails')
+      .mockResolvedValue({
+        placeId: 'google-only-1',
+        name: 'Google Only Cafe',
+        location: { lat: 29.75, lng: -95.35 },
+        rating: 4.3,
+        ratingCount: 88,
+        openNow: true,
+        types: ['cafe'],
+      });
+    (global as any).fetch = jest.fn(async () => {
+      throw new Error('network down');
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Google Only Cafe',
+      placeId: 'google-only-1',
+      checkins: [],
+    });
+
+    expect(result.dataAvailability.status).toBe('degraded');
+    expect(result.dataAvailability.reason).toBe('proxy_network_error');
+    expect(typeof result.aggregateRating).toBe('number');
+    expect(hasRenderablePlaceIntelligence(result)).toBe(true);
+    expect(getPlaceIntelligenceAvailabilityMessage(result.dataAvailability)).toBe(
+      'Live data is limited right now. Showing available provider and community signals.'
+    );
+    detailsSpy.mockRestore();
   });
 
   it('keeps baseline work score non-zero for work-friendly venues without checkins', async () => {
@@ -655,13 +729,20 @@ describe('buildPlaceIntelligence', () => {
     });
 
     expect(result.externalSignals).toEqual([]);
-    expect(result.dataAvailability.status).toBe('unavailable');
+    // With community checkins, transient proxy failure upgrades to degraded
+    expect(result.dataAvailability.status).toBe('degraded');
     expect(result.dataAvailability.reason).toBe('proxy_network_error');
   });
 
-  it('does not cache transient unavailable intelligence results for repeated spot opens', async () => {
+  it('does not cache transient degraded intelligence results for repeated spot opens', async () => {
+    // fetchProviderProxyJson retries once on network errors, so we need 2 throws
+    // for the first buildPlaceIntelligence call (initial + retry), then a success
+    // for the second call.
     (global as any).fetch = jest
       .fn()
+      .mockImplementationOnce(async () => {
+        throw new Error('network down');
+      })
       .mockImplementationOnce(async () => {
         throw new Error('network down');
       })
@@ -682,9 +763,10 @@ describe('buildPlaceIntelligence', () => {
     const second = await buildPlaceIntelligence(input);
 
     expect(first.dataAvailability.reason).toBe('proxy_network_error');
+    expect(first.dataAvailability.status).toBe('degraded');
     expect(second.externalSignals.length).toBeGreaterThan(0);
-    expect(second.dataAvailability.status).not.toBe('unavailable');
-    expect((global as any).fetch).toHaveBeenCalledTimes(2);
+    expect(second.dataAvailability.status).toBe('full');
+    expect((global as any).fetch).toHaveBeenCalledTimes(3);
   });
 
   it('handles non-ok responses by returning no external signals', async () => {
@@ -696,7 +778,8 @@ describe('buildPlaceIntelligence', () => {
       checkins: [mkCheckin()],
     });
     expect(result.externalSignals).toEqual([]);
-    expect(result.dataAvailability.status).toBe('unavailable');
+    // With community checkins, transient proxy failure upgrades to degraded
+    expect(result.dataAvailability.status).toBe('degraded');
     expect(result.dataAvailability.reason).toBe('proxy_provider_error');
   });
 
@@ -952,5 +1035,64 @@ describe('buildPlaceIntelligence', () => {
 
     expect(result.momentum.trend).toBe('insufficient_data');
     expect(result.momentum.deltaWorkScore).toBe(0);
+  });
+
+  it('upgrades transient unavailable to degraded when community checkins exist', async () => {
+    (global as any).fetch = jest.fn(async () => {
+      throw new Error('network down');
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Community Fallback Spot',
+      placeId: 'community-fallback-1',
+      location: { lat: 30, lng: -95 },
+      checkins: [mkCheckin({ wifiSpeed: 4, busyness: 2, noiseLevel: 'quiet' })],
+    });
+
+    // Provider failed transiently, but community data exists → degraded, not unavailable
+    expect(result.dataAvailability.status).toBe('degraded');
+    expect(result.dataAvailability.reason).toBe('proxy_network_error');
+    expect(hasRenderablePlaceIntelligence(result)).toBe(true);
+    expect(result.workScore).toBeGreaterThan(0);
+  });
+
+  it('stays unavailable on transient failure when no community checkins exist', async () => {
+    (global as any).fetch = jest.fn(async () => {
+      throw new Error('network down');
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'No Checkins Spot',
+      placeId: 'no-checkins-1',
+      location: { lat: 30, lng: -95 },
+      checkins: [],
+    });
+
+    expect(result.dataAvailability.status).toBe('unavailable');
+    expect(result.dataAvailability.reason).toBe('proxy_network_error');
+  });
+
+  it('renders community-only intelligence when provider calls fail transiently', async () => {
+    (global as any).fetch = jest.fn(async () => {
+      throw new Error('timeout');
+    });
+
+    const result = await buildPlaceIntelligence({
+      placeName: 'Community Only Spot',
+      placeId: 'community-only-1',
+      location: { lat: 29.76, lng: -95.37 },
+      checkins: [
+        mkCheckin({ wifiSpeed: 4, busyness: 2, noiseLevel: 'quiet', laptopFriendly: true }),
+        mkCheckin({ wifiSpeed: 3.5, busyness: 2.5, noiseLevel: 'moderate', laptopFriendly: true }),
+      ],
+    });
+
+    // Should still produce meaningful intelligence from community signals
+    expect(hasRenderablePlaceIntelligence(result)).toBe(true);
+    expect(result.externalSignals).toEqual([]);
+    expect(result.reliability.sampleSize).toBe(2);
+    expect(result.scoreBreakdown.wifi.source).toBe('checkin');
+    expect(result.scoreBreakdown.wifi.value).toBeGreaterThan(0);
+    expect(result.dataAvailability.status).toBe('degraded');
   });
 });

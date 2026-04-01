@@ -25,7 +25,7 @@ import { canonicalizePlaceSelection, getMapsKey, searchPlacesNearbyResponse } fr
 import { devLog } from '@/services/logger';
 import { logEvent } from '@/services/logEvent';
 import { requestForegroundLocation } from '@/services/location';
-import { getProviderProxyUserMessage } from '@/services/providerProxy';
+import { getProviderProxyUserMessage, primeProviderProxyAccess } from '@/services/providerProxy';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { clearCheckinDraft, enqueuePendingCheckin, getCheckinDraft, getLastCheckinAt, getPermissionPrimerSeen, recordPlaceEvent, recordPlaceTag, saveCheckin, saveCheckinDraft, setLastCheckinAt, setPermissionPrimerSeen } from '@/storage/local';
 import { syncPendingCheckins } from '@/services/syncPending';
@@ -131,6 +131,7 @@ export default function CheckinScreen() {
 	const [isEditMode, setIsEditMode] = useState(false);
 	const [editId, setEditId] = useState<string | null>(null);
 	const [placeInfo, setPlaceInfo] = useState<any | null>(null);
+	const [placeSelectionSource, setPlaceSelectionSource] = useState<'auto' | 'manual' | 'prefill' | null>(null);
 	const [visibility, setVisibility] = useState<'public' | 'friends' | 'close'>('public');
 	const [detectedPlace, setDetectedPlace] = useState<any | null>(null);
 	const [detectedCandidates, setDetectedCandidates] = useState<any[]>([]);
@@ -218,6 +219,7 @@ export default function CheckinScreen() {
 				name: prefillSpot || undefined,
 				location: typeof prefillLat === 'number' && typeof prefillLng === 'number' ? { lat: prefillLat, lng: prefillLng } : undefined,
 			});
+			setPlaceSelectionSource('prefill');
 		}
 		if (editParam) {
 			setIsEditMode(true);
@@ -237,7 +239,10 @@ export default function CheckinScreen() {
 						if (Array.isArray(check.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(check.visitIntent));
 						if (typeof check.ambiance === 'string') setAmbiance(check.ambiance as any);
 						if (typeof check.visibility === 'string') setVisibility(check.visibility as any);
-						if (check.spotLatLng) setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
+						if (check.spotLatLng) {
+							setPlaceInfo({ placeId: check.spotPlaceId, name: check.spotName, location: check.spotLatLng });
+							setPlaceSelectionSource('manual');
+						}
 					// Load metrics from edit mode
 					const convertedNoise = toNumericNoiseLevel(check.noiseLevel ?? null);
 					if (convertedNoise) setNoiseLevel(convertedNoise);
@@ -262,7 +267,10 @@ export default function CheckinScreen() {
 							if (Array.isArray(found.visitIntent)) setVisitIntent(sanitizeDiscoveryIntents(found.visitIntent));
 							if (typeof found.ambiance === 'string') setAmbiance(found.ambiance as any);
 							if (typeof found.visibility === 'string') setVisibility(found.visibility as any);
-							if (found.spotLatLng) setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
+							if (found.spotLatLng) {
+								setPlaceInfo({ placeId: found.spotPlaceId, name: found.spotName, location: found.spotLatLng });
+								setPlaceSelectionSource('manual');
+							}
 							// Load metrics from edit mode (local fallback)
 							const convertedNoiseLocal = toNumericNoiseLevel(found.noiseLevel ?? null);
 							if (convertedNoiseLocal) setNoiseLevel(convertedNoiseLocal);
@@ -287,7 +295,7 @@ export default function CheckinScreen() {
 		} catch {}
 	}, []);
 
-	const openCamera = useCallback(async () => {
+	const openCamera = useCallback(async (): Promise<string | null> => {
 		try {
 			const current = await ImagePicker.getCameraPermissionsAsync();
 			if (!current.granted) {
@@ -295,7 +303,7 @@ export default function CheckinScreen() {
 				if (requested.status !== 'granted') {
 					setHasPermission(false);
 					showToast('Enable camera access in Settings to take a photo.', 'warning');
-					return;
+					return null;
 				}
 				setHasPermission(true);
 			}
@@ -316,43 +324,54 @@ export default function CheckinScreen() {
 				setImageExif(exif || null);
 				setCaptured(true);
 				await logEvent('photo_captured', user?.id);
+				return dataUri;
 			}
+			return null;
 		} catch (e) {
 			devLog('openCamera error', e);
 			showToast('Unable to open camera. Check permissions and try again.', 'warning');
+			return null;
 		}
 	}, [imageQuality, isWeb, showToast, user?.id]);
-	const pickImage = useCallback(async () => {
-		const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-		if (permission.status !== 'granted') {
-			showToast(
-				permission.canAskAgain === false
-					? 'Enable photo library access in Settings to choose a photo.'
-					: 'Allow photo library access to choose a photo.',
-				'warning'
-			);
-			return;
-		}
+	const pickImage = useCallback(async (): Promise<string | null> => {
+		try {
+			const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+			if (permission.status !== 'granted') {
+				showToast(
+					permission.canAskAgain === false
+						? 'Enable photo library access in Settings to choose a photo.'
+						: 'Allow photo library access to choose a photo.',
+					'warning'
+				);
+				return null;
+			}
 
-		const result = await ImagePicker.launchImageLibraryAsync({
-			mediaTypes: ImagePicker.MediaTypeOptions.Images,
-			allowsEditing: true,
-			aspect: [1, 1],
-			quality: imageQuality,
-			exif: true,
-			base64: isWeb,
-		});
-		if (!result.canceled) {
-			const uri = Array.isArray(result.assets) ? result.assets[0].uri : (result as any).uri;
-			const base64 = Array.isArray(result.assets) ? result.assets[0].base64 : (result as any).base64;
-			const dataUri = isWeb && base64 ? `data:image/jpeg;base64,${base64}` : uri;
-			const exif = Array.isArray(result.assets) ? result.assets[0].exif : (result as any).exif;
-			setImage(dataUri);
-			setImageExif(exif || null);
+			const result = await ImagePicker.launchImageLibraryAsync({
+				mediaTypes: ImagePicker.MediaTypeOptions.Images,
+				allowsEditing: true,
+				aspect: [1, 1],
+				quality: imageQuality,
+				exif: true,
+				base64: isWeb,
+			});
+			if (!result.canceled) {
+				const uri = Array.isArray(result.assets) ? result.assets[0].uri : (result as any).uri;
+				const base64 = Array.isArray(result.assets) ? result.assets[0].base64 : (result as any).base64;
+				const dataUri = isWeb && base64 ? `data:image/jpeg;base64,${base64}` : uri;
+				const exif = Array.isArray(result.assets) ? result.assets[0].exif : (result as any).exif;
+				setImage(dataUri);
+				setImageExif(exif || null);
 				setCaptured(true);
 				await logEvent('photo_captured', user?.id);
+				return dataUri;
 			}
-		}, [imageQuality, isWeb, showToast, user?.id]);
+			return null;
+		} catch (e) {
+			devLog('pickImage error', e);
+			showToast('Unable to open photo library. Check permissions and try again.', 'warning');
+			return null;
+		}
+	}, [imageQuality, isWeb, showToast, user?.id]);
 
 	useEffect(() => {
 		if (initialLoadRef.current) return;
@@ -377,6 +396,7 @@ export default function CheckinScreen() {
 							name: draft.spot || draft.name,
 							location: draft.location,
 						});
+						setPlaceSelectionSource('manual');
 					}
 					// Load metrics from draft
 					const convertedNoiseDraft = toNumericNoiseLevel(draft.noiseLevel ?? null);
@@ -415,6 +435,7 @@ export default function CheckinScreen() {
 				throw new Error('place_verification_failed');
 			}
 			setPlaceInfo(resolved);
+			setPlaceSelectionSource('manual');
 			setDetectedPlace(null);
 			setDetectedCandidates([]);
 			if (resolved?.name) setSpot(resolved.name);
@@ -502,10 +523,11 @@ export default function CheckinScreen() {
 			setDetecting(true);
 			setDetectionError(null);
 			setDetectedCandidates([]);
-			try {
-				const exifLoc = exifToLocation(imageExif);
-				const loc = exifLoc || (await requestForegroundLocation());
-				// Fast-path demo detection when demo mode is active so auto-detect appears instantly in recordings
+		try {
+			const exifLoc = exifToLocation(imageExif);
+			const loc = exifLoc || (await requestForegroundLocation());
+			await primeProviderProxyAccess(true);
+			// Fast-path demo detection when demo mode is active so auto-detect appears instantly in recordings
 				try {
 					const isDemo = (typeof window !== 'undefined' && (window as any).__PERCHED_DEMO) || (global as any).__PERCHED_DEMO;
 					if (isDemo) {
@@ -515,6 +537,7 @@ export default function CheckinScreen() {
 						await logEvent('place_detected', user?.id, { success: true, source: exifLoc ? 'photo' : 'gps', distanceKm: top.distanceKm });
 						if (!spot && !placeInfo && typeof top.distanceKm === 'number' && top.distanceKm <= detectionThreshold) {
 							setPlaceInfo(top);
+							setPlaceSelectionSource('auto');
 							setSpot(top.name);
 						}
 						setDetecting(false);
@@ -523,7 +546,11 @@ export default function CheckinScreen() {
 				} catch {}
 				if (!loc) {
 					const seenLoc = await getPermissionPrimerSeen('location');
-					if (!seenLoc) setShowLocationPrimer(true);
+					if (!seenLoc) {
+						setShowLocationPrimer(true);
+					} else {
+						setDetectionError('Location unavailable. Check Settings \u2192 Privacy \u2192 Location.');
+					}
 					await logEvent('place_detected', user?.id, { success: false, reason: 'no_location' });
 					setDetecting(false);
 					return;
@@ -568,6 +595,7 @@ export default function CheckinScreen() {
 			});
 			if (!spot && !placeInfo && typeof top.distanceKm === 'number' && top.distanceKm <= detectionThreshold) {
 				setPlaceInfo(top);
+				setPlaceSelectionSource('auto');
 				setSpot(top.name);
 			}
 		} catch (e: any) {
@@ -647,6 +675,7 @@ export default function CheckinScreen() {
 		setVisitIntent([]);
 		setAmbiance(null);
 		setPlaceInfo(null);
+		setPlaceSelectionSource(null);
 		setDetectedPlace(null);
 		setDetectedCandidates([]);
 		setDetecting(false);
@@ -667,6 +696,46 @@ export default function CheckinScreen() {
 		lastDetectRef.current = null;
 		draftEmptyRef.current = false;
 	}
+
+	/** Replace photo while preserving all non-image draft fields.
+	 *  - auto-detected spot: clear detection state so new photo triggers re-detection.
+	 *  - manual/prefill spot: keep the current spot.
+	 *  State is only cleared AFTER the picker succeeds — cancelling preserves everything. */
+	const clearAttachedPhoto = useCallback(() => {
+		setImage(null);
+		setImageExif(null);
+		setCaptured(false);
+		setDetectedCandidates([]);
+		setDetectionError(null);
+		setDetecting(false);
+		lastDetectRef.current = null;
+
+		if (placeSelectionSource === 'auto' || placeSelectionSource === null) {
+			setPlaceInfo(null);
+			setPlaceSelectionSource(null);
+			setDetectedPlace(null);
+			setSpot('');
+		}
+	}, [placeSelectionSource]);
+
+	const replacePhoto = useCallback(async (via: 'camera' | 'library') => {
+		const newImage = via === 'camera' ? await openCamera() : await pickImage();
+		if (!newImage) return; // User cancelled picker — preserve current state.
+
+		// New photo obtained — clear stale detection state so re-detection runs.
+		setDetectedCandidates([]);
+		setDetectionError(null);
+		lastDetectRef.current = null;
+
+		// If the spot came from auto-detection, clear it so re-detection runs on the new photo.
+		if (placeSelectionSource === 'auto' || placeSelectionSource === null) {
+			setPlaceInfo(null);
+			setPlaceSelectionSource(null);
+			setDetectedPlace(null);
+			setSpot('');
+		}
+		// Manual/prefill spots are preserved.
+	}, [placeSelectionSource, openCamera, pickImage]);
 
 	async function handlePost() {
 		if (submittingRef.current) return;
@@ -1015,6 +1084,7 @@ export default function CheckinScreen() {
 						onConfirm={async () => {
 							setShowLocationPrimer(false);
 							await setPermissionPrimerSeen('location', true);
+							lastDetectRef.current = null;
 							await autoDetectPlace();
 						}}
 						onCancel={() => setShowLocationPrimer(false)}
@@ -1101,7 +1171,46 @@ export default function CheckinScreen() {
 					</View>
 				) : (
 					<View>
-						<SpotImage source={{ uri: image as string }} style={[styles.preview, { backgroundColor: inputBorder }]} />
+						<View style={styles.previewWrap}>
+							<SpotImage source={{ uri: image as string }} style={[styles.preview, { backgroundColor: inputBorder }]} />
+							<Pressable
+								onPress={clearAttachedPhoto}
+								accessibilityRole="button"
+								accessibilityLabel="Remove photo and choose another"
+								style={({ pressed }) => [
+									styles.previewDismissButton,
+									{ backgroundColor: withAlpha(cardBg, pressed ? 0.78 : 0.9), borderColor: inputBorder },
+								]}
+							>
+								<IconSymbol name="xmark" size={16} color={text} />
+							</Pressable>
+						</View>
+						<View style={styles.previewActionRow}>
+							<Pressable
+								onPress={() => replacePhoto('camera')}
+								accessibilityRole="button"
+								accessibilityLabel="Use camera again"
+								style={({ pressed }) => [
+									styles.previewActionButton,
+									{ borderColor: inputBorder, backgroundColor: pressed ? withAlpha(primary, 0.12) : withAlpha(primary, 0.08) },
+								]}
+							>
+								<IconSymbol name="camera.fill" size={16} color={primary} />
+								<Body style={{ color: primary, marginBottom: 0 }}>Use camera again</Body>
+							</Pressable>
+							<Pressable
+								onPress={() => replacePhoto('library')}
+								accessibilityRole="button"
+								accessibilityLabel="Choose another photo"
+								style={({ pressed }) => [
+									styles.previewActionButton,
+									{ borderColor: inputBorder, backgroundColor: pressed ? withAlpha(primary, 0.12) : withAlpha(primary, 0.08) },
+								]}
+							>
+								<IconSymbol name="photo.fill" size={16} color={primary} />
+								<Body style={{ color: primary, marginBottom: 0 }}>Choose another</Body>
+							</Pressable>
+						</View>
 						<Pressable
 							onPress={() => setPlaceModal(true)}
 							accessibilityRole="button"
@@ -1691,6 +1800,7 @@ export default function CheckinScreen() {
 								onPress={() => {
 									setSpot('');
 									setPlaceInfo(null);
+									setPlaceSelectionSource(null);
 								}}
 								accessibilityRole="button"
 								accessibilityLabel="Clear selected spot"
@@ -1710,6 +1820,7 @@ export default function CheckinScreen() {
 								<Pressable
 									onPress={() => {
 										setPlaceInfo(detectedPlace);
+										setPlaceSelectionSource('auto');
 										if (!spot) setSpot(detectedPlace.name);
 									}}
 									disabled={placeInfo?.placeId === detectedPlace?.placeId}
@@ -1730,7 +1841,7 @@ export default function CheckinScreen() {
 						) : detectionError ? (
 							<Text style={{ color: muted }}>{detectionError}</Text>
 						) : null}
-						{detectedCandidates.length && !placeInfo ? (
+						{detectedCandidates.length > 0 && !placeInfo ? (
 							<View style={{ marginBottom: 8 }}>
 								<Text style={{ color: muted, marginBottom: 6 }}>Suggestions</Text>
 								{detectedCandidates.map((c: any) => (
@@ -1738,6 +1849,7 @@ export default function CheckinScreen() {
 										key={`cand-${c.placeId}`}
 										onPress={() => {
 											setPlaceInfo(c);
+											setPlaceSelectionSource('auto');
 											if (!spot) setSpot(c.name);
 										}}
 										accessibilityRole="button"
@@ -1811,13 +1923,6 @@ export default function CheckinScreen() {
 							/>
 						) : null}
 						<View style={{ height: 8 }} />
-						<Pressable
-							onPress={() => { setImage(null); setCaptured(false); }}
-							accessibilityRole="button"
-							accessibilityLabel="Retake photo"
-						>
-							<Body style={{ color: text }}>Retake</Body>
-						</Pressable>
 					</View>
 					)}
 					</ScrollView>
@@ -1965,12 +2070,41 @@ export default function CheckinScreen() {
 		alignItems: 'center',
 		marginBottom: 12,
 	},
+	previewWrap: {
+		position: 'relative',
+		marginBottom: 12,
+	},
 	preview: {
 		width: '100%',
 		aspectRatio: 1,
 		borderRadius: 20,
-		marginBottom: 8,
 		resizeMode: 'cover',
+	},
+	previewDismissButton: {
+		position: 'absolute',
+		top: 12,
+		right: 12,
+		width: 34,
+		height: 34,
+		borderRadius: 17,
+		borderWidth: 1,
+		alignItems: 'center',
+		justifyContent: 'center',
+	},
+	previewActionRow: {
+		flexDirection: 'row',
+		flexWrap: 'wrap',
+		marginBottom: 12,
+		...gapStyle(10),
+	},
+	previewActionButton: {
+		flexDirection: 'row',
+		alignItems: 'center',
+		borderWidth: 1,
+		borderRadius: 999,
+		paddingHorizontal: 14,
+		paddingVertical: 10,
+		...gapStyle(8),
 	},
 	mapPreview: {
 		width: '100%',

@@ -17,10 +17,11 @@ import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { initDeepLinking } from '@/services/deepLinking';
 import { initAnalytics } from '@/services/analytics';
-import { refreshFirebaseAppCheckToken } from '@/services/firebaseAppCheck';
+import { refreshFirebaseAppCheckToken, seedCachedAppCheckToken } from '@/services/firebaseAppCheck';
+import { primeProviderProxyAccess } from '@/services/providerProxy';
 import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
-import { savePushToken } from '@/services/firebaseClient';
+import { savePushToken, seedCachedIdToken } from '@/services/firebaseClient';
 import { AppHeader } from '@/components/ui/app-header';
 import { devLog } from '@/services/logger';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
@@ -158,6 +159,24 @@ function InnerApp() {
       void learnUserPreferences(user.id);
     });
     return () => task.cancel();
+  }, [user?.id]);
+
+  // Seed cached auth tokens from AsyncStorage as early as possible so that
+  // the first proxy request on cold start can use them immediately.
+  useEffect(() => {
+    void seedCachedIdToken();
+    void seedCachedAppCheckToken();
+  }, []);
+
+  // Prime proxy access immediately when a signed-in user is detected.
+  // Do NOT delay behind InteractionManager — cold-start proxy readiness
+  // is the #1 cause of "warming up" / broken place search in TestFlight.
+  useEffect(() => {
+    const userId = user?.id;
+    if (!userId || isDemoMode()) return;
+
+    void primeProviderProxyAccess(true);
+    void refreshFirebaseAppCheckToken(true);
   }, [user?.id]);
 
   useEffect(() => {

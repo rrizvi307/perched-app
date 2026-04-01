@@ -33,6 +33,12 @@ const OPTIONAL_SECRETS = [
   'REVENUECAT_PUBLIC_KEY',
   'PLACE_INTEL_ENDPOINT',
 ];
+const REQUIRED_SUBMISSION_FLAGS = [
+  'REQUIRE_AUTH_SMOKE_CHECK',
+  'REQUIRE_PLACE_PROVIDER_SMOKE_CHECK',
+  'REQUIRE_PROXY_ONLY_PARITY',
+  'REQUIRE_POST_DEPLOY_SMOKE_CHECK',
+];
 
 function parseDotenv(content) {
   const output = {};
@@ -90,6 +96,46 @@ function isTruthy(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
+function isSubmissionEnv(env) {
+  return String(env?.ENV || '').trim().toLowerCase() === 'production';
+}
+
+function isProxyOnlyEnabled(env) {
+  return isTruthy(env?.FORCE_PROXY_ONLY) || isTruthy(env?.EXPO_PUBLIC_FORCE_PROXY_ONLY);
+}
+
+function evaluateSubmissionGate(env) {
+  const errors = [];
+
+  if (!isSubmissionEnv(env)) {
+    errors.push('ENV=production is required for the App Store submission gate.');
+  }
+
+  for (const key of REQUIRED_SUBMISSION_FLAGS) {
+    if (!isTruthy(env?.[key])) {
+      errors.push(`${key}=true is required for the App Store submission gate.`);
+    }
+  }
+
+  if (!isSet(env?.SMOKE_TEST_EMAIL)) {
+    errors.push('SMOKE_TEST_EMAIL is required for the App Store submission gate.');
+  }
+
+  if (!isSet(env?.SMOKE_TEST_PASSWORD)) {
+    errors.push('SMOKE_TEST_PASSWORD is required for the App Store submission gate.');
+  }
+
+  if (!isProxyOnlyEnabled(env)) {
+    errors.push('FORCE_PROXY_ONLY=true or EXPO_PUBLIC_FORCE_PROXY_ONLY=true is required for the App Store submission gate.');
+  }
+
+  return {
+    errors,
+    proxyOnlyEnabled: isProxyOnlyEnabled(env),
+    hasSmokeCredentials: isSet(env?.SMOKE_TEST_EMAIL) && isSet(env?.SMOKE_TEST_PASSWORD),
+  };
+}
+
 function runStep(name, cmd, args) {
   process.stdout.write(`\n[preflight] ${name}\n`);
   const result = spawnSync(cmd, args, {
@@ -141,6 +187,19 @@ function main() {
     ...process.env,
   };
 
+  process.stdout.write('[preflight] validating App Store submission gate\n');
+  const submissionGate = evaluateSubmissionGate(merged);
+  if (submissionGate.errors.length > 0) {
+    process.stderr.write('[preflight] submission gate is not configured:\n');
+    for (const error of submissionGate.errors) {
+      process.stderr.write(`- ${error}\n`);
+    }
+    process.stderr.write(
+      '\nSet the required smoke credentials and release flags before cutting or submitting a build.\n'
+    );
+    process.exit(1);
+  }
+
   const missingRequired = REQUIRED_SECRETS.filter((key) => !isSet(merged[key]));
   const missingOptional = OPTIONAL_SECRETS.filter((key) => !isSet(merged[key]));
 
@@ -181,19 +240,33 @@ function main() {
     process.stderr.write('[preflight] resolved Expo config is missing extra.ENV\n');
     process.exit(1);
   }
-  if (resolvedEnv === 'development') {
-    process.stdout.write('[preflight] warning: resolved Expo ENV is "development". Confirm this is intentional for the release build.\n');
+  if (resolvedEnv.toLowerCase() !== 'production') {
+    process.stderr.write(
+      `[preflight] resolved Expo ENV must be "production" for submission builds, found "${resolvedEnv}".\n`
+    );
+    process.exit(1);
   }
 
   runStep('TypeScript check', 'npm', ['run', 'typecheck']);
   runStep('Lint', 'npm', ['run', 'lint']);
   runStep('Tests', 'npm', ['run', 'test:unit', '--', '--runInBand']);
+  runStep('TestFlight readiness audit', 'npm', ['run', 'audit:testflight']);
+  runStep('App Store preflight', 'npm', ['run', 'appstore:preflight']);
 
-  const hasSmokeCredentials =
-    (isSet(merged.SMOKE_TEST_EMAIL) || isSet(merged.APP_REVIEW_EMAIL)) &&
-    (isSet(merged.SMOKE_TEST_PASSWORD) || isSet(merged.APP_REVIEW_PASSWORD));
+  const hasSmokeCredentials = submissionGate.hasSmokeCredentials;
   const requireAuthSmokeCheck = isTruthy(merged.REQUIRE_AUTH_SMOKE_CHECK);
   const requirePlaceProviderSmokeCheck = isTruthy(merged.REQUIRE_PLACE_PROVIDER_SMOKE_CHECK);
+  const requireProxyOnlyParity = isTruthy(merged.REQUIRE_PROXY_ONLY_PARITY);
+  const proxyOnlyEnabled = submissionGate.proxyOnlyEnabled;
+  const requirePostDeploySmokeCheck = isTruthy(merged.REQUIRE_POST_DEPLOY_SMOKE_CHECK);
+
+  if (requireProxyOnlyParity && !proxyOnlyEnabled) {
+    process.stderr.write(
+      '[preflight] proxy-only parity is required but FORCE_PROXY_ONLY/EXPO_PUBLIC_FORCE_PROXY_ONLY is not enabled.\n'
+    );
+    process.exit(1);
+  }
+  process.stdout.write('\n[preflight] proxy-only parity flag is enabled. Run the manual proxy-only app pass before cutting the build.\n');
 
   if (hasSmokeCredentials) {
     runStep('Firebase auth smoke check', 'npm', ['run', 'auth:smoke-check']);
@@ -203,9 +276,6 @@ function main() {
       '[preflight] auth smoke check required but SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are not set.\n'
     );
     process.exit(1);
-  } else {
-    process.stdout.write('\n[preflight] auth smoke check skipped: no smoke credentials set.\n');
-    process.stdout.write('[preflight] set SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD and REQUIRE_AUTH_SMOKE_CHECK=true to make this a hard gate.\n');
   }
 
   if (!hasSmokeCredentials && requirePlaceProviderSmokeCheck) {
@@ -215,7 +285,22 @@ function main() {
     process.exit(1);
   }
 
+  if (requirePostDeploySmokeCheck) {
+    runStep('Post-deploy smoke check', 'npm', ['run', 'post-deploy:smoke-check']);
+  }
+
   process.stdout.write('\n[preflight] release preflight passed\n');
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  evaluateSubmissionGate,
+  isProxyOnlyEnabled,
+  isSubmissionEnv,
+  isSet,
+  isTruthy,
+  parseDotenv,
+};

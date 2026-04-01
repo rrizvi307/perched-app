@@ -78,18 +78,22 @@ Please re-review this submission. Thank you.
 ## Related Submission Docs
 
 - App Store metadata and reviewer notes: [app-store.md](./app-store.md)
+- TestFlight consumer launch audit: [testflight-readiness-audit.md](./testflight-readiness-audit.md)
 - Current release tracker: [release-readiness.md](./release-readiness.md)
 - Privacy and terms copy: [privacy-policy.md](./privacy-policy.md), [terms-of-service.md](./terms-of-service.md)
 
 ## Command Gate
 
 ```bash
+npm run audit:testflight
 npm run appstore:preflight
 npm run check:all
 npm run preflight
 ```
 
-For a hard release gate, set `SMOKE_TEST_EMAIL`, `SMOKE_TEST_PASSWORD`, and `REQUIRE_AUTH_SMOKE_CHECK=true` before running `npm run preflight`.
+`npm run preflight` is the hard App Store submission gate.
+It will fail unless all of the following are set for the candidate build: `ENV=production`, `SMOKE_TEST_EMAIL`, `SMOKE_TEST_PASSWORD`, `REQUIRE_AUTH_SMOKE_CHECK=true`, `REQUIRE_PLACE_PROVIDER_SMOKE_CHECK=true`, `REQUIRE_PROXY_ONLY_PARITY=true`, `REQUIRE_POST_DEPLOY_SMOKE_CHECK=true`, and `FORCE_PROXY_ONLY=true` or `EXPO_PUBLIC_FORCE_PROXY_ONLY=true`.
+Use a dedicated production smoke-test account, not reviewer credentials, for these checks.
 
 ## Public Repo Safety
 
