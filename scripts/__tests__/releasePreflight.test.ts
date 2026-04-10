@@ -1,5 +1,6 @@
 const {
   evaluateSubmissionGate,
+  getPostDeploySmokeArgs,
   isProxyOnlyEnabled,
   isSubmissionEnv,
 } = require('../release-preflight.js');
@@ -78,5 +79,36 @@ describe('release preflight helpers', () => {
     expect(isSubmissionEnv({ ENV: 'production' })).toBe(true);
     expect(isSubmissionEnv({ ENV: 'Production' })).toBe(true);
     expect(isSubmissionEnv({ ENV: 'development' })).toBe(false);
+  });
+
+  it('forwards local service-account and project args to post-deploy smoke checks', () => {
+    expect(
+      getPostDeploySmokeArgs({
+        POST_DEPLOY_SERVICE_ACCOUNT: '/tmp/perched-smoke.json',
+        FIREBASE_PROJECT_ID: 'spot-app-ce2d8',
+      }),
+    ).toEqual([
+      'run',
+      'post-deploy:smoke-check',
+      '--',
+      '--service-account',
+      '/tmp/perched-smoke.json',
+      '--project',
+      'spot-app-ce2d8',
+    ]);
+  });
+
+  it('falls back to GOOGLE_APPLICATION_CREDENTIALS when no explicit post-deploy path is set', () => {
+    expect(
+      getPostDeploySmokeArgs({
+        GOOGLE_APPLICATION_CREDENTIALS: '/tmp/application-default.json',
+      }),
+    ).toEqual([
+      'run',
+      'post-deploy:smoke-check',
+      '--',
+      '--service-account',
+      '/tmp/application-default.json',
+    ]);
   });
 });

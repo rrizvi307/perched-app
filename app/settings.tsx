@@ -7,6 +7,7 @@ import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
+import { getAnalyticsConsent, setAnalyticsConsent } from '@/services/analyticsConsent';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
@@ -32,10 +33,11 @@ export default function SettingsScreen() {
   const highlight = withAlpha(primary, 0.1);
 
   const extra = ((Constants.expoConfig as any)?.extra || {}) as Record<string, any>;
-  const supportEmail = (extra.SUPPORT_EMAIL as string) || 'support@perched.app';
+  const supportEmail = (extra.SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
 
   const [notificationsEnabled, setNotificationsEnabledState] = useState(false);
   const [locationEnabled, setLocationEnabledState] = useState(true);
+  const [analyticsEnabled, setAnalyticsEnabledState] = useState(true);
   const fbAvailable = isFirebaseConfigured();
   const locationToggleInFlight = useRef(false);
 
@@ -44,11 +46,14 @@ export default function SettingsScreen() {
       try {
         const notifications = await getNotificationsEnabled();
         const location = await getLocationEnabled();
+        const analytics = await getAnalyticsConsent();
         setNotificationsEnabledState(!!notifications);
         setLocationEnabledState(!!location);
+        setAnalyticsEnabledState(analytics !== false);
       } catch {
         setNotificationsEnabledState(false);
         setLocationEnabledState(true);
+        setAnalyticsEnabledState(true);
       }
     })();
   }, []);
@@ -161,6 +166,21 @@ export default function SettingsScreen() {
             value={locationEnabled ? 'On' : 'Off'}
             enabled={locationEnabled}
             onToggle={toggleLocation}
+            borderColor={border}
+            highlight={highlight}
+            textColor={text}
+            mutedColor={muted}
+          />
+          <SettingToggleRow
+            label="Analytics & Crash Reports"
+            value={analyticsEnabled ? 'On' : 'Off'}
+            enabled={analyticsEnabled}
+            onToggle={async () => {
+              const next = !analyticsEnabled;
+              setAnalyticsEnabledState(next);
+              await setAnalyticsConsent(next);
+              showToast(next ? 'Analytics enabled. Takes effect on next launch.' : 'Analytics disabled. Takes effect on next launch.', 'info');
+            }}
             borderColor={border}
             highlight={highlight}
             textColor={text}

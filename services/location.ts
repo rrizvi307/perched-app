@@ -170,8 +170,11 @@ export async function requestForegroundLocationWithStatus(options?: { ignoreCach
           return { coords: lastKnown, state: { ...perm, servicesEnabled, error: null } };
         }
       }
+      const requestedAccuracy = options?.preferFresh
+        ? (ExpoLocation.Accuracy?.High ?? ExpoLocation.Accuracy?.Balanced ?? undefined)
+        : (ExpoLocation.Accuracy?.Balanced ?? undefined);
       const pos = await ExpoLocation.getCurrentPositionAsync({
-        accuracy: ExpoLocation.Accuracy?.Balanced ?? undefined,
+        accuracy: requestedAccuracy,
       });
       const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       cached = { coords, ts: Date.now() };

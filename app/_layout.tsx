@@ -23,6 +23,8 @@ import { learnUserPreferences } from '@/services/recommendations';
 import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
 import { savePushToken, seedCachedIdToken } from '@/services/firebaseClient';
 import { AppHeader } from '@/components/ui/app-header';
+import { AnalyticsConsentDialog } from '@/components/analytics-consent';
+import { seedAnalyticsConsent, isAnalyticsConsentGranted } from '@/services/analyticsConsent';
 import { devLog } from '@/services/logger';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { getExpoFirebaseConfig } from '@/services/expoConfig';
@@ -36,12 +38,17 @@ const APP_LAUNCH_MARK_ID = startPerfMark('app_launch_total');
 export default function RootLayout() {
   useEffect(() => {
     const initMarkId = startPerfMark('app_init_services');
-    try {
-      initErrorReporting();
-      initAnalytics();
-    } finally {
-      void endPerfMark(initMarkId, true);
-    }
+    void (async () => {
+      try {
+        await seedAnalyticsConsent();
+        initErrorReporting();
+        if (isAnalyticsConsentGranted()) {
+          initAnalytics();
+        }
+      } finally {
+        void endPerfMark(initMarkId, true);
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -339,6 +346,7 @@ function InnerApp() {
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal', headerShown: true }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+      <AnalyticsConsentDialog />
     </ThemeProvider>
   );
 }

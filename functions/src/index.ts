@@ -3521,6 +3521,21 @@ async function fetchJsonResponseWithTimeout(url: string, init: RequestInit, time
   }
 }
 
+function readGoogleApiErrorMessage(payload: any, fallback: string): string {
+  const explicit =
+    (typeof payload?.error?.message === 'string' && payload.error.message.trim()) ||
+    (typeof payload?.error_message === 'string' && payload.error_message.trim()) ||
+    (typeof payload?.message === 'string' && payload.message.trim()) ||
+    '';
+  return explicit || fallback;
+}
+
+function readLegacyGoogleStatusError(payload: any): string | null {
+  const status = typeof payload?.status === 'string' ? payload.status.trim().toUpperCase() : '';
+  if (!status || status === 'OK' || status === 'ZERO_RESULTS') return null;
+  return readGoogleApiErrorMessage(payload, `Google Maps API returned ${status}`);
+}
+
 function parseExternalSignals(payload: unknown): ExternalPlaceSignal[] {
   if (!Array.isArray(payload)) return [];
   return payload.filter(Boolean);
@@ -3639,6 +3654,7 @@ async function searchGoogleTextServer(
 
   const effectiveLimit = clampGooglePlacesLimit(limit, 6);
   const radiusMeters = Math.max(100, Math.min(50000, Math.round(toFiniteNumber(bias?.radiusMeters) ?? 8000)));
+  let upstreamError: string | null = null;
 
   try {
     const response = await fetchJsonResponseWithTimeout(
@@ -3672,6 +3688,14 @@ async function searchGoogleTextServer(
     );
     const proxied = normalizeGooglePlacesResponse(response?.json?.places, effectiveLimit);
     if (response?.ok && proxied.length) return proxied;
+    if (response && !response.ok) {
+      upstreamError = readGoogleApiErrorMessage(
+        response.json,
+        `Google Places searchText failed with status ${response.status}`,
+      );
+    } else if (!response) {
+      upstreamError = 'Google Places searchText request failed.';
+    }
   } catch {}
 
   const params = new URLSearchParams({
@@ -3683,12 +3707,33 @@ async function searchGoogleTextServer(
     params.set('location', `${bias.lat},${bias.lng}`);
     params.set('radius', String(radiusMeters));
   }
-  const legacy = await fetchJsonWithTimeout(
+  const legacy = await fetchJsonResponseWithTimeout(
     `https://maps.googleapis.com/maps/api/place/textsearch/json?${params.toString()}`,
     { method: 'GET', headers: { Accept: 'application/json' } },
     3200,
   );
-  return normalizeGooglePlacesResponse((legacy as any)?.results, effectiveLimit);
+  const legacyError = readLegacyGoogleStatusError(legacy?.json);
+  const legacyResults = normalizeGooglePlacesResponse((legacy?.json as any)?.results, effectiveLimit);
+  if (legacy?.ok && !legacyError) {
+    if (legacyResults.length) return legacyResults;
+    return [];
+  }
+  if (!upstreamError) {
+    if (legacyError) {
+      upstreamError = legacyError;
+    } else if (legacy && !legacy.ok) {
+      upstreamError = readGoogleApiErrorMessage(
+        legacy.json,
+        `Google Maps text search failed with status ${legacy.status}`,
+      );
+    } else if (!legacy) {
+      upstreamError = 'Google Maps text search request failed.';
+    }
+  }
+  if (upstreamError) {
+    throw new Error(upstreamError);
+  }
+  return [];
 }
 
 async function fetchGooglePlaceDetailsServer(placeId: string): Promise<GooglePlaceResult | null> {
@@ -3731,11 +3776,13 @@ async function searchGoogleNearbyServer(
   const key = await getGoogleMapsKeyServer();
   if (!key) return [];
   const normalizedRadius = Math.max(100, Math.min(50000, Math.round(toFiniteNumber(radius) ?? 1500)));
+  const includedTypes = intent === 'study'
+    ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
+    : undefined;
+  const rankPreference = intent === 'study' ? 'POPULARITY' : 'DISTANCE';
+  let upstreamError: string | null = null;
 
   try {
-    const includedTypes = intent === 'study'
-      ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
-      : undefined;
     const response = await fetchJsonResponseWithTimeout(
       'https://places.googleapis.com/v1/places:searchNearby',
       {
@@ -3753,7 +3800,7 @@ async function searchGoogleNearbyServer(
             },
           },
           includedTypes,
-          rankPreference: 'POPULARITY',
+          rankPreference,
           maxResultCount: 20,
           languageCode: 'en',
         }),
@@ -3762,15 +3809,44 @@ async function searchGoogleNearbyServer(
     );
     const payload = normalizeGooglePlacesResponse(response?.json?.places, 20);
     if (response?.ok && payload.length) return payload;
+    if (response && !response.ok) {
+      upstreamError = readGoogleApiErrorMessage(
+        response.json,
+        `Google Places searchNearby failed with status ${response.status}`,
+      );
+    } else if (!response) {
+      upstreamError = 'Google Places searchNearby request failed.';
+    }
   } catch {}
 
   const keyword = intent === 'study' ? '&keyword=study%20cafe%20coffee%20library%20coworking' : '';
-  const legacy = await fetchJsonWithTimeout(
+  const legacy = await fetchJsonResponseWithTimeout(
     `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${normalizedRadius}${keyword}&key=${key}&language=en`,
     { method: 'GET', headers: { Accept: 'application/json' } },
     3200,
   );
-  return normalizeGooglePlacesResponse((legacy as any)?.results, 20);
+  const legacyError = readLegacyGoogleStatusError(legacy?.json);
+  const legacyResults = normalizeGooglePlacesResponse((legacy?.json as any)?.results, 20);
+  if (legacy?.ok && !legacyError) {
+    if (legacyResults.length) return legacyResults;
+    return [];
+  }
+  if (!upstreamError) {
+    if (legacyError) {
+      upstreamError = legacyError;
+    } else if (legacy && !legacy.ok) {
+      upstreamError = readGoogleApiErrorMessage(
+        legacy.json,
+        `Google Maps nearby search failed with status ${legacy.status}`,
+      );
+    } else if (!legacy) {
+      upstreamError = 'Google Maps nearby search request failed.';
+    }
+  }
+  if (upstreamError) {
+    throw new Error(upstreamError);
+  }
+  return [];
 }
 
 async function reverseGeocodeCityServer(lat: number, lng: number): Promise<string | null> {
@@ -5629,3 +5705,60 @@ function capitalize(str: string): string {
   if (!str) return '';
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
+
+// ---------------------------------------------------------------------------
+// Auth deletion safety-net: clean up Firestore + Storage when an Auth record
+// is deleted (covers console deletions, admin SDK, or client-side deletion
+// where the client cleanup was incomplete).
+// ---------------------------------------------------------------------------
+export const onUserDeleted = functions.auth.user().onDelete(async (user) => {
+  const userId = user.uid;
+  logger.info({ event: 'auth_user_deleted', userId });
+
+  const deleteQuery = async (collection: string, field: string, value: string) => {
+    const snap = await db.collection(collection).where(field, '==', value).limit(500).get();
+    if (snap.empty) return;
+    const batch = db.batch();
+    snap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  };
+
+  // Firestore cleanup (best-effort, continue on errors).
+  const collections = [
+    { col: 'checkins', field: 'userId' },
+    { col: 'comments', field: 'userId' },
+    { col: 'reactions', field: 'userId' },
+    { col: 'checkinResponses', field: 'userId' },
+    { col: 'checkinResponses', field: 'ownerId' },
+    { col: 'friendRequests', field: 'fromId' },
+    { col: 'friendRequests', field: 'toId' },
+    { col: 'reports', field: 'reporterId' },
+  ];
+  for (const { col, field } of collections) {
+    try { await deleteQuery(col, field, userId); } catch (e) {
+      logger.warn({ event: 'cleanup_error', userId, collection: col, error: String(e) });
+    }
+  }
+
+  // Profile documents.
+  const profileCollections = [
+    USERS_COLLECTION, PUBLIC_PROFILES_COLLECTION, SOCIAL_GRAPH_COLLECTION,
+    USER_PRIVATE_COLLECTION, PUSH_TOKENS_COLLECTION,
+  ];
+  await Promise.allSettled(
+    profileCollections.map((col) => db.collection(col).doc(userId).delete()),
+  );
+
+  // Storage cleanup.
+  const bucket = admin.storage().bucket();
+  const prefixes = [`checkins/${userId}/`, `profiles/${userId}/`];
+  for (const prefix of prefixes) {
+    try {
+      await bucket.deleteFiles({ prefix, force: true });
+    } catch (e) {
+      logger.warn({ event: 'storage_cleanup_error', userId, prefix, error: String(e) });
+    }
+  }
+
+  logger.info({ event: 'auth_user_cleanup_complete', userId });
+});

@@ -49,14 +49,19 @@ export async function withErrorBoundary<T>(
     return result;
   } catch (error) {
     const details = normalizeError(error);
-    console.error('[service-error]', {
+    const payload = {
       operation,
       durationMs: Date.now() - startedAt,
       hasFallback,
       errorName: details.name,
       errorMessage: details.message,
       errorStack: details.stack,
-    });
+    };
+    if (hasFallback) {
+      console.warn('[service-fallback]', payload);
+    } else {
+      console.error('[service-error]', payload);
+    }
     void recordPerfMetric(operation, Date.now() - startedAt, false);
 
     if (hasFallback) {

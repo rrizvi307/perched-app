@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/react-native';
 import * as Device from 'expo-device';
 import * as Updates from 'expo-updates';
 import { getExpoExtraString } from './expoConfig';
+import { isAnalyticsConsentGranted } from './analyticsConsent';
 
 const SENTRY_DSN = getExpoExtraString('SENTRY_DSN') || '';
 const ENV = getExpoExtraString('ENV') || 'development';
@@ -10,6 +11,9 @@ let initialized = false;
 
 export function initSentry() {
 	if (initialized || !SENTRY_DSN) {
+		return;
+	}
+	if (!isAnalyticsConsentGranted()) {
 		return;
 	}
 

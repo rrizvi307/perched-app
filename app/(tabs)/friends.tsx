@@ -35,6 +35,7 @@ import {
   declineFriendRequest,
   getUsersByIdsCached,
   unfollowUserRemote,
+  getBlockedUsers,
 } from '@/services/firebaseClient';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { devLog } from '@/services/logger';
@@ -97,6 +98,7 @@ export default function FriendsScreen() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const friendIdSetRef = useRef<Set<string>>(new Set());
+  const blockedIdSetRef = useRef<Set<string>>(new Set());
 
   const markBusy = (id: string) =>
     setBusyIds((prev) => new Set(prev).add(id));
@@ -115,6 +117,13 @@ export default function FriendsScreen() {
       if (!silent) setLoading(true);
 
       try {
+        // Load blocked users to filter them out of all lists.
+        try {
+          const blocked = await getBlockedUsers(user.id);
+          blockedIdSetRef.current = new Set(blocked);
+        } catch {}
+        const isBlocked = (id: string) => blockedIdSetRef.current.has(id);
+
         const campus = user.campus || user.campusOrCity;
         const secureSnapshot = await getSocialGraphSnapshotSecure(campus, 10);
         if (secureSnapshot) {
@@ -136,14 +145,16 @@ export default function FriendsScreen() {
 
           friendIdSetRef.current = new Set(secureFriendIds);
           setOutgoingIds(new Set(secureOutgoing.map((request: any) => request.toId)));
-          setFriends(secureFriendIds.map((id) => profileMap[id]).filter(Boolean));
+          setFriends(secureFriendIds.map((id) => profileMap[id]).filter((f) => f && !isBlocked(f.id)));
           setIncomingReqs(
-            secureIncoming.map((request: any) => ({
-              id: request.id,
-              fromId: request.fromId,
-              toId: request.toId,
-              user: profileMap[request.fromId],
-            })),
+            secureIncoming
+              .filter((request: any) => !isBlocked(request.fromId))
+              .map((request: any) => ({
+                id: request.id,
+                fromId: request.fromId,
+                toId: request.toId,
+                user: profileMap[request.fromId],
+              })),
           );
           setOutgoingReqs(
             secureOutgoing.map((request: any) => ({
@@ -154,13 +165,15 @@ export default function FriendsScreen() {
             })),
           );
           setSuggestions(
-            (secureSnapshot.suggestions || []).map((profile: any) => ({
-              id: profile.id,
-              name: profile.name || 'Unknown',
-              handle: profile.handle,
-              photoUrl: profile.photoUrl || profile.avatarUrl,
-              campus: profile.campus || profile.campusOrCity,
-            })),
+            (secureSnapshot.suggestions || [])
+              .filter((profile: any) => !isBlocked(profile.id))
+              .map((profile: any) => ({
+                id: profile.id,
+                name: profile.name || 'Unknown',
+                handle: profile.handle,
+                photoUrl: profile.photoUrl || profile.avatarUrl,
+                campus: profile.campus || profile.campusOrCity,
+              })),
           );
           return;
         }

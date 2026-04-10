@@ -61,4 +61,4 @@ We may update these Terms. Continued use after updates means you accept the revi
 
 ## 10. Contact
 
-Questions about these Terms: `support@perched.app`
+Questions about these Terms: `perchedappteam@gmail.com`

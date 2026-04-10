@@ -14,6 +14,8 @@
 
 import Constants from 'expo-constants';
 
+let hasWarnedMissingOpenAIKey = false;
+
 export interface ReviewNLPResult {
   inferredNoise: 'quiet' | 'moderate' | 'loud' | null;
   inferredNoiseConfidence: number;  // 0-1
@@ -74,7 +76,10 @@ export async function analyzeReviews(
   try {
     const openaiKey = getOpenAIKey();
     if (!openaiKey) {
-      console.warn('OpenAI API key not configured, skipping NLP analysis');
+      if (isClientReviewNlpEnabled() && !hasWarnedMissingOpenAIKey) {
+        hasWarnedMissingOpenAIKey = true;
+        console.warn('OpenAI API key not configured, skipping NLP analysis');
+      }
       return getEmptyResult();
     }
 
@@ -251,16 +256,18 @@ function clamp(value: number, min: number, max: number): number {
  * Get OpenAI API key from config
  */
 function getOpenAIKey(): string | null {
+  if (!isClientReviewNlpEnabled()) return null;
+  const expoKey = (Constants.expoConfig as any)?.extra?.OPENAI_API_KEY;
+  const globalKey = (global as any)?.OPENAI_API_KEY;
+  return expoKey || globalKey || null;
+}
+
+function isClientReviewNlpEnabled(): boolean {
   const raw =
     (process.env.EXPO_PUBLIC_ENABLE_CLIENT_PROVIDER_CALLS as string) ||
     (process.env.ENABLE_CLIENT_PROVIDER_CALLS as string) ||
     '';
-  const allowClientProviderCalls = !!__DEV__ && ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
-  if (!allowClientProviderCalls) return null;
-
-  const expoKey = (Constants.expoConfig as any)?.extra?.OPENAI_API_KEY;
-  const globalKey = (global as any)?.OPENAI_API_KEY;
-  return expoKey || globalKey || null;
+  return !!__DEV__ && ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
 }
 
 /**

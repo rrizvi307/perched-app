@@ -20,6 +20,7 @@ import {
   getUsersByCampus,
   getUserFriends,
   getOutgoingFriendRequests,
+  getBlockedUsers,
 } from '@/services/firebaseClient';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { logEvent } from '@/services/logEvent';
@@ -79,17 +80,19 @@ export default function FindFriendsScreen() {
         return;
       }
 
-      const [campusUsers, currentFriends, outgoingRequests] = await Promise.all([
+      const [campusUsers, currentFriends, outgoingRequests, blockedIds] = await Promise.all([
         getUsersByCampus(campus, 30),
         getUserFriends(user.id),
         getOutgoingFriendRequests(user.id),
+        getBlockedUsers(user.id).catch(() => [] as string[]),
       ]);
 
       const friendSet = new Set(currentFriends);
       const pendingSet = new Set(outgoingRequests.map((r: any) => r.toId));
+      const blockedSet = new Set(blockedIds);
 
       const suggestions = campusUsers
-        .filter((u: any) => u.id !== user.id)
+        .filter((u: any) => u.id !== user.id && !blockedSet.has(u.id))
         .map((u: any) => ({
           id: u.id,
           name: u.name || 'Unknown',
@@ -175,19 +178,21 @@ export default function FindFriendsScreen() {
       }
 
       if (foundUsers.length > 0) {
-        const [currentFriends, outgoingRequests] = await Promise.all([
+        const [currentFriends, outgoingRequests, blockedIds] = await Promise.all([
           getUserFriends(user.id),
           getOutgoingFriendRequests(user.id),
+          getBlockedUsers(user.id).catch(() => [] as string[]),
         ]);
 
         const friendSet = new Set(currentFriends);
         const pendingSet = new Set(outgoingRequests.map((r: any) => r.toId));
+        const blockedSet = new Set(blockedIds);
 
-        // Deduplicate by id
+        // Deduplicate by id and filter blocked users
         const seen = new Set<string>();
         const results: UserResult[] = [];
         for (const u of foundUsers) {
-          if (seen.has(u.id)) continue;
+          if (seen.has(u.id) || blockedSet.has(u.id)) continue;
           seen.add(u.id);
           results.push({
             id: u.id,

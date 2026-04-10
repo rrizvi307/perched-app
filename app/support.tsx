@@ -16,7 +16,7 @@ export default function Support() {
   const border = useThemeColor({}, 'border');
   const primary = useThemeColor({}, 'primary');
   const { showToast } = useToast();
-  const supportEmail = ((Constants.expoConfig as any)?.extra?.SUPPORT_EMAIL as string) || 'support@perched.app';
+  const supportEmail = ((Constants.expoConfig as any)?.extra?.SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
   const instagramUrl = ((Constants.expoConfig as any)?.extra?.INSTAGRAM_URL as string) || '';
   const tiktokUrl = ((Constants.expoConfig as any)?.extra?.TIKTOK_URL as string) || '';
 

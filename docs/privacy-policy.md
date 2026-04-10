@@ -81,7 +81,7 @@ You can:
 - Control check-in visibility.
 - Opt out of non-essential analytics where available.
 
-To submit a request, contact `support@perched.app`.
+To submit a request, contact `perchedappteam@gmail.com`.
 
 ## 7. Security
 
@@ -97,4 +97,4 @@ We may update this Privacy Policy from time to time. Material updates will be re
 
 ## 10. Contact
 
-For privacy questions or requests: `support@perched.app`
+For privacy questions or requests: `perchedappteam@gmail.com`

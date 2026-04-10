@@ -35,7 +35,7 @@ Support links:
 
 - Privacy: `perched.app/privacy`
 - Terms: `perched.app/terms`
-- Support: `support@perched.app`
+- Support: `perchedappteam@gmail.com`
 
 ## Reviewer Notes Template
 

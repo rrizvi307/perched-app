@@ -3429,6 +3429,18 @@ export async function deleteAccountAndData({ password }: { password?: string } =
       await deleteDocsByQuery(() => db.collection('checkinResponses').where('ownerId', '==', userId));
     } catch {}
 
+    // Delete user files from Firebase Storage (photos, profile images).
+    try {
+      const storage = fb.storage();
+      const prefixes = [`checkins/${userId}`, `profiles/${userId}`];
+      for (const prefix of prefixes) {
+        try {
+          const listResult = await storage.ref(prefix).listAll();
+          await Promise.allSettled(listResult.items.map((item: any) => item.delete()));
+        } catch {}
+      }
+    } catch {}
+
     // Delete the user profile document last.
     try {
       await Promise.allSettled([

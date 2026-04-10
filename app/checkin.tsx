@@ -146,6 +146,7 @@ export default function CheckinScreen() {
 	const [showCameraPrimer, setShowCameraPrimer] = useState(false);
 	const [showLocationPrimer, setShowLocationPrimer] = useState(false);
 	const [showCelebration, setShowCelebration] = useState(false);
+	const [bootstrapReady, setBootstrapReady] = useState(false);
 	const activeRef = useRef(true);
 	const submittingRef = useRef(false);
 	const lastDetectRef = useRef<string | null>(null);
@@ -415,11 +416,13 @@ export default function CheckinScreen() {
 			const seen = await getPermissionPrimerSeen('camera');
 			if (!seen) {
 				setShowCameraPrimer(true);
+				setBootstrapReady(true);
 				return;
 			}
 			const cam = await ImagePicker.requestCameraPermissionsAsync();
 			setHasPermission(cam.status === 'granted');
 			await ImagePicker.requestMediaLibraryPermissionsAsync();
+			setBootstrapReady(true);
 		})();
 		logEvent('checkin_started', user?.id);
 	}, [openCamera, user?.id]);
@@ -516,16 +519,17 @@ export default function CheckinScreen() {
 		return R * c;
 	}
 
-		const autoDetectPlace = useCallback(async () => {
-			if (!image || detecting) return;
-			if (lastDetectRef.current === image) return;
-			lastDetectRef.current = image;
+		const autoDetectPlace = useCallback(async (options?: { allowWithoutImage?: boolean; detectionKey?: string }) => {
+			const detectionKey = options?.detectionKey || (image ? `image:${image}` : 'screen_prefetch');
+			if ((!image && !options?.allowWithoutImage) || detecting) return;
+			if (lastDetectRef.current === detectionKey) return;
+			lastDetectRef.current = detectionKey;
 			setDetecting(true);
 			setDetectionError(null);
 			setDetectedCandidates([]);
 		try {
-			const exifLoc = exifToLocation(imageExif);
-			const loc = exifLoc || (await requestForegroundLocation());
+			const exifLoc = image ? exifToLocation(imageExif) : null;
+			const loc = exifLoc || (await requestForegroundLocation({ ignoreCache: true, preferFresh: true }));
 			await primeProviderProxyAccess(true);
 			// Fast-path demo detection when demo mode is active so auto-detect appears instantly in recordings
 				try {
@@ -555,7 +559,7 @@ export default function CheckinScreen() {
 					setDetecting(false);
 					return;
 				}
-			const primary = await searchPlacesNearbyResponse(loc.lat, loc.lng, 220);
+			const primary = await searchPlacesNearbyResponse(loc.lat, loc.lng, 220, 'general');
 			let results = [...primary.places];
 			if (results.length < 3) {
 				const fallback = await searchPlacesNearbyResponse(loc.lat, loc.lng, 800, 'general');
@@ -610,6 +614,14 @@ export default function CheckinScreen() {
 			setDetecting(false);
 		}
 	}, [image, detecting, imageExif, user?.id, spot, placeInfo, detectionThreshold]);
+
+	useEffect(() => {
+		if (!bootstrapReady) return;
+		if (showCameraPrimer) return;
+		if (isEditMode) return;
+		if (spot || placeInfo || detectedPlace || detecting) return;
+		void autoDetectPlace({ allowWithoutImage: true, detectionKey: 'screen_prefetch' });
+	}, [bootstrapReady, showCameraPrimer, isEditMode, spot, placeInfo, detectedPlace, detecting, autoDetectPlace]);
 
 	useEffect(() => {
 		if (!image) return;
@@ -1085,7 +1097,10 @@ export default function CheckinScreen() {
 							setShowLocationPrimer(false);
 							await setPermissionPrimerSeen('location', true);
 							lastDetectRef.current = null;
-							await autoDetectPlace();
+							await autoDetectPlace({
+								allowWithoutImage: true,
+								detectionKey: image ? `image:${image}` : 'screen_prefetch_retry',
+							});
 						}}
 						onCancel={() => setShowLocationPrimer(false)}
 					/>

@@ -212,6 +212,46 @@ describe('googleMaps transport', () => {
     });
   });
 
+  it('uses distance-ranked general nearby search when direct Google fallback is needed', async () => {
+    (global as any).GOOGLE_MAPS_API_KEY = 'maps-key';
+    (global as any).fetch = jest.fn(async (_url: string, init?: RequestInit) =>
+      mkFetchResponse({
+        places: [
+          {
+            id: 'general-nearby-1',
+            displayName: { text: 'Current Venue' },
+            location: { latitude: 29.72, longitude: -95.34 },
+            types: ['restaurant'],
+          },
+        ],
+      }),
+    );
+
+    const result = await searchPlacesNearbyResponse(29.72, -95.34, 1200, 'general');
+
+    expect(result.status).toBe('ok');
+    expect(result.places[0]).toEqual(
+      expect.objectContaining({
+        placeId: 'general-nearby-1',
+        name: 'Current Venue',
+      }),
+    );
+    expect((global as any).fetch).toHaveBeenCalledTimes(1);
+    expect((global as any).fetch.mock.calls[0][0]).toBe('https://places.googleapis.com/v1/places:searchNearby');
+    const [, requestInit] = (global as any).fetch.mock.calls[0];
+    expect(JSON.parse(requestInit.body)).toEqual({
+      locationRestriction: {
+        circle: {
+          center: { latitude: 29.72, longitude: -95.34 },
+          radius: 1200,
+        },
+      },
+      rankPreference: 'DISTANCE',
+      maxResultCount: 20,
+      languageCode: 'en',
+    });
+  });
+
   it('uses the backend proxy when App Check is available without auth', async () => {
     (global as any).FIREBASE_APP_CHECK_TOKEN = 'app-check-123';
     (global as any).fetch = jest.fn(async () =>

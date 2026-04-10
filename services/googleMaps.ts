@@ -64,6 +64,8 @@ export type PlaceSearchResponse = {
   diagnostics: PlaceSearchDiagnostics | null;
 };
 
+type NearbySearchIntent = 'study' | 'general';
+
 export function isSyntheticPlaceId(placeId?: string | null) {
   const normalized = typeof placeId === 'string' ? placeId.trim() : '';
   return normalized.startsWith('native:') || normalized.startsWith('top:');
@@ -599,14 +601,15 @@ async function runDirectSearchPlacesNearby(
   lat: number,
   lng: number,
   radius: number,
-  intent: 'study' | 'general',
+  intent: NearbySearchIntent,
 ): Promise<PlaceSearchResult[]> {
   const key = getMapsKey();
   if (!key) return [];
+  const includedTypes = intent === 'study'
+    ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
+    : undefined;
+  const rankPreference = intent === 'study' ? 'POPULARITY' : 'DISTANCE';
   try {
-    const includedTypes = intent === 'study'
-      ? ['cafe', 'coffee_shop', 'library', 'university', 'coworking_space']
-      : undefined;
     const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
       method: 'POST',
       headers: {
@@ -622,7 +625,7 @@ async function runDirectSearchPlacesNearby(
           },
         },
         includedTypes,
-        rankPreference: 'POPULARITY',
+        rankPreference,
         maxResultCount: 20,
         languageCode: 'en',
       }),
@@ -836,7 +839,7 @@ export async function searchPlacesNearbyResponse(
   lat: number,
   lng: number,
   radius = 1500,
-  intent: 'study' | 'general' = 'study',
+  intent: NearbySearchIntent = 'study',
   signal?: AbortSignal | null,
 ): Promise<PlaceSearchResponse> {
   const cacheKey = `nearby:${lat.toFixed(3)}:${lng.toFixed(3)}:${radius}:${intent}`;
@@ -902,7 +905,7 @@ export async function searchPlacesNearby(
   lat: number,
   lng: number,
   radius = 1500,
-  intent: 'study' | 'general' = 'study',
+  intent: NearbySearchIntent = 'study',
   signal?: AbortSignal | null,
 ): Promise<PlaceSearchResult[]> {
   const response = await searchPlacesNearbyResponse(lat, lng, radius, intent, signal);

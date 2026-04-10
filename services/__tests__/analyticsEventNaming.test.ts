@@ -36,6 +36,10 @@ jest.mock('../logEvent', () => ({
   logEvent: jest.fn(async () => {}),
 }));
 
+jest.mock('../analyticsConsent', () => ({
+  isAnalyticsConsentGranted: () => true,
+}));
+
 jest.unmock('../analytics');
 
 import { addBreadcrumb } from '../sentry';

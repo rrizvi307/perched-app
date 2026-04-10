@@ -133,16 +133,6 @@ export default function Verify() {
           <Text style={{ color: primary, fontWeight: '700' }}>Back to sign in</Text>
         </Pressable>
       </View>
-      {__DEV__ ? (
-        <Pressable
-          onPress={() => {
-            router.replace('/(tabs)/feed');
-          }}
-          style={{ marginTop: 14 }}
-        >
-          <Text style={{ color: primary, fontWeight: '600' }}>Continue without email (dev)</Text>
-        </Pressable>
-      ) : null}
     </ThemedView>
   );
 }

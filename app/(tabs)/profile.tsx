@@ -72,7 +72,7 @@ export default function ProfileScreen() {
   const muted = useThemeColor({}, 'muted');
   const highlight = withAlpha(primary, 0.1);
   const separator = withAlpha(textColor, 0.08);
-  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'support@perched.app';
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
   const [checkins, setCheckins] = useState<any[]>([]);
   const router = useRouter();
   const [, setFriendIds] = useState<string[]>([]);

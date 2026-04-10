@@ -104,6 +104,27 @@ function isProxyOnlyEnabled(env) {
   return isTruthy(env?.FORCE_PROXY_ONLY) || isTruthy(env?.EXPO_PUBLIC_FORCE_PROXY_ONLY);
 }
 
+function getPostDeploySmokeArgs(env) {
+  const args = ['run', 'post-deploy:smoke-check'];
+  const serviceAccountPath =
+    (isSet(env?.POST_DEPLOY_SERVICE_ACCOUNT) && env.POST_DEPLOY_SERVICE_ACCOUNT) ||
+    (isSet(env?.GOOGLE_APPLICATION_CREDENTIALS) && env.GOOGLE_APPLICATION_CREDENTIALS) ||
+    '';
+  const projectId = isSet(env?.FIREBASE_PROJECT_ID) ? env.FIREBASE_PROJECT_ID : '';
+  const extra = [];
+
+  if (serviceAccountPath) {
+    extra.push('--service-account', serviceAccountPath);
+  }
+  if (projectId) {
+    extra.push('--project', projectId);
+  }
+  if (extra.length > 0) {
+    args.push('--', ...extra);
+  }
+  return args;
+}
+
 function evaluateSubmissionGate(env) {
   const errors = [];
 
@@ -286,7 +307,7 @@ function main() {
   }
 
   if (requirePostDeploySmokeCheck) {
-    runStep('Post-deploy smoke check', 'npm', ['run', 'post-deploy:smoke-check']);
+    runStep('Post-deploy smoke check', 'npm', getPostDeploySmokeArgs(merged));
   }
 
   process.stdout.write('\n[preflight] release preflight passed\n');
@@ -298,6 +319,7 @@ if (require.main === module) {
 
 module.exports = {
   evaluateSubmissionGate,
+  getPostDeploySmokeArgs,
   isProxyOnlyEnabled,
   isSubmissionEnv,
   isSet,

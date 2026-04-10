@@ -26,6 +26,7 @@ import { isPhotoUriRenderable, resolvePhotoUri } from '@/services/photoSources';
 import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
 import SpotImage from '@/components/ui/spot-image';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ReportSheet, type ReportReason } from '@/components/report-sheet';
 import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
 import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
@@ -310,6 +311,7 @@ function FeedPhoto({
 	const [feedScope, setFeedScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
 		const [friendIds, setFriendIds] = useState<string[]>(() => (isDemoMode() ? [...DEMO_USER_IDS] : []));
 		const [blockedIds, setBlockedIds] = useState<string[]>([]);
+		const [reportTarget, setReportTarget] = useState<{ checkinId: string; userId?: string } | null>(null);
 		const summarizePending = useCallback(
 			(pending: any[]) => {
 				const scoped = user?.id ? pending.filter((p: any) => p?.userId === user.id) : pending;
@@ -1558,22 +1560,13 @@ function FeedPhoto({
 										hitSlop={8}
 										accessibilityRole="button"
 										accessibilityLabel={reportPending ? 'Reporting check-in' : 'Report this check-in'}
-										onPress={async () => {
+										onPress={() => {
 											if (!user?.id || !reactionCheckinId) {
 												showToast('You need to be signed in to report this check-in.', 'warning');
 												return;
 											}
 											if (!beginAction(reportActionKey)) return;
-											try {
-												await reportCheckinRemote(user.id, reactionCheckinId, 'feed_report', targetUserId || undefined);
-												setItems((prev) => prev.filter((candidate: any) => String(candidate?.id || candidate?.clientId || '') !== String(reactionCheckinId)));
-												showToast('Report submitted. This check-in was hidden from your feed.', 'success');
-											} catch (error) {
-												devLog('report action failed', error);
-												showToast('Unable to report this check-in right now.', 'error');
-											} finally {
-												endAction(reportActionKey);
-											}
+											setReportTarget({ checkinId: reactionCheckinId, userId: targetUserId || undefined });
 										}}
 										style={({ pressed }) => [
 											styles.footerButton,
@@ -1655,6 +1648,30 @@ function FeedPhoto({
 				onEndReached={loadMore}
 				onEndReachedThreshold={0.5}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadLatest} />}
+			/>
+			<ReportSheet
+				visible={!!reportTarget}
+				onCancel={() => {
+					if (reportTarget) {
+						endAction(`report:${reportTarget.checkinId || 'none'}`);
+					}
+					setReportTarget(null);
+				}}
+				onSubmit={async (reason: ReportReason, description: string) => {
+					if (!reportTarget || !user?.id) return;
+					const { checkinId, userId: reportedUserId } = reportTarget;
+					setReportTarget(null);
+					try {
+						await reportCheckinRemote(user.id, checkinId, `${reason}${description ? `: ${description}` : ''}`, reportedUserId);
+						setItems((prev) => prev.filter((candidate: any) => String(candidate?.id || candidate?.clientId || '') !== String(checkinId)));
+						showToast('Report submitted. This check-in was hidden from your feed.', 'success');
+					} catch (error) {
+						devLog('report action failed', error);
+						showToast('Unable to report this check-in right now.', 'error');
+					} finally {
+						endAction(`report:${checkinId || 'none'}`);
+					}
+				}}
 			/>
 			</ThemedView>
 		);

@@ -3,6 +3,7 @@ import * as Device from 'expo-device';
 import { addBreadcrumb } from './sentry';
 import { getExpoExtraString } from './expoConfig';
 import { devLog } from './logger';
+import { isAnalyticsConsentGranted } from './analyticsConsent';
 
 // Analytics event types for type safety
 export type AnalyticsEvent =
@@ -175,6 +176,7 @@ async function logNativeFirebaseEvent(event: string, properties?: Record<string,
  */
 export function initAnalytics() {
   if (initialized) return;
+  if (!isAnalyticsConsentGranted()) return;
 
   try {
     // Firebase Analytics is initialized via firebase config
@@ -199,6 +201,7 @@ export function track(
   event: AnalyticsEvent | string,
   properties?: AnalyticsProperties
 ) {
+  if (!isAnalyticsConsentGranted()) return;
   if (!initialized && event !== 'app_opened') {
     initAnalytics();
   }

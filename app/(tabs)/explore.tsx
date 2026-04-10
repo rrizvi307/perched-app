@@ -599,6 +599,8 @@ export default function Explore() {
   const [blockedIds, setBlockedIds] = useState<string[]>([]);
 
   const [selectedSpot, setSelectedSpot] = useState<any | null>(null);
+  const [selectedSpotKey, setSelectedSpotKey] = useState<string | null>(null);
+  const [selectedSpotSource, setSelectedSpotSource] = useState<any | null>(null);
   const [selectedIntelState, setSelectedIntelState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [breakdownSpotKey, setBreakdownSpotKey] = useState<string | null>(null);
 
@@ -1258,10 +1260,14 @@ export default function Explore() {
   }, [locBusy, showToast, router]);
 
   const openSpotSheet = useCallback((spot: any) => {
+    setSelectedSpotKey(getCanonicalSpotKey(spot));
+    setSelectedSpotSource(spot);
     setSelectedSpot(normalizeSpotForExplore(spot));
   }, []);
 
   const closeSpotSheet = useCallback(() => {
+    setSelectedSpotKey(null);
+    setSelectedSpotSource(null);
     setSelectedSpot(null);
   }, []);
 
@@ -1317,13 +1323,6 @@ export default function Explore() {
       task.cancel();
     };
   }, [intelligenceMap, listData]);
-
-  const selectedSpotKey = useMemo(() => {
-    if (!selectedSpot) return null;
-    const name = selectedSpot?.name || '';
-    if (!name) return null;
-    return getCanonicalSpotKey(selectedSpot);
-  }, [selectedSpot]);
 
   const selectedSpotIntelligence = useMemo(() => {
     if (!selectedSpotKey) return null;
@@ -1391,7 +1390,7 @@ export default function Explore() {
     const task = InteractionManager.runAfterInteractions(() => {
       void (async () => {
         try {
-          const intel = await buildExploreSpotIntelligence(selectedSpot);
+          const intel = await buildExploreSpotIntelligence(selectedSpotSource || selectedSpot);
           if (!intel) {
             if (active) setSelectedIntelState('error');
             return;
@@ -1414,7 +1413,7 @@ export default function Explore() {
       active = false;
       task.cancel();
     };
-  }, [selectedSpot, selectedSpotKey, selectedSpotIntelligence]);
+  }, [selectedSpot, selectedSpotKey, selectedSpotIntelligence, selectedSpotSource]);
 
   return (
     <ThemedView style={styles.container}>

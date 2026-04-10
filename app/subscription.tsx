@@ -31,7 +31,7 @@ export default function SubscriptionScreen() {
   const primary = useThemeColor({}, 'primary');
   const card = useThemeColor({}, 'card');
   const border = useThemeColor({}, 'border');
-  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'support@perched.app';
+  const supportEmail = ((((Constants.expoConfig as any)?.extra) || {}).SUPPORT_EMAIL as string) || 'perchedappteam@gmail.com';
 
   const {
     premiumStatus,

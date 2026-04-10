@@ -73,6 +73,16 @@ function buildFallbackResults(query: string, nearby: any[], recents: any[], topS
   return Array.from(byId.values()).slice(0, 8);
 }
 
+function buildSupplementalQueries(query: string) {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const compact = trimmed.replace(/\s+/g, '');
+  if (/^\d[\d-]{1,6}$/.test(compact)) {
+    return [`${trimmed} coffee`, `${trimmed} cafe`];
+  }
+  return [];
+}
+
 function slugifyPlacePart(value: string) {
   return value
     .trim()
@@ -221,7 +231,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     if (!visible) return;
     (async () => {
       try {
-        const pos = await requestForegroundLocation();
+        const pos = await requestForegroundLocation({ ignoreCache: true, preferFresh: true });
         if (pos) {
           setLoc(pos);
           setNearbyError(null);
@@ -264,7 +274,7 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
     try {
       setNearbyLoading(true);
       setNearbyError(null);
-      const response = await searchPlacesNearbyResponse(location.lat, location.lng, 1200, 'study', controller?.signal);
+      const response = await searchPlacesNearbyResponse(location.lat, location.lng, 1200, 'general', controller?.signal);
       // If this request was superseded, silently discard.
       if (isAbortedResponse(response) || controller?.signal?.aborted) return;
       const results = response.places;
@@ -288,10 +298,9 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
 
   useEffect(() => {
     if (!visible || !loc) return;
-    if (q.trim().length) return;
     void fetchNearby(loc);
     return () => { nearbyAbortRef.current?.abort(); };
-  }, [visible, loc, q, fetchNearby]);
+  }, [visible, loc, fetchNearby]);
 
   const doSearch = useCallback(async () => {
     if (!q) return;
@@ -332,6 +341,26 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
         }
       }
 
+      const supplementalQueries = buildSupplementalQueries(q);
+      for (const variant of supplementalQueries) {
+        const variantResults = loc
+          ? await searchPlacesWithBiasResponse(variant, loc.lat, loc.lng, 12000, 8, signal)
+          : await searchPlacesResponse(variant, 8, signal);
+        if (isAbortedResponse(variantResults) || signal?.aborted) return;
+        if (variantResults.places.length) {
+          setResults(variantResults.places);
+          setError(null);
+          return;
+        }
+      }
+
+      const fallback = buildFallbackResults(q, nearby, recents, topSpots);
+      if (fallback.length) {
+        setResults(fallback);
+        setError(null);
+        return;
+      }
+
       if (signal?.aborted) return;
       const nativeResults = await searchPlacesWithNativeGeocoder(q, loc, 8);
       if (signal?.aborted) return;
@@ -341,14 +370,11 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
         return;
       }
 
-      const fallback = buildFallbackResults(q, nearby, recents, topSpots);
-      setResults(fallback);
+      setResults([]);
       setError(
-        fallback.length
-          ? null
-          : primary.status === 'error'
-            ? getSearchErrorMessage(primary, 'Unable to search places.')
-            : 'No results found.',
+        primary.status === 'error'
+          ? getSearchErrorMessage(primary, 'Unable to search places.')
+          : 'No results found.',
       );
     } catch (e) {
       const raw = e instanceof Error ? e.message : 'Unable to search places.';
@@ -359,6 +385,12 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
           : raw;
       devLog('place search error', e);
       if (signal?.aborted) return;
+      const fallback = buildFallbackResults(q, nearby, recents, topSpots);
+      if (fallback.length) {
+        setResults(fallback);
+        setError(null);
+        return;
+      }
       const nativeResults = await searchPlacesWithNativeGeocoder(q, loc, 8);
       if (signal?.aborted) return;
       if (nativeResults.length) {
@@ -366,9 +398,8 @@ export default function PlaceSearch({ visible, onClose, onSelect }: { visible: b
         setError(null);
         return;
       }
-      const fallback = buildFallbackResults(q, nearby, recents, topSpots);
-      setResults(fallback);
-      setError(fallback.length ? null : message);
+      setResults([]);
+      setError(message);
     } finally {
       setLoading(false);
     }

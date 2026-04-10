@@ -1098,7 +1098,7 @@ Model version observed in code:
 ### Deep linking and external destinations
 
 - Primary web domain: `https://perched.app`
-- Support email: `support@perched.app`
+- Support email: `perchedappteam@gmail.com`
 - Instagram: `https://instagram.com/perchedapp`
 - TikTok: `https://tiktok.com/@perchedapp`
 - Invite/share system includes App Store, Play Store, and web destinations in share utilities, even though the product is currently iOS-first in launch practice.
