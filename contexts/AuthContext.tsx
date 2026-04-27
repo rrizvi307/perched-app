@@ -17,7 +17,15 @@ import {
 import { buildPasswordResetTelemetry } from '@/services/analyticsPrivacy';
 import { devLog } from '@/services/logger';
 import { updateUserRemote } from '@/services/repositories/profileRepository';
-import { enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
+import {
+  enqueuePendingProfileUpdate,
+  removePendingProfileUpdate,
+} from '@/storage/checkinQueueStore';
+import {
+  getUserProfile,
+  saveUserProfile,
+} from '@/storage/profileCacheStore';
+import { seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
 import type { DiscoveryIntent } from '@/services/discoveryIntents';
 import {

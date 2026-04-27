@@ -50,8 +50,8 @@ import {
   getCheckinDraft,
   getLastCheckinAt,
   saveCheckinDraft,
-  setPermissionPrimerSeen,
-} from '@/storage/local';
+} from '@/storage/checkinQueueStore';
+import { setPermissionPrimerSeen } from '@/storage/profileCacheStore';
 import { safeNotification } from '@/utils/haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { InteractionManager, Keyboard, Platform } from 'react-native';

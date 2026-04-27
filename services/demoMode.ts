@@ -1,4 +1,5 @@
-import { getDemoModeEnabled, resetDemoNetwork, setDemoModeEnabled } from '@/storage/local';
+import { getDemoModeEnabled, setDemoModeEnabled } from '@/storage/demoStore';
+import { resetDemoNetwork } from '@/storage/local';
 import { clearLocationCache } from '@/services/location';
 import { devLog } from '@/services/logger';
 

@@ -7,7 +7,15 @@ import {
   uploadCheckinPhotoToStorage,
 } from '@/services/repositories/checkinRepository';
 import { updateUserRemote } from '@/services/repositories/profileRepository';
-import { getPendingCheckins, pruneInvalidPendingCheckins, removePendingCheckin, updateCheckinLocalByClientId, getPendingProfileUpdates, removePendingProfileUpdate, updatePendingCheckin } from '@/storage/local';
+import {
+  getPendingCheckins,
+  getPendingProfileUpdates,
+  pruneInvalidPendingCheckins,
+  removePendingCheckin,
+  removePendingProfileUpdate,
+  updatePendingCheckin,
+} from '@/storage/checkinQueueStore';
+import { updateCheckinLocalByClientId } from '@/storage/local';
 import { publishCheckin } from '@/services/feedEvents';
 import { logEvent } from '@/services/logEvent';
 

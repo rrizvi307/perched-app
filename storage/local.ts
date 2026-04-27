@@ -1,16 +1,81 @@
 import { BETTER_DEMO_CHECKINS } from './demo-data-updated';
+import {
+  clearCheckinDraft,
+  enqueuePendingCheckin,
+  enqueuePendingProfileUpdate,
+  getCheckinDraft,
+  getLastCheckinAt,
+  getPendingCheckins,
+  getPendingProfileUpdates,
+  pruneInvalidPendingCheckins,
+  removePendingCheckin,
+  removePendingProfileUpdate,
+  resetCheckinQueueStoreMemory,
+  saveCheckinDraft,
+  setLastCheckinAt,
+  setPendingCheckins,
+  updatePendingCheckin,
+} from './checkinQueueStore';
+import {
+  getDemoAutoApprove,
+  getDemoCustomPhotos,
+  getDemoModeEnabled,
+  setDemoAutoApprove,
+  setDemoCustomPhotos,
+  setDemoModeEnabled,
+  clearDemoCustomPhotos,
+} from './demoStore';
+import type { DemoCustomPhoto } from './demoStore';
+import {
+  getAsyncStorage,
+  isWeb,
+  readNativeJson,
+  STORAGE_KEYS,
+  writeNativeJson,
+} from './keyValueStore';
+import {
+  getPermissionPrimerSeen,
+  getUserProfile,
+  saveUserProfile,
+  setPermissionPrimerSeen,
+} from './profileCacheStore';
 import { findInvalidPhotoSeeds, resolvePhotoUri } from '@/services/photoSources';
-const KEY = 'spot_checkins_v1';
-const CHECKIN_COOLDOWN_KEY = 'spot_checkin_last_v1';
-const DEMO_SEED_KEY = 'spot_demo_seeded_v1';
-const PERMISSION_KEY = 'spot_permission_seen_v1';
-const PENDING_CHECKIN_KEY = 'spot_pending_checkins_v1';
-const PENDING_PROFILE_KEY = 'spot_pending_profile_v1';
-const CHECKIN_DRAFT_KEY = 'spot_checkin_draft_v1';
-const USER_PROFILE_KEY = 'spot_user_profile_v1';
-const DEMO_AUTO_APPROVE_KEY = 'spot_demo_auto_approve_v1';
-const DEMO_MODE_ENABLED_KEY = 'spot_demo_mode_enabled_v1';
-const DEMO_CUSTOM_PHOTOS_KEY = 'spot_demo_custom_photos_v1';
+
+export {
+  clearCheckinDraft,
+  clearDemoCustomPhotos,
+  enqueuePendingCheckin,
+  enqueuePendingProfileUpdate,
+  getCheckinDraft,
+  getDemoAutoApprove,
+  getDemoCustomPhotos,
+  getDemoModeEnabled,
+  getLastCheckinAt,
+  getPendingCheckins,
+  getPendingProfileUpdates,
+  getPermissionPrimerSeen,
+  getUserProfile,
+  pruneInvalidPendingCheckins,
+  removePendingCheckin,
+  removePendingProfileUpdate,
+  saveCheckinDraft,
+  saveUserProfile,
+  setDemoAutoApprove,
+  setDemoCustomPhotos,
+  setDemoModeEnabled,
+  setLastCheckinAt,
+  setPendingCheckins,
+  setPermissionPrimerSeen,
+  updatePendingCheckin,
+};
+
+const KEY = STORAGE_KEYS.checkins;
+const CHECKIN_COOLDOWN_KEY = STORAGE_KEYS.checkinCooldown;
+const DEMO_SEED_KEY = STORAGE_KEYS.demoSeed;
+const PENDING_CHECKIN_KEY = STORAGE_KEYS.pendingCheckins;
+const PENDING_PROFILE_KEY = STORAGE_KEYS.pendingProfile;
+const CHECKIN_DRAFT_KEY = STORAGE_KEYS.checkinDraft;
+const USER_PROFILE_KEY = STORAGE_KEYS.userProfile;
 
 type Checkin = {
   id: string;
@@ -57,133 +122,7 @@ type Checkin = {
   drinkQuality?: 1 | 2 | 3 | 4 | 5; // 1=poor, 5=exceptional
 };
 
-type DemoCustomPhoto = { uri: string; fileName?: string | null };
-
 let memory: Checkin[] = [];
-const permissionMemory: Record<string, boolean> = {};
-let pendingMemory: any[] = [];
-let pendingMemoryPreferred = false;
-let pendingProfileMemory: any[] = [];
-let asyncStorageRef: any = null;
-let fsRef: any = null;
-let fsStoreDir: string | null = null;
-let fsInitPromise: Promise<string | null> | null = null;
-
-function isWeb() {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-}
-
-function fileKeyForStorage(key: string) {
-  return key.replace(/[^a-z0-9._-]/gi, '_');
-}
-
-async function ensureFsStoreDir(): Promise<string | null> {
-  if (fsStoreDir) return fsStoreDir;
-  if (fsInitPromise) return fsInitPromise;
-  fsInitPromise = (async () => {
-    try {
-      const fsMod: any = await import('expo-file-system');
-      const fs: any = fsMod?.default ?? fsMod;
-      fsRef = fs;
-      const dir = fs?.documentDirectory ? `${fs.documentDirectory}perched-store/` : null;
-      if (!dir) return null;
-      try {
-        await fs.makeDirectoryAsync(dir, { intermediates: true });
-      } catch {}
-      fsStoreDir = dir;
-      return dir;
-    } catch {
-      return null;
-    }
-  })();
-  return fsInitPromise;
-}
-
-async function fsGetItem(key: string): Promise<string | null> {
-  const dir = await ensureFsStoreDir();
-  if (!dir || !fsRef) return null;
-  const path = `${dir}${fileKeyForStorage(key)}.json`;
-  try {
-    const info = await fsRef.getInfoAsync(path);
-    if (!info?.exists) return null;
-    return await fsRef.readAsStringAsync(path);
-  } catch {
-    return null;
-  }
-}
-
-async function fsSetItem(key: string, value: string): Promise<void> {
-  const dir = await ensureFsStoreDir();
-  if (!dir || !fsRef) return;
-  const path = `${dir}${fileKeyForStorage(key)}.json`;
-  try {
-    await fsRef.writeAsStringAsync(path, value);
-  } catch {}
-}
-
-async function fsRemoveItem(key: string): Promise<void> {
-  const dir = await ensureFsStoreDir();
-  if (!dir || !fsRef) return;
-  const path = `${dir}${fileKeyForStorage(key)}.json`;
-  try {
-    const info = await fsRef.getInfoAsync(path);
-    if (!info?.exists) return;
-    await fsRef.deleteAsync(path, { idempotent: true });
-  } catch {}
-}
-
-async function getAsyncStorage() {
-  if (isWeb()) return null;
-  if (asyncStorageRef) return asyncStorageRef;
-  try {
-    const mod = await import('@react-native-async-storage/async-storage');
-    const candidate = (mod as any).default || mod;
-    // Expo Go may have the JS package installed without the native module available.
-    // Validate the module once; if it fails, fall back to a FileSystem-backed store.
-    try {
-      await candidate.getItem('__perched_storage_probe__');
-      asyncStorageRef = candidate;
-      return asyncStorageRef;
-    } catch {
-      // fall through to FileSystem store
-    }
-  } catch {
-    // ignore and try filesystem fallback below
-  }
-
-  // Fallback to a FileSystem-backed KV store (e.g. Expo Go missing native AsyncStorage).
-  try {
-    const dir = await ensureFsStoreDir();
-    if (!dir) return null;
-    asyncStorageRef = {
-      getItem: fsGetItem,
-      setItem: fsSetItem,
-      removeItem: fsRemoveItem,
-    };
-    return asyncStorageRef;
-  } catch {
-    return null;
-  }
-}
-
-async function readNativeJson<T>(key: string, fallback: T): Promise<T> {
-  const store = await getAsyncStorage();
-  if (!store) return fallback;
-  try {
-    const raw = await store.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function writeNativeJson<T>(key: string, value: T): Promise<void> {
-  const store = await getAsyncStorage();
-  if (!store) return;
-  try {
-    await store.setItem(key, JSON.stringify(value));
-  } catch {}
-}
 
 function pruneHistory(list: Checkin[], _maxDays = 30) {
   // Preserve full local history for now; no age-based trimming.
@@ -430,327 +369,6 @@ export async function getCheckins() {
     return c;
   });
   return memory as Checkin[];
-}
-
-async function readUserProfileMap() {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(USER_PROFILE_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  }
-  const store = await getAsyncStorage();
-  if (!store) return {};
-  try {
-    const raw = await store.getItem(USER_PROFILE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-async function writeUserProfileMap(data: Record<string, any>) {
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(data));
-    } catch {}
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (!store) return;
-  try {
-    await store.setItem(USER_PROFILE_KEY, JSON.stringify(data));
-  } catch {}
-}
-
-export async function saveUserProfile(profile: any) {
-  if (!profile?.id) return;
-  const map = await readUserProfileMap();
-  map[profile.id] = { ...map[profile.id], ...profile };
-  await writeUserProfileMap(map);
-}
-
-export async function getUserProfile(userId: string) {
-  if (!userId) return null;
-  const map = await readUserProfileMap();
-  return map[userId] || null;
-}
-
-export async function getPermissionPrimerSeen(key: string) {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(PERMISSION_KEY);
-      const data = raw ? JSON.parse(raw) : {};
-      return !!data[key];
-    } catch {
-      return false;
-    }
-  }
-  if (key in permissionMemory) return !!permissionMemory[key];
-  const data = await readNativeJson<Record<string, boolean>>(PERMISSION_KEY, {});
-  permissionMemory[key] = !!data[key];
-  return !!data[key];
-}
-
-export async function setPermissionPrimerSeen(key: string, value = true) {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(PERMISSION_KEY);
-      const data = raw ? JSON.parse(raw) : {};
-      data[key] = value;
-      window.localStorage.setItem(PERMISSION_KEY, JSON.stringify(data));
-      return;
-    } catch {
-      return;
-    }
-  }
-  permissionMemory[key] = value;
-  const data = await readNativeJson<Record<string, boolean>>(PERMISSION_KEY, {});
-  data[key] = value;
-  await writeNativeJson(PERMISSION_KEY, data);
-}
-
-export async function getPendingCheckins() {
-  if (isWeb()) {
-    if (pendingMemoryPreferred && pendingMemory.length) return pendingMemory;
-    try {
-      const raw = window.localStorage.getItem(PENDING_CHECKIN_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return pendingMemory;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      const raw = await store.getItem(PENDING_CHECKIN_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      pendingMemory = list;
-      return list;
-    } catch {
-      return pendingMemory;
-    }
-  }
-  return pendingMemory;
-}
-
-export async function setPendingCheckins(next: any[]) {
-  const list = Array.isArray(next) ? next : [];
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_CHECKIN_KEY, JSON.stringify(list));
-      pendingMemoryPreferred = false;
-      pendingMemory = list;
-      return;
-    } catch {
-      pendingMemory = list;
-      pendingMemoryPreferred = true;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_CHECKIN_KEY, JSON.stringify(list));
-      pendingMemory = list;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingMemory = list;
-}
-
-export async function pruneInvalidPendingCheckins() {
-  const list = await getPendingCheckins();
-  const now = Date.now();
-  const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-  const next = (list || []).filter((it: any) => {
-    if (typeof it?.clientId !== 'string' || it.clientId.trim().length === 0) return false;
-    if (typeof it?.userId !== 'string' || it.userId.trim().length === 0) return false;
-    const queuedAt = typeof it?.queuedAt === 'number' ? it.queuedAt : 0;
-    // Older app versions didn't stamp `queuedAt`; treat those as stale to avoid permanent "finishing upload" banners.
-    if (!queuedAt) return false;
-    if (queuedAt && now - queuedAt > MAX_AGE_MS) return false;
-    const attempts = typeof it?.attempts === 'number' ? it.attempts : 0;
-    if (attempts >= 10) return false;
-    return true;
-  });
-  if (next.length !== (list || []).length) {
-    await setPendingCheckins(next);
-  }
-  return { removed: (list || []).length - next.length, count: next.length };
-}
-
-export async function getPendingProfileUpdates() {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(PENDING_PROFILE_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return pendingProfileMemory;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      const raw = await store.getItem(PENDING_PROFILE_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      pendingProfileMemory = list;
-      return list;
-    } catch {
-      return pendingProfileMemory;
-    }
-  }
-  return pendingProfileMemory;
-}
-
-export async function enqueuePendingProfileUpdate(userId: string, fields: Record<string, any>) {
-  if (!userId || !fields) return;
-  const list = await getPendingProfileUpdates();
-  const sanitized = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
-  const next = [
-    { userId, fields: sanitized, queuedAt: Date.now() },
-    ...list.filter((item: any) => item?.userId !== userId),
-  ];
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(next));
-      pendingProfileMemory = next;
-      return;
-    } catch {
-      pendingProfileMemory = next;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_PROFILE_KEY, JSON.stringify(next));
-      pendingProfileMemory = next;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingProfileMemory = next;
-}
-
-export async function removePendingProfileUpdate(userId: string) {
-  if (!userId) return;
-  const list = await getPendingProfileUpdates();
-  const next = list.filter((item: any) => item?.userId !== userId);
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify(next));
-      pendingProfileMemory = next;
-      return;
-    } catch {
-      pendingProfileMemory = next;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_PROFILE_KEY, JSON.stringify(next));
-      pendingProfileMemory = next;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingProfileMemory = next;
-}
-
-export async function enqueuePendingCheckin(item: any) {
-  if (!item) return;
-  const payload = { ...item, queuedAt: Date.now() };
-  const list = await getPendingCheckins();
-  const next = [payload, ...list].filter((v, i, arr) => arr.findIndex((x) => x.clientId === v.clientId) === i);
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      pendingMemoryPreferred = false;
-      return;
-    } catch {
-      pendingMemory = next;
-      pendingMemoryPreferred = true;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      pendingMemory = next;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingMemory = next;
-}
-
-export async function updatePendingCheckin(clientId: string, updates: Record<string, any>) {
-  if (!clientId) return;
-  const list = await getPendingCheckins();
-  const next = list.map((c: any) => {
-    if (c?.clientId !== clientId) return c;
-    return { ...c, ...(updates || {}) };
-  });
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      pendingMemoryPreferred = false;
-      return;
-    } catch {
-      pendingMemory = next;
-      pendingMemoryPreferred = true;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      pendingMemory = next;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingMemory = next;
-}
-
-export async function removePendingCheckin(clientId: string) {
-  if (!clientId) return;
-  const list = await getPendingCheckins();
-  const next = list.filter((c: any) => c.clientId !== clientId);
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      if (pendingMemoryPreferred && !next.length) pendingMemoryPreferred = false;
-      return;
-    } catch {
-      pendingMemory = next;
-      if (!pendingMemory.length) pendingMemoryPreferred = false;
-      return;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(PENDING_CHECKIN_KEY, JSON.stringify(next));
-      pendingMemory = next;
-      return;
-    } catch {
-      // fall through
-    }
-  }
-  pendingMemory = next;
 }
 
 export async function seedDemoNetwork(currentUserId?: string) {
@@ -1333,37 +951,6 @@ export async function cleanupDemoDataForRealUser(userId: string) {
   }
 }
 
-export async function getLastCheckinAt() {
-  if (isWeb()) {
-    const raw = window.localStorage.getItem(CHECKIN_COOLDOWN_KEY);
-    return raw ? Number(raw) : 0;
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      const raw = await store.getItem(CHECKIN_COOLDOWN_KEY);
-      return raw ? Number(raw) : 0;
-    } catch {
-      return (global as any)._spot_last_checkin || 0;
-    }
-  }
-  return (global as any)._spot_last_checkin || 0;
-}
-
-export async function setLastCheckinAt(ts: number) {
-  if (isWeb()) {
-    window.localStorage.setItem(CHECKIN_COOLDOWN_KEY, String(ts));
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(CHECKIN_COOLDOWN_KEY, String(ts));
-    } catch {}
-  }
-  (global as any)._spot_last_checkin = ts;
-}
-
 export async function clearCheckins() {
   if (isWeb()) {
     window.localStorage.removeItem(KEY);
@@ -1379,60 +966,6 @@ export async function clearCheckins() {
     }
   }
   memory = [];
-}
-
-export async function saveCheckinDraft(draft: any) {
-  if (!draft) return;
-  const payload = { ...draft, savedAt: Date.now() };
-  if (isWeb()) {
-    try {
-      window.localStorage.setItem(CHECKIN_DRAFT_KEY, JSON.stringify(payload));
-    } catch {}
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.setItem(CHECKIN_DRAFT_KEY, JSON.stringify(payload));
-      return;
-    } catch {}
-  }
-}
-
-export async function getCheckinDraft() {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(CHECKIN_DRAFT_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      const raw = await store.getItem(CHECKIN_DRAFT_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-export async function clearCheckinDraft() {
-  if (isWeb()) {
-    try {
-      window.localStorage.removeItem(CHECKIN_DRAFT_KEY);
-    } catch {}
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (store) {
-    try {
-      await store.removeItem(CHECKIN_DRAFT_KEY);
-    } catch {}
-  }
 }
 
 const WAITLIST_KEY = 'spot_waitlist_v1';
@@ -1613,10 +1146,7 @@ export async function clearAuthenticatedSessionState(userId?: string) {
   await removeKeysFromStore(store, Array.from(keysToRemove));
 
   memory = [];
-  pendingMemory = [];
-  pendingMemoryPreferred = false;
-  pendingProfileMemory = [];
-  try { delete (global as any)._spot_last_checkin; } catch {}
+  resetCheckinQueueStoreMemory();
   try { delete (global as any)._spot_stats; } catch {}
   try { delete (global as any)._spot_stats_meta; } catch {}
   try { delete (global as any)._spot_place_events; } catch {}
@@ -1994,85 +1524,6 @@ export async function getNotificationsEnabled() {
     return raw ? JSON.parse(raw) : false;
   }
   return await readNativeJson<boolean>(NOTIF_KEY, false);
-}
-
-export async function setDemoAutoApprove(enabled: boolean) {
-  if (isWeb()) {
-    try { window.localStorage.setItem(DEMO_AUTO_APPROVE_KEY, JSON.stringify(!!enabled)); } catch {}
-    return;
-  }
-  await writeNativeJson(DEMO_AUTO_APPROVE_KEY, !!enabled);
-}
-
-export async function getDemoAutoApprove() {
-  if (isWeb()) {
-    try { const raw = window.localStorage.getItem(DEMO_AUTO_APPROVE_KEY); return raw ? JSON.parse(raw) : false; } catch { return false; }
-  }
-  return await readNativeJson<boolean>(DEMO_AUTO_APPROVE_KEY, false);
-}
-
-export async function setDemoModeEnabled(enabled: boolean) {
-  try {
-    try { (global as any).__PERCHED_DEMO = !!enabled; } catch {}
-    try { if (typeof window !== 'undefined') (window as any).__PERCHED_DEMO = !!enabled; } catch {}
-    if (isWeb()) {
-      try { window.localStorage.setItem(DEMO_MODE_ENABLED_KEY, JSON.stringify(!!enabled)); } catch {}
-      return;
-    }
-    await writeNativeJson(DEMO_MODE_ENABLED_KEY, !!enabled);
-  } catch {
-    // ignore
-  }
-}
-
-export async function getDemoModeEnabled() {
-  if (isWeb()) {
-    try { const raw = window.localStorage.getItem(DEMO_MODE_ENABLED_KEY); return raw ? JSON.parse(raw) : false; } catch { return false; }
-  }
-  return await readNativeJson<boolean>(DEMO_MODE_ENABLED_KEY, false);
-}
-
-export async function setDemoCustomPhotos(photos: DemoCustomPhoto[]) {
-  const cleaned = Array.isArray(photos)
-    ? photos
-        .filter((p) => typeof p?.uri === 'string' && p.uri.trim().length > 0)
-        .map((p) => ({ uri: p.uri.trim(), fileName: typeof p?.fileName === 'string' ? p.fileName : null }))
-    : [];
-  if (isWeb()) {
-    try { window.localStorage.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify(cleaned)); } catch {}
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (!store) return;
-  try {
-    await store.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify(cleaned));
-  } catch {}
-}
-
-export async function getDemoCustomPhotos() {
-  if (isWeb()) {
-    try {
-      const raw = window.localStorage.getItem(DEMO_CUSTOM_PHOTOS_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? (arr as DemoCustomPhoto[]) : [];
-    } catch {
-      return [] as DemoCustomPhoto[];
-    }
-  }
-  return await readNativeJson<DemoCustomPhoto[]>(DEMO_CUSTOM_PHOTOS_KEY, [] as DemoCustomPhoto[]);
-}
-
-export async function clearDemoCustomPhotos() {
-  if (isWeb()) {
-    try { window.localStorage.removeItem(DEMO_CUSTOM_PHOTOS_KEY); } catch {}
-    return;
-  }
-  const store = await getAsyncStorage();
-  if (!store) return;
-  try {
-    if (typeof store.removeItem === 'function') await store.removeItem(DEMO_CUSTOM_PHOTOS_KEY);
-    else await store.setItem(DEMO_CUSTOM_PHOTOS_KEY, JSON.stringify([]));
-  } catch {}
 }
 
 export async function setLocationEnabled(enabled: boolean) {

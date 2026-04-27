@@ -239,6 +239,7 @@ This checklist is stricter than the progress log below. Items stay open here unt
 - [x] Auth routing centralization landed through `navigation/auth-routing.ts` and `navigation/route-guard.ts`, and the old duplicated auth redirects were removed from the main screens.
 - [x] Startup extraction landed through `bootstrap/app-bootstrap.ts`, so `app/_layout.tsx` is no longer the catch-all owner for startup side effects.
 - [x] The repository-wrapper half of Phase 2 landed through `services/repositories/authRepository.ts`, `profileRepository.ts`, `checkinRepository.ts`, `socialRepository.ts`, and `notificationRepository.ts`.
+- [x] The first storage-split extraction landed through `storage/keyValueStore.ts`, `storage/checkinQueueStore.ts`, `storage/profileCacheStore.ts`, and `storage/demoStore.ts`, with `storage/local.ts` now acting as a compatibility facade for the migrated functions.
 - [x] App code no longer imports `services/firebaseClient.ts` directly outside the repository boundary.
 - [x] The check-in refactor materially landed: `app/checkin.tsx` is now a thin shell over `domains/checkin/*` helpers, `useCheckinController.ts`, and `components/checkin/*` presentational sections.
 - [x] The signup refactor materially landed: `app/signup.tsx` is now a thin shell over `domains/auth/*` helpers, `useSignupController.ts`, and `components/auth/signup-form-sections.tsx`.
@@ -248,8 +249,8 @@ This checklist is stricter than the progress log below. Items stay open here unt
 ### Still Open Or Only Partially Reconciled
 
 - [ ] Phase 1 is not fully closed. `contexts/AuthContext.tsx` is still a large auth-side owner and still mixes observer or bootstrap responsibilities with mutation APIs.
-- [ ] Phase 2 storage splitting has not landed. `storage/keyValueStore.ts`, `storage/checkinQueueStore.ts`, `storage/profileCacheStore.ts`, and `storage/demoStore.ts` do not exist yet.
-- [ ] The storage-boundary rule is still only partial. `storage/local.ts` remains a shared persistence boundary, and screens or controllers still import it directly in feed, explore, profile, onboarding, settings, and check-in-related flows.
+- [ ] Phase 2 storage splitting is only partially landed. The new store modules exist, but large parts of the app still flow through `storage/local.ts` as a compatibility surface.
+- [ ] The storage-boundary rule is still only partial. Screens and controllers still import `storage/local.ts` directly in explore, profile, onboarding, settings, recommendations, saved-spots, and several check-in-adjacent flows.
 - [ ] `services/firebaseClient.ts` is still a large cross-domain monolith even after the wrapper split.
 - [ ] Phase 4 has not landed in the planned shape. `domains/feed/useFeedController.ts`, `domains/feed/feedQueries.ts`, `domains/explore/useExploreController.ts`, and `domains/explore/exploreQueries.ts` do not exist yet.
 - [ ] Feed and explore are still major structural risk surfaces. `app/(tabs)/feed.tsx` and `app/(tabs)/explore.tsx` remain large screen owners rather than thin controller-backed shells.
@@ -413,6 +414,9 @@ Completed:
 
 1. Repo-backed reconciliation snapshot added
    Added the `Reconciliation Snapshot` section above so the plan now explicitly distinguishes what is already reconciled in the repo from what is still open or only partial as of 2026-04-27, instead of leaving that status implied across scattered progress notes and follow-up docs.
+
+2. Phase 2 storage extraction started behind compatibility facades
+   Added `storage/keyValueStore.ts`, `storage/checkinQueueStore.ts`, `storage/profileCacheStore.ts`, and `storage/demoStore.ts`, moved queue, draft, profile-cache, permission-primer, and demo-toggle logic out of `storage/local.ts`, and rewired core auth, check-in, feed, profile, onboarding, sync, and demo-mode callers so the storage split is now active work rather than a doc-only TODO.
 
 ## Definition Of Done
 

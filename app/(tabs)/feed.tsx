@@ -7,7 +7,11 @@ import { PolishedCard } from '@/components/ui/polished-card';
 import { SkeletonFeedCard } from '@/components/ui/skeleton-loader';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ReactionBar } from '@/components/ui/reaction-bar';
-import { getCheckins, getPendingCheckins, pruneInvalidPendingCheckins } from '@/storage/local';
+import { getCheckins } from '@/storage/local';
+import {
+  getPendingCheckins,
+  pruneInvalidPendingCheckins,
+} from '@/storage/checkinQueueStore';
 import { syncPendingCheckins } from '@/services/syncPending';
 import { useToast } from '@/contexts/ToastContext';
 import { tokens } from '@/constants/tokens';

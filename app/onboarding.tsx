@@ -3,7 +3,14 @@ import { Atmosphere } from '@/components/ui/atmosphere';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import Logo from '@/components/logo';
-import { getPermissionPrimerSeen, setOnboardingComplete, setOnboardingProfile, setPermissionPrimerSeen } from '@/storage/local';
+import {
+  setOnboardingComplete,
+  setOnboardingProfile,
+} from '@/storage/local';
+import {
+  getPermissionPrimerSeen,
+  setPermissionPrimerSeen,
+} from '@/storage/profileCacheStore';
 import { requestForegroundLocation } from '@/services/location';
 import { reverseGeocodeCity } from '@/services/googleMaps';
 import { DISCOVERY_INTENT_OPTIONS, type DiscoveryIntent } from '@/services/discoveryIntents';

@@ -47,7 +47,11 @@ import { logEvent } from '@/services/logEvent';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { buildProfileReputationSummary } from '@/services/profileReputation';
 import { getUserStats } from '@/services/gamification';
-import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
+import { getCheckins, getSavedSpots, subscribeSavedSpots } from '@/storage/local';
+import {
+  getPermissionPrimerSeen,
+  setPermissionPrimerSeen,
+} from '@/storage/profileCacheStore';
 import { toMillis } from '@/services/checkinUtils';
 import { normalizePhone } from '@/utils/phone';
 import { openExternalLink } from '@/services/externalLinks';
