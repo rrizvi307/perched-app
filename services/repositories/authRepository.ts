@@ -1,0 +1,18 @@
+export {
+  createAccountWithEmail,
+  deleteAccountAndData,
+  ensureFirebase,
+  getCurrentFirebaseUser,
+  getFirebaseConfigStatus,
+  getFirebaseInitError,
+  isFirebaseConfigured,
+  observeAuthStateChanges,
+  observeIdTokenChanges,
+  reauthenticateCurrentUser,
+  sendVerificationEmail,
+  seedCachedIdToken,
+  sendPasswordResetEmail,
+  signInWithEmail,
+  signOutCurrentUser,
+  updateCurrentUserPassword,
+} from '../firebaseClient';

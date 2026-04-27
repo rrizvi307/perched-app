@@ -12,16 +12,15 @@ import { withAlpha } from '@/utils/colors';
 import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
+import { findUserByEmail, findUserByHandle } from '@/services/repositories/profileRepository';
 import {
-  findUserByEmail,
-  findUserByHandle,
+  getBlockedUsers,
+  getOutgoingFriendRequests,
+  getUserFriends,
+  getUsersByCampus,
   searchUsers,
   sendFriendRequest,
-  getUsersByCampus,
-  getUserFriends,
-  getOutgoingFriendRequests,
-  getBlockedUsers,
-} from '@/services/firebaseClient';
+} from '@/services/repositories/socialRepository';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { logEvent } from '@/services/logEvent';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

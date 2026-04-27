@@ -1,4 +1,4 @@
-import { ensureFirebase } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
 import { Image as ExpoImage } from 'expo-image';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image as RNImage, Platform, StyleSheet } from 'react-native';

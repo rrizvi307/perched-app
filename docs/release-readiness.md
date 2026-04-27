@@ -1,7 +1,7 @@
 # Release Readiness
 
-Date: 2026-03-20
-Status: Audit gate expanded; consumer launch matrix and proxy-only parity checks must be green before the next build
+Date: 2026-04-22
+Status: Automated gates are green after the launch-flow, recommendation, and profile reliability work; manual proxy-only, device-smoke, and App Store Connect steps still block submission
 
 ## Purpose
 
@@ -21,7 +21,15 @@ This is the public-safe release tracker for the current push toward App Store su
 
 - Functions build and test gate is part of the release workflow.
 - App Store preflight checks for feed actions and iOS maps flow are passing.
-- `npm run check:all` passes on the current GitHub `main` state.
+- `npm run check:all` passes on the current local release-candidate worktree.
+- `npm run audit:testflight`, `npm run appstore:preflight`, and `npm run preflight` all passed on 2026-04-22.
+- Auth-session hydration now has a single merge/backfill owner instead of duplicating remote profile work across sign-in and bootstrap paths.
+- Non-critical analytics/provider warmups are deferred until after first interaction, and the app now shows a branded launch screen instead of a blank pre-auth frame.
+- The check-in flow now has a dedicated controller and flow-state helper layer, so draft bootstrap, place-detection lifecycle, submit/retry orchestration, and submit-state branching no longer live directly in `app/checkin.tsx`.
+- The check-in screen is now a thin shell over `components/checkin/` presentational sections, so the photo entry UI, composer details, Spot Intel metrics, and location or visibility or status UI no longer share one giant render file.
+- The signup flow now has a dedicated auth-domain controller and submission helpers, so launch-market detection, handle-availability orchestration, onboarding-profile hydration, and account-creation submission no longer live directly in `app/signup.tsx`.
+- Local/demo auth persistence, demo-session creation, and register-time launch-market enforcement now route through dedicated auth-domain helpers instead of staying duplicated inside `contexts/AuthContext.tsx`.
+- The signup screen is now a thin view shell over `components/auth/signup-form-sections.tsx`, so the render-heavy form surface no longer shares a file with signup workflow orchestration.
 - In-app account deletion now exists and routes through the full cleanup path.
 - Custom verification emails and sign-in alerts are running through the production transactional email provider.
 - Posting eligibility rules are enforced for production users.
@@ -32,6 +40,15 @@ This is the public-safe release tracker for the current push toward App Store su
 - Early-adopter raffle UI has been removed from launch-facing screens.
 - Lint is passing with warning-free gating.
 - A tracked TestFlight consumer launch audit now exists in [testflight-readiness-audit.md](./testflight-readiness-audit.md).
+- Signup is now limited to the Houston/Austin launch footprint and supported nearby universities, with device-location confirmation before account creation completes.
+- A one-page operator checklist exists in [resubmission-test-sheet.md](./resubmission-test-sheet.md) for the remaining manual submission blockers.
+- Fresh post-refactor validation is green: `npm run lint`, `npm run check:all`, and `npm run preflight` all passed again on 2026-04-22 after the check-in presentational extraction.
+- The launch check-in flow is now materially simpler: quick tags plus five numeric 1-to-5 signals, with the emoji-heavy questionnaire removed from the primary flow.
+- Explore ranking and recommendation cards now use a shared utility snapshot and recommendation vocabulary, so distance, live utility, and explanation copy are more consistent across discovery surfaces.
+- Profile and public-profile screens now render typed credibility badges and trust signals instead of loose string badges.
+- Focused validation for the launch-market gate, simplified check-in, recommendations, and profile reputation passed on 2026-04-22 via `npm run typecheck`, `npm run lint`, and the targeted Jest suite.
+- A fresh full release rerun also passed on 2026-04-22: `npm run check:all`, `npm run audit:testflight`, `npm run appstore:preflight`, and `npm run preflight` all cleared, with only manual submission warnings remaining.
+- The one-page blocker sheet now explicitly covers launch-market allow vs block signup behavior, the simplified numeric quick-pulse check-in, recommendation explanation consistency, and profile reputation rendering on iPhone and iPad.
 
 ### Post-Launch Follow-Up
 
@@ -49,7 +66,7 @@ This is the public-safe release tracker for the current push toward App Store su
 1. Upload valid native iPad screenshots in App Store Connect.
 2. Run the proxy-only parity pass before cutting the next build.
 3. Run iPhone and iPad release-build smoke tests and save the evidence outside the repo if needed.
-4. Test signup, verification email, resend verification, password reset, sign-in alert, check-in, report/block, spot search/intelligence, and account deletion on the exact candidate build.
+4. Test signup, launch-market gating, verification email, resend verification, password reset, sign-in alert, check-in, report/block, spot search/intelligence, and account deletion on the exact candidate build.
 5. Submit the reviewer response once the new build and screenshots are ready.
 
 ## Recommended Working Loop

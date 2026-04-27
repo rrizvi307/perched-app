@@ -6,10 +6,12 @@ import { useToast } from '@/contexts/ToastContext';
 import { useThemePreference } from '@/contexts/ThemePreferenceContext';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { clearPushToken, isFirebaseConfigured, savePushToken } from '@/services/firebaseClient';
+import { isFirebaseConfigured } from '@/services/repositories/authRepository';
+import { clearPushToken, savePushToken } from '@/services/repositories/notificationRepository';
 import { getAnalyticsConsent, setAnalyticsConsent } from '@/services/analyticsConsent';
 import { requestForegroundLocation } from '@/services/location';
 import { clearNotificationHandlers, registerForPushNotificationsAsync } from '@/services/notifications';
+import { hasPushNotificationPermission, scheduleWeeklyRecap } from '@/services/smartNotifications';
 import { getLocationEnabled, getNotificationsEnabled, setLocationEnabled, setNotificationsEnabled } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import Constants from 'expo-constants';
@@ -82,7 +84,12 @@ export default function SettingsScreen() {
       try {
         await clearNotificationHandlers();
         const token = await registerForPushNotificationsAsync();
-        if (token) await savePushToken(user.id, token);
+        if (token) {
+          await savePushToken(user.id, token);
+        }
+        if (await hasPushNotificationPermission()) {
+          await scheduleWeeklyRecap();
+        }
       } catch {
         showToast('Unable to enable notifications right now.', 'warning');
       }

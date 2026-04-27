@@ -1,11 +1,42 @@
-import { createAccountWithEmail, deleteAccountAndData, ensureFirebase, getCurrentFirebaseUser, getFirebaseInitError, observeAuthStateChanges, sendPasswordResetEmail as fbSendPasswordResetEmail, signInWithEmail as fbSignInWithEmail, signOutCurrentUser, isFirebaseConfigured, reauthenticateCurrentUser, updateCurrentUserPassword, updateUserRemote } from '@/services/firebaseClient';
+import {
+  createAccountWithEmail,
+  deleteAccountAndData,
+  ensureFirebase,
+  getCurrentFirebaseUser,
+  getFirebaseInitError,
+  isFirebaseConfigured,
+  observeAuthStateChanges,
+  observeIdTokenChanges,
+  reauthenticateCurrentUser,
+  sendVerificationEmail,
+  sendPasswordResetEmail as fbSendPasswordResetEmail,
+  signInWithEmail as fbSignInWithEmail,
+  signOutCurrentUser,
+  updateCurrentUserPassword,
+} from '@/services/repositories/authRepository';
 import { buildPasswordResetTelemetry } from '@/services/analyticsPrivacy';
 import { devLog } from '@/services/logger';
-import { cleanupDemoDataForRealUser, enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
+import { updateUserRemote } from '@/services/repositories/profileRepository';
+import { enqueuePendingProfileUpdate, getUserProfile, removePendingProfileUpdate, saveUserProfile, seedDemoNetwork } from '@/storage/local';
 import { logEvent } from '@/services/logEvent';
-import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import type { DiscoveryIntent } from '@/services/discoveryIntents';
-import React, { createContext, useContext, useState } from 'react';
+import {
+  buildLocalAuthSessionUser,
+  clearLocalAuthSession,
+  createLocalDemoAuthSession,
+  findLocalAuthSessionByEmail,
+  loadLocalAuthSession,
+  persistLocalAuthSession,
+} from '@/domains/auth/authLocal';
+import { registerAuthAccount } from '@/domains/auth/authRegistration';
+import {
+  buildAuthProfileBackfill,
+  buildAuthUserFromCached,
+  buildAuthUserFromRemote,
+  loadRemoteAuthProfileState,
+} from '@/domains/auth/authSession';
+import React, { createContext, startTransition, useContext, useState } from 'react';
+import { InteractionManager, Platform } from 'react-native';
 
 type AmbiancePreference = 'cozy' | 'modern' | 'rustic' | 'bright' | 'intimate' | 'energetic' | null;
 
@@ -37,6 +68,7 @@ type User = {
 } | null;
 
 type AuthContextType = {
+  authReady: boolean;
   user: User;
   register: (
     email: string,
@@ -66,6 +98,7 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User>(null);
   const getFirebaseOrThrow = () => {
     const fb = ensureFirebase();
@@ -76,125 +109,146 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     return fb;
   };
-  const normalizeLocationFields = (data: any) => {
-    const city = data?.city || (data?.campusType === 'city' ? data?.campusOrCity : undefined) || (!data?.campusType && data?.campusOrCity ? data.campusOrCity : undefined);
-    const campus = data?.campus || (data?.campusType === 'campus' ? data?.campusOrCity : undefined);
-    return { city, campus, campusOrCity: data?.campusOrCity, campusType: data?.campusType };
+  const persistUser = (next: User, options?: { deferred?: boolean }) => {
+    const apply = () => setUser(next);
+    if (options?.deferred) {
+      startTransition(apply);
+    } else {
+      apply();
+    }
+    if (next) {
+      void saveUserProfile(next as any);
+    }
   };
-  const loadRemoteProfileState = async (db: any, userId: string) => {
-    const [publicDoc, privateDoc] = await Promise.all([
-      db.collection('publicProfiles').doc(userId).get(),
-      db.collection('userPrivate').doc(userId).get(),
-    ]);
-    const legacyDoc =
-      publicDoc.exists && privateDoc.exists
-        ? null
-        : await db.collection('users').doc(userId).get();
-    const publicData = publicDoc.exists ? publicDoc.data() || {} : {};
-    const privateData = {
-      ...(legacyDoc?.exists ? legacyDoc.data() || {} : {}),
-      ...(privateDoc.exists ? privateDoc.data() || {} : {}),
-    };
-    return { publicData, privateData };
+  const scheduleNonCriticalAuthWork = (work: () => void | Promise<void>) => {
+    if (Platform.OS === 'web') {
+      const timer = setTimeout(() => {
+        void work();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+    const task = InteractionManager.runAfterInteractions(() => {
+      void work();
+    });
+    return () => task.cancel();
   };
   // initialize firebase auth listener when possible
   React.useEffect(() => {
     // If Firebase is configured, subscribe to its auth state.
     if (isFirebaseConfigured()) {
+      let active = true;
+      let authEventVersion = 0;
+      let cancelDeferredHydration: (() => void) | null = null;
       let fb: any;
       try {
         fb = getFirebaseOrThrow();
       } catch {
+        setAuthReady(true);
         return;
       }
-      const unsub = observeAuthStateChanges(async (u: any) => {
+      const unsub = observeAuthStateChanges((u: any) => {
+        const eventVersion = ++authEventVersion;
+        cancelDeferredHydration?.();
+        cancelDeferredHydration = null;
         if (!u) {
-          setUser(null);
+          startTransition(() => setUser(null));
+          setAuthReady(true);
           return;
         }
-        try {
-          const db = fb.firestore();
-          const { publicData, privateData } = await loadRemoteProfileState(db, u.uid);
-          const cached = await getUserProfile(u.uid);
-          const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
-          const merged = {
-            id: u.uid,
-            email: u.email,
-            emailVerified: !!u.emailVerified,
-            name: publicData?.name ?? cached?.name,
-            handle: publicData?.handle ?? cached?.handle,
-            city: loc.city ?? cached?.city,
-            campus: loc.campus ?? cached?.campus,
-            campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
-            campusType: loc.campusType ?? cached?.campusType,
-            phone: privateData?.phone || u.phoneNumber || cached?.phone || null,
-            photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || null,
-            coffeeIntents: Array.isArray(publicData?.coffeeIntents)
-              ? publicData.coffeeIntents
-              : Array.isArray(cached?.coffeeIntents)
-                ? cached.coffeeIntents
-                : [],
-            ambiancePreference: publicData?.ambiancePreference ?? cached?.ambiancePreference ?? null,
-          };
-          // One-time cleanup: purge any demo data before rendering real user's feed
-          if (!u.uid.startsWith('demo-')) {
-            await cleanupDemoDataForRealUser(u.uid);
+        void (async () => {
+          let cached: any = null;
+          try {
+            cached = await getUserProfile(u.uid);
+          } catch {
+            cached = null;
           }
+          if (!active || eventVersion !== authEventVersion) return;
 
-          setUser(merged);
-          void saveUserProfile(merged);
-          void syncPendingCheckins(2);
-          void syncPendingProfileUpdates(2);
+          const initial = buildAuthUserFromCached(u, cached);
+          persistUser(initial);
+          setAuthReady(true);
 
-          if (cached) {
-            const backfill: Record<string, any> = {};
-            if (!publicData?.name && cached?.name) backfill.name = cached.name;
-            if (!publicData?.handle && cached?.handle) backfill.handle = cached.handle;
-            if (!publicData?.city && cached?.city) backfill.city = cached.city;
-            if (!publicData?.campus && cached?.campus) backfill.campus = cached.campus;
-            if (!publicData?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
-            if (!publicData?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
-            if (!privateData?.phone && cached?.phone) backfill.phone = cached.phone;
-            if (!publicData?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
-            if (!Array.isArray(publicData?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
-            if (publicData?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
-            if (!privateData?.email && u.email) backfill.email = u.email;
-            if (Object.keys(backfill).length) {
-              void (async () => {
+          cancelDeferredHydration = scheduleNonCriticalAuthWork(async () => {
+            try {
+              const db = fb.firestore();
+              const { publicData, privateData } = await loadRemoteAuthProfileState(db, u.uid);
+              if (!active || eventVersion !== authEventVersion) return;
+
+              const liveAuthUser = getCurrentFirebaseUser() || u;
+              const merged = buildAuthUserFromRemote({
+                authUser: liveAuthUser,
+                cached,
+                publicData,
+                privateData,
+              });
+              persistUser(merged, { deferred: true });
+
+              const backfill = buildAuthProfileBackfill({
+                cached,
+                publicData,
+                privateData,
+                email: liveAuthUser.email,
+              });
+              if (Object.keys(backfill).length) {
                 try {
                   await updateUserRemote(u.uid, backfill);
+                  await removePendingProfileUpdate(u.uid);
                 } catch {
                   await enqueuePendingProfileUpdate(u.uid, backfill);
                 }
-              })();
+              }
+            } catch {
+              if (!cached && active && eventVersion === authEventVersion) {
+                persistUser(buildAuthUserFromCached(u, null), { deferred: true });
+                setAuthReady(true);
+              }
             }
-          }
-        } catch (e) {
-          const cached = await getUserProfile(u.uid);
-          if (cached) {
-            const merged = { ...cached, id: u.uid, email: u.email, emailVerified: !!u.emailVerified };
-            setUser(merged as any);
-            void saveUserProfile(merged);
-          } else {
-            setUser({ id: u.uid, email: u.email, emailVerified: !!u.emailVerified, phone: u.phoneNumber || null, photoUrl: null });
-          }
-        }
+          });
+        })();
       });
-      return () => unsub();
+      const unsubIdToken = observeIdTokenChanges((u: any) => {
+        if (!u) return;
+        const nextVerified = !!u.emailVerified;
+        setUser((prev) => {
+          if (!prev || prev.id !== u.uid) return prev;
+          if (prev.emailVerified === nextVerified && prev.email === u.email) return prev;
+          const merged = {
+            ...prev,
+            email: u.email,
+            emailVerified: nextVerified,
+            phone: prev.phone || u.phoneNumber || null,
+          };
+          void saveUserProfile(merged);
+          return merged;
+        });
+      });
+      return () => {
+        active = false;
+        cancelDeferredHydration?.();
+        unsub();
+        unsubIdToken();
+      };
     }
 
     // Local/demo fallback: load persisted local user if present so demo accounts auto-sign-in
     let hadLocal = false;
     try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          const raw = window.localStorage.getItem('spot_user_v1');
-          if (raw) {
-            const u = JSON.parse(raw);
-            const loc = normalizeLocationFields(u);
-            setUser({ ...u, ...loc } as any);
-            hadLocal = true;
-          }
-        }
+      const localUser = loadLocalAuthSession();
+      if (localUser) {
+        persistUser(
+          buildAuthUserFromCached(
+            {
+              uid: localUser.id,
+              email: localUser.email,
+              emailVerified: localUser.emailVerified,
+              phoneNumber: localUser.phone,
+              photoURL: localUser.photoUrl,
+            },
+            localUser,
+          ) as any,
+        );
+        hadLocal = true;
+      }
     } catch (e) {
       // ignore
     }
@@ -205,17 +259,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const isDevEnv = process.env.NODE_ENV !== 'production';
       if (!hadLocal && !isFirebaseConfigured() && (isDevHost || isDevEnv)) {
         try {
-          if (typeof window !== 'undefined' && window.localStorage) {
-            const demoEmail = `demo+${Date.now()}@local`;
-            const u = { id: `local-${Date.now()}`, email: demoEmail, name: 'Demo User', handle: `demo${Date.now().toString().slice(-4)}`, city: 'Houston', campusOrCity: 'Houston', campusType: 'city', emailVerified: true } as any;
-            window.localStorage.setItem('spot_user_v1', JSON.stringify(u));
-            const loc = normalizeLocationFields(u);
-            setUser({ ...u, ...loc } as any);
-            try {
-              // best-effort logging
-              logEvent('user_demo_auto_signed_in', u.id);
-            } catch {}
-          }
+          const localDemo = createLocalDemoAuthSession();
+          const persisted = persistLocalAuthSession(localDemo);
+          if (!persisted) return;
+          persistUser(
+            buildAuthUserFromCached(
+              {
+                uid: localDemo.id,
+                email: localDemo.email,
+                emailVerified: localDemo.emailVerified,
+                phoneNumber: localDemo.phone,
+                photoURL: localDemo.photoUrl,
+              },
+              localDemo,
+            ) as any,
+          );
+          try {
+            // best-effort logging
+            logEvent('user_demo_auto_signed_in', localDemo.id);
+          } catch {}
         } catch (e) {
           // ignore
         }
@@ -230,6 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         void seedDemoNetwork();
       }
     } catch {}
+    setAuthReady(true);
   }, []);
 
   async function register(
@@ -248,107 +311,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ) {
     try {
       devLog('register called', { email, name, city, campus, handle, fbConfigured: isFirebaseConfigured() });
-      if (!isFirebaseConfigured()) {
-        // local fallback: persist simple user in localStorage for dev/demo
-        try {
-          if (typeof window !== 'undefined' && window.localStorage) {
-            const campusOrCity = campusType === 'campus' ? campus : city;
-            const u = {
-              id: `local-${Date.now()}`,
-              email,
-              name,
-              city,
-              campus,
-              campusOrCity,
-              campusType: campusType || 'city',
-              handle,
-              phone,
-              coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
-              ambiancePreference: preferences?.ambiancePreference ?? null,
-              emailVerified: true,
-            };
-            window.localStorage.setItem('spot_user_v1', JSON.stringify(u));
-            // also keep a list of local users for debugging
-            try {
-              const rawList = window.localStorage.getItem('spot_users_v1');
-              const list = rawList ? JSON.parse(rawList) : [];
-              list.push({ id: u.id, email: u.email, name: u.name, handle: u.handle, city: u.city, campus: u.campus, campusOrCity: u.campusOrCity, campusType: u.campusType, phone: u.phone, createdAt: Date.now() });
-              window.localStorage.setItem('spot_users_v1', JSON.stringify(list));
-            } catch {}
-            setUser(u as any);
-            void saveUserProfile(u);
-            await logEvent('user_registered_local', u.id, { city, campus, handle });
-            devLog('local register success', u.id);
-            return;
-          }
-        } catch (e) {
-          devLog('local register failed', e);
-        }
-        throw new Error('Firebase not configured');
-      }
-
-      const campusOrCity = campusType === 'campus' ? campus : city;
-      const created = await createAccountWithEmail({
-        email,
-        password,
-        name,
-        city,
-        campus,
-        campusOrCity,
-        handle,
-        campusType: campusType || 'city',
-        phone,
-        coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
-        ambiancePreference: preferences?.ambiancePreference ?? null,
-      } as any);
-      void (async () => {
-        try {
-          await updateUserRemote(created.uid, {
-            name,
-            city,
-            campus,
-            campusOrCity,
-            campusType: campusType || 'city',
-            handle,
-            phone,
-            email,
-            coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
-            ambiancePreference: preferences?.ambiancePreference ?? null,
-          });
-          await removePendingProfileUpdate(created.uid);
-        } catch {
-          await enqueuePendingProfileUpdate(created.uid, {
-            name,
-            city,
-            campus,
-            campusOrCity,
-            campusType: campusType || 'city',
-            handle,
-            phone,
-            email,
-            coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
-            ambiancePreference: preferences?.ambiancePreference ?? null,
-          });
-        }
-      })();
-      // user needs to verify email before full access
-      const merged = {
-        id: created.uid,
-        email: created.email,
-        emailVerified: false,
-        name,
-        city,
-        campus,
-        campusOrCity,
-        handle,
-        campusType: campusType || 'city',
-        phone,
-        coffeeIntents: Array.isArray(preferences?.coffeeIntents) ? preferences.coffeeIntents.slice(0, 3) : [],
-        ambiancePreference: preferences?.ambiancePreference ?? null,
-      };
-      setUser(merged);
-      void saveUserProfile(merged);
-      await logEvent('user_registered', created.uid, { city, campus, handle });
+      const merged = await registerAuthAccount(
+        {
+          email,
+          password,
+          name,
+          city,
+          handle,
+          campusType,
+          campus,
+          phone,
+          preferences,
+        },
+        {
+          isFirebaseConfigured,
+          createAccountWithEmail,
+          logEvent,
+        },
+      );
+      persistUser(merged);
     } catch (e) {
       devLog('register error', e);
       throw e;
@@ -360,21 +341,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isFirebaseConfigured()) {
         // local fallback: check localStorage
         try {
-          if (typeof window !== 'undefined' && window.localStorage) {
-            const raw = window.localStorage.getItem('spot_user_v1');
-            if (!raw) throw new Error('No local user');
-            const u = JSON.parse(raw);
-            if (u.email === email) {
-              setUser(u as any);
-              void logEvent('user_signed_in_local', u.id);
-              try {
-                const { sendSigninNotification } = await import('@/services/notify');
-                void sendSigninNotification(u.email, undefined, { local: true, uid: u.id });
-              } catch {}
-              return;
-            }
-            throw new Error('Invalid credentials');
-          }
+          const localUser = findLocalAuthSessionByEmail(email);
+          if (!localUser) throw new Error('Invalid credentials');
+          persistUser(
+            buildAuthUserFromCached(
+              {
+                uid: localUser.id,
+                email: localUser.email,
+                emailVerified: localUser.emailVerified,
+                phoneNumber: localUser.phone,
+                photoURL: localUser.photoUrl,
+              },
+              localUser,
+            ) as any,
+          );
+          void logEvent('user_signed_in_local', localUser.id);
+          try {
+            const { sendSigninNotification } = await import('@/services/notify');
+            void sendSigninNotification(localUser.email || '', undefined, { local: true, uid: localUser.id });
+          } catch {}
+          return;
         } catch (e) {
           devLog('local sign-in failed', e);
           throw e;
@@ -382,103 +368,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Firebase not configured');
       }
 
-      const fb = getFirebaseOrThrow();
-
+      getFirebaseOrThrow();
       const userObj = await fbSignInWithEmail({ email, password } as any);
-      const authUser = getCurrentFirebaseUser();
-      const emailVerified = !!(authUser && authUser.emailVerified);
-      // Hydrate from local cache first so UI has name/handle immediately (avoids "Someone" on first post).
-      let cached: any = null;
-      try {
-        cached = await getUserProfile(userObj.uid);
-      } catch {
-        cached = null;
-      }
-      const cachedLoc = normalizeLocationFields(cached || {});
-      const initial = {
-        id: userObj.uid,
-        email: userObj.email,
-        emailVerified,
-        name: cached?.name,
-        handle: cached?.handle,
-        city: cachedLoc.city ?? cached?.city,
-        campus: cachedLoc.campus ?? cached?.campus,
-        campusOrCity: cachedLoc.campusOrCity ?? cached?.campusOrCity,
-        campusType: cachedLoc.campusType ?? cached?.campusType,
-        phone: cached?.phone || authUser?.phoneNumber || userObj.phoneNumber || null,
-        photoUrl: cached?.photoUrl || null,
-        coffeeIntents: Array.isArray(cached?.coffeeIntents) ? cached.coffeeIntents : [],
-        ambiancePreference: cached?.ambiancePreference ?? null,
-      };
-      setUser(initial);
-      void saveUserProfile(initial);
       void logEvent('user_signed_in_email', userObj.uid);
-      void syncPendingCheckins(2);
-      void syncPendingProfileUpdates(2);
-      void (async () => {
-        try {
-          const db = fb.firestore();
-          const { publicData, privateData } = await loadRemoteProfileState(db, userObj.uid);
-          const cached = await getUserProfile(userObj.uid);
-          const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
-          setUser((prev: any) => {
-            const merged = {
-              ...prev,
-              name: publicData?.name ?? cached?.name,
-              handle: publicData?.handle ?? cached?.handle,
-              city: loc.city ?? cached?.city,
-              campus: loc.campus ?? cached?.campus,
-              campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
-              campusType: loc.campusType ?? cached?.campusType,
-              phone: privateData?.phone || authUser.phoneNumber || cached?.phone || prev?.phone,
-              photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || prev?.photoUrl,
-              coffeeIntents: Array.isArray(publicData?.coffeeIntents)
-                ? publicData.coffeeIntents
-                : Array.isArray(cached?.coffeeIntents)
-                  ? cached.coffeeIntents
-                  : Array.isArray(prev?.coffeeIntents)
-                    ? prev.coffeeIntents
-                    : [],
-              ambiancePreference:
-                publicData?.ambiancePreference ??
-                cached?.ambiancePreference ??
-                prev?.ambiancePreference ??
-                null,
-            };
-            void saveUserProfile(merged);
-            return merged;
-          });
-          const backfill: Record<string, any> = {};
-          if (!publicData?.name && cached?.name) backfill.name = cached.name;
-          if (!publicData?.handle && cached?.handle) backfill.handle = cached.handle;
-          if (!publicData?.city && cached?.city) backfill.city = cached.city;
-          if (!publicData?.campus && cached?.campus) backfill.campus = cached.campus;
-          if (!publicData?.campusOrCity && cached?.campusOrCity) backfill.campusOrCity = cached.campusOrCity;
-          if (!publicData?.campusType && cached?.campusType) backfill.campusType = cached.campusType;
-          if (!privateData?.phone && (cached?.phone || authUser?.phoneNumber)) backfill.phone = cached?.phone || authUser?.phoneNumber;
-          if (!publicData?.photoUrl && cached?.photoUrl) backfill.photoUrl = cached.photoUrl;
-          if (!Array.isArray(publicData?.coffeeIntents) && Array.isArray(cached?.coffeeIntents)) backfill.coffeeIntents = cached.coffeeIntents.slice(0, 3);
-          if (publicData?.ambiancePreference === undefined && cached?.ambiancePreference) backfill.ambiancePreference = cached.ambiancePreference;
-          if (!privateData?.email && userObj.email) backfill.email = userObj.email;
-          if (Object.keys(backfill).length) {
-            try {
-              await updateUserRemote(userObj.uid, backfill);
-              await removePendingProfileUpdate(userObj.uid);
-            } catch {
-              await enqueuePendingProfileUpdate(userObj.uid, backfill);
-            }
-          }
-        } catch {}
-      })();
       void (async () => {
         try {
           const { sendSigninNotification } = await import('@/services/notify');
           await sendSigninNotification(userObj.email || '', undefined, { uid: userObj.uid });
         } catch {}
       })();
-      if (!emailVerified) {
-      } else {
-      }
     } catch (e) {
       devLog('signInWithEmail error', e);
       throw e;
@@ -488,15 +386,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Create a simple local/demo user and sign them in immediately.
   async function createDemoUser(email?: string, name = 'Demo User') {
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        const demoEmail = (email && email.trim()) || `demo+${Date.now()}@local`;
-        const u = { id: `local-${Date.now()}`, email: demoEmail, name, handle: `demo${Date.now().toString().slice(-4)}`, city: 'Houston', campusOrCity: 'Houston', campusType: 'city', emailVerified: true } as any;
-        window.localStorage.setItem('spot_user_v1', JSON.stringify(u));
-        const loc = normalizeLocationFields(u);
-        setUser({ ...u, ...loc } as any);
-        await logEvent('user_demo_signed_in', u.id);
-        return;
-      }
+      const localDemo = createLocalDemoAuthSession({ email, name });
+      const persisted = persistLocalAuthSession(localDemo);
+      if (!persisted) throw new Error('Demo not available');
+      persistUser(
+        buildAuthUserFromCached(
+          {
+            uid: localDemo.id,
+            email: localDemo.email,
+            emailVerified: localDemo.emailVerified,
+            phoneNumber: localDemo.phone,
+            photoURL: localDemo.photoUrl,
+          },
+          localDemo,
+        ) as any,
+      );
+      await logEvent('user_demo_signed_in', localDemo.id);
+      return;
     } catch (e) {
       devLog('createDemoUser failed', e);
       throw e;
@@ -506,7 +412,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function resendVerification() {
     getFirebaseOrThrow();
-    const { sendVerificationEmail } = await import('@/services/firebaseClient');
     await sendVerificationEmail();
   }
 
@@ -541,11 +446,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function deleteAccount(currentPassword?: string) {
     if (!isFirebaseConfigured()) {
-      try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.removeItem('spot_user_v1');
-        }
-      } catch {}
+      clearLocalAuthSession();
       setUser(null);
       await logEvent('user_deleted_local', user?.id);
       return;
@@ -581,41 +482,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return false;
     }
-    const authUser = getCurrentFirebaseUser();
+    let authUser = getCurrentFirebaseUser();
     if (!authUser) return false;
     try {
       if (typeof authUser.reload === 'function') {
         await authUser.reload();
       }
+      if (typeof authUser.getIdToken === 'function') {
+        await authUser.getIdToken(true).catch(() => undefined);
+      }
+      authUser = getCurrentFirebaseUser() || authUser;
       const emailVerified = !!authUser.emailVerified;
-      try {
-        const db = fb.firestore();
-        const { publicData, privateData } = await loadRemoteProfileState(db, authUser.uid);
-        const cached = await getUserProfile(authUser.uid);
-        const loc = normalizeLocationFields({ ...(cached || {}), ...(publicData || {}) });
+      setUser((prev) => {
+        if (!prev || prev.id !== authUser.uid) return prev;
         const merged = {
-          id: authUser.uid,
+          ...prev,
           email: authUser.email,
           emailVerified,
-          name: publicData?.name ?? cached?.name,
-          handle: publicData?.handle ?? cached?.handle,
-          city: loc.city ?? cached?.city,
-          campus: loc.campus ?? cached?.campus,
-          campusOrCity: loc.campusOrCity ?? cached?.campusOrCity,
-          campusType: loc.campusType ?? cached?.campusType,
-          phone: privateData?.phone || authUser.phoneNumber || cached?.phone || null,
-          photoUrl: publicData?.photoUrl || publicData?.avatarUrl || cached?.photoUrl || null,
-          coffeeIntents: Array.isArray(publicData?.coffeeIntents)
-            ? publicData.coffeeIntents
-            : Array.isArray(cached?.coffeeIntents)
-              ? cached.coffeeIntents
-              : [],
-          ambiancePreference: publicData?.ambiancePreference ?? cached?.ambiancePreference ?? null,
+          phone: prev.phone || authUser.phoneNumber || null,
         };
-        setUser(merged);
         void saveUserProfile(merged);
+        return merged;
+      });
+      try {
+        const db = fb.firestore();
+        const { publicData, privateData } = await loadRemoteAuthProfileState(db, authUser.uid);
+        const cached = await getUserProfile(authUser.uid);
+        const merged = buildAuthUserFromRemote({
+          authUser,
+          cached,
+          publicData,
+          privateData,
+        });
+        persistUser(merged, { deferred: true });
       } catch {
-        setUser({ id: authUser.uid, email: authUser.email, emailVerified, phone: authUser.phoneNumber || null });
+        persistUser(buildAuthUserFromCached(authUser, null), { deferred: true });
       }
       return emailVerified;
     } catch (e) {
@@ -629,10 +530,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Optimistic local update for fast UI
     setUser(merged);
     void saveUserProfile(merged);
-    if (typeof window !== 'undefined' && window.localStorage) {
-      try {
-        window.localStorage.setItem('spot_user_v1', JSON.stringify(merged));
-      } catch {}
+    if (merged) {
+      persistLocalAuthSession(buildLocalAuthSessionUser({
+        id: merged.id,
+        email: merged.email,
+        name: merged.name,
+        city: merged.city,
+        campus: merged.campus,
+        campusType: merged.campusType,
+        handle: merged.handle,
+        phone: merged.phone,
+        photoUrl: merged.photoUrl,
+        emailVerified: merged.emailVerified,
+        preferences: {
+          coffeeIntents: merged.coffeeIntents,
+          ambiancePreference: merged.ambiancePreference ?? null,
+        },
+      }));
     }
 
     const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) => {
@@ -667,7 +581,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void logEvent('user_profile_updated', user?.id, fields as any);
   }
 
-  return <AuthContext.Provider value={{ user, register, signInWithEmail, createDemoUser, signOut, resendVerification, changePassword, resetPassword, refreshUser, deleteAccount, updateProfile }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ authReady, user, register, signInWithEmail, createDemoUser, signOut, resendVerification, changePassword, resetPassword, refreshUser, deleteAccount, updateProfile }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

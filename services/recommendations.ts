@@ -16,6 +16,12 @@ import { normalizeSpotForExplore } from './spotNormalizer';
 import { getUserPreferenceScores } from '@/storage/local';
 import { inferIntentsFromCheckin, scoreSpotForIntent, type DiscoveryIntent } from './discoveryIntents';
 import { distanceBetween, geohashQueryBounds } from 'geofire-common';
+import {
+  buildSpotUtilitySnapshot,
+  buildUtilityReasonsFromSnapshot,
+  type SpotUtilitySnapshot,
+  type RecommendationSource,
+} from './recommendationEngine';
 
 export interface SpotRecommendation {
   placeId: string;
@@ -26,6 +32,9 @@ export interface SpotRecommendation {
   predictedNoise?: number; // 1-5
   bestTimeToVisit?: string; // e.g., "2-4 PM"
   matchScore?: number; // How well it matches user preferences
+  distanceMeters?: number;
+  liveSignals?: SpotUtilitySnapshot;
+  source?: RecommendationSource;
 }
 
 export interface UserPreferences {
@@ -94,6 +103,7 @@ function sanitizeSpotRecommendation(raw: any): SpotRecommendation | null {
     predictedNoise: typeof raw.predictedNoise === 'number' ? raw.predictedNoise : undefined,
     bestTimeToVisit: typeof raw.bestTimeToVisit === 'string' ? raw.bestTimeToVisit : undefined,
     matchScore: typeof raw.matchScore === 'number' ? raw.matchScore : undefined,
+    source: 'collaborative',
   };
 }
 
@@ -245,6 +255,7 @@ async function getCollaborativeRecommendationsFromFirestore(
       formatCollaborativeReason(score),
       'Popular among people who like similar spots',
     ],
+    source: 'collaborative',
   }));
 }
 
@@ -309,16 +320,29 @@ export async function getPersonalizedRecommendations(
         const currentPattern = timePatterns.find(
           (pattern) => pattern.hour === currentHour && pattern.dayOfWeek === currentDay
         );
+        const liveSignals = buildSpotUtilitySnapshot(spot);
+        const utilityReasons = buildUtilityReasonsFromSnapshot(
+          liveSignals,
+          context?.intent || 'any',
+        );
+        const mergedReasons = Array.from(new Set([...(reasons || []), ...utilityReasons])).slice(0, 4);
+        const distanceMeters =
+          typeof spot?.distance === 'number' && Number.isFinite(spot.distance)
+            ? Math.round(spot.distance * 1000)
+            : undefined;
 
         return {
           placeId: spot.placeId,
           name: spot.name,
           score,
-          reasons,
+          reasons: mergedReasons,
           predictedBusyness: currentPattern?.avgBusyness ?? spot.avgBusyness ?? undefined,
           predictedNoise: currentPattern?.avgNoise ?? spot.avgNoiseLevel ?? undefined,
           bestTimeToVisit: getBestTimeToVisit(timePatterns, preferences),
           matchScore: score,
+          distanceMeters,
+          liveSignals,
+          source: 'personalized',
         } satisfies SpotRecommendation;
       });
 

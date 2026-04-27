@@ -25,9 +25,27 @@ import { gapStyle } from '@/utils/layout';
 import { devLog } from '@/services/logger';
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { findUserByEmail, findUserByHandle, findUserByPhone, getCheckinsForUserRemote, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriends, getUserFriendsCached, getUsersByCampus, getUsersByIds, getUsersByIdsCached, isFirebaseConfigured, updateUserRemote } from '@/services/firebaseClient';
+import { isFirebaseConfigured } from '@/services/repositories/authRepository';
+import { getCheckinsForUserRemote, getCheckinsRemote } from '@/services/repositories/checkinRepository';
+import {
+  findUserByEmail,
+  findUserByHandle,
+  findUserByPhone,
+  updateUserRemote,
+} from '@/services/repositories/profileRepository';
+import {
+  getCloseFriends,
+  getIncomingFriendRequests,
+  getOutgoingFriendRequests,
+  getUserFriends,
+  getUserFriendsCached,
+  getUsersByCampus,
+  getUsersByIds,
+  getUsersByIdsCached,
+} from '@/services/repositories/socialRepository';
 import { logEvent } from '@/services/logEvent';
 import { resolvePhotoUri } from '@/services/photoSources';
+import { buildProfileReputationSummary } from '@/services/profileReputation';
 import { getUserStats } from '@/services/gamification';
 import { getCheckins, getPermissionPrimerSeen, getSavedSpots, setPermissionPrimerSeen, subscribeSavedSpots } from '@/storage/local';
 import { toMillis } from '@/services/checkinUtils';
@@ -492,6 +510,26 @@ export default function ProfileScreen() {
     }).length;
   }, [checkins]);
 
+  const reputation = useMemo(
+    () =>
+      buildProfileReputationSummary({
+        user,
+        checkins,
+        stats: {
+          streakDays: streak,
+          totalCheckins: userStats?.totalCheckins ?? checkins.length,
+          uniqueSpots:
+            userStats?.uniqueSpots ??
+            new Set(
+              checkins
+                .map((checkin) => String(checkin?.spotPlaceId || checkin?.spotName || checkin?.spot || '').trim())
+                .filter(Boolean),
+            ).size,
+        },
+      }),
+    [checkins, streak, user, userStats?.totalCheckins, userStats?.uniqueSpots],
+  );
+
   const [savingHandle, setSavingHandle] = useState(false);
   const [handleAvailability, setHandleAvailability] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
   const [nameSavedAt, setNameSavedAt] = useState<number | null>(null);
@@ -852,6 +890,40 @@ export default function ProfileScreen() {
                 ) : null}
               </>
             )}
+            {(reputation.badges.length || reputation.trustSignals.length) ? (
+              <View style={[styles.reputationCard, { borderColor, backgroundColor: withAlpha(primary, 0.05) }]}>
+                <Text style={[styles.reputationTitle, { color: textColor }]}>Your reputation</Text>
+                <Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+                  {reputation.contributionSummary}
+                </Text>
+                {reputation.badges.length ? (
+                  <View style={styles.reputationBadgeRow}>
+                    {reputation.badges.map((badge) => (
+                      <View
+                        key={badge.id}
+                        style={[styles.reputationBadge, { borderColor, backgroundColor: withAlpha(cardBg, 0.85) }]}
+                      >
+                        <Text style={{ color: textColor, fontSize: 12, fontWeight: '700' }}>
+                          {badge.label}
+                        </Text>
+                        <Text style={{ color: muted, fontSize: 11, marginTop: 2 }}>
+                          {badge.detail}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {reputation.trustSignals.length ? (
+                  <View style={{ marginTop: 12 }}>
+                    {reputation.trustSignals.map((signal) => (
+                      <Text key={signal} style={{ color: textColor, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
+                        {signal}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             <MetricsImpactCard />
             {fbAvailable && user?.email && !user.emailVerified ? (
               <Pressable
@@ -1359,6 +1431,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statValue: { fontSize: 18, fontWeight: '700', marginBottom: tokens.space.s4 },
+  reputationCard: {
+    marginTop: tokens.space.s12,
+    padding: tokens.space.s14,
+    borderRadius: tokens.radius.r16,
+    borderWidth: 1,
+  },
+  reputationTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  reputationBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: tokens.space.s12,
+    ...gapStyle(tokens.space.s8),
+  },
+  reputationBadge: {
+    borderWidth: 1,
+    borderRadius: tokens.radius.r14,
+    paddingHorizontal: tokens.space.s10,
+    paddingVertical: tokens.space.s8,
+  },
   locationCard: {
     marginTop: tokens.space.s12,
     padding: tokens.space.s14,

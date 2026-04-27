@@ -1,5 +1,24 @@
 export const CHECKIN_TTL_MS = 24 * 60 * 60 * 1000;
 
+export type NumericCheckinScale = 1 | 2 | 3 | 4 | 5;
+
+export function toNumericCheckinScale(value: unknown): NumericCheckinScale | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const rounded = Math.round(value);
+    if (rounded >= 1 && rounded <= 5) {
+      return rounded as NumericCheckinScale;
+    }
+    return null;
+  }
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  const parsed = Number.parseInt(normalized, 10);
+  if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 5) {
+    return parsed as NumericCheckinScale;
+  }
+  return null;
+}
+
 export function toNumericNoiseLevel(value: string | number | null): 1 | 2 | 3 | 4 | 5 | null {
   if (value == null) return null;
 
@@ -20,6 +39,34 @@ export function toNumericNoiseLevel(value: string | number | null): 1 | 2 | 3 | 
     return parsed as 1 | 2 | 3 | 4 | 5;
   }
   return null;
+}
+
+export function toNumericOutletAvailability(value: unknown): NumericCheckinScale | null {
+  const numeric = toNumericCheckinScale(value);
+  if (numeric) return numeric;
+
+  if (typeof value === 'boolean') {
+    return value ? 4 : 1;
+  }
+
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'plenty') return 5;
+  if (normalized === 'some') return 4;
+  if (normalized === 'few') return 2;
+  if (normalized === 'none') return 1;
+  return null;
+}
+
+export function toLegacyOutletAvailability(
+  value: unknown,
+): 'plenty' | 'some' | 'few' | 'none' | null {
+  const numeric = toNumericOutletAvailability(value);
+  if (numeric === null) return null;
+  if (numeric >= 5) return 'plenty';
+  if (numeric >= 4) return 'some';
+  if (numeric >= 2) return 'few';
+  return 'none';
 }
 
 export function toMillis(input: any): number | null {

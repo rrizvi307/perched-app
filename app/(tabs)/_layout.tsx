@@ -1,5 +1,4 @@
-import { useAuth } from '@/contexts/AuthContext';
-import { Redirect, Tabs, useRootNavigationState, useRouter } from 'expo-router';
+import { Tabs, useRootNavigationState, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
@@ -11,7 +10,6 @@ import Logo from '@/components/logo';
 import AppTabBar from '@/components/app-tab-bar';
 
 export default function TabLayout() {
-  const { user } = useAuth();
   const router = useRouter();
   const rootNavigationState = useRootNavigationState();
   const muted = useThemeColor({}, 'muted');
@@ -30,14 +28,6 @@ export default function TabLayout() {
 
   if (!navReady) {
     return null;
-  }
-
-  if (!user) {
-    return <Redirect href="/signin" />;
-  }
-
-  if (user && user.email && !user.emailVerified) {
-    return <Redirect href="/verify" />;
   }
 
   return (

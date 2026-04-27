@@ -2,7 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { track } from '../analytics';
 import { getUserStats } from '../gamification';
-import { scheduleStreakReminder, scheduleWeeklyRecap } from '../smartNotifications';
+import {
+  hasPushNotificationPermission,
+  initPushNotifications,
+  scheduleStreakReminder,
+  scheduleWeeklyRecap,
+} from '../smartNotifications';
 
 jest.mock('expo-notifications', () => ({
   SchedulableTriggerInputTypes: {
@@ -87,5 +92,23 @@ describe('smartNotifications managed scheduling', () => {
     expect(mockedNotifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('existing-weekly-id');
     expect(mockedNotifications.scheduleNotificationAsync).not.toHaveBeenCalled();
     expect(storage.get('@perched_scheduled_notification_ids')).toBe(JSON.stringify({}));
+  });
+
+  it('skips permission prompts during silent startup initialization', async () => {
+    mockedNotifications.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined' } as any);
+
+    const token = await initPushNotifications({ requestPermission: false });
+
+    expect(token).toBeNull();
+    expect(mockedNotifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedNotifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(mockedTrack).not.toHaveBeenCalled();
+  });
+
+  it('reports granted notification permission independently of push token retrieval', async () => {
+    mockedNotifications.getPermissionsAsync.mockResolvedValueOnce({ status: 'granted' } as any);
+
+    await expect(hasPushNotificationPermission()).resolves.toBe(true);
+    expect(mockedNotifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
   });
 });

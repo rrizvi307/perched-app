@@ -1,5 +1,6 @@
 import { toMillis } from '@/services/checkinUtils';
-import { ensureFirebase, getCheckinsForSpotRemote } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
+import { getCheckinsForSpotRemote } from '@/services/repositories/checkinRepository';
 import { normalizeSpotName } from '@/services/spotUtils';
 
 export type SpotLocation = { lat: number; lng: number };
@@ -412,4 +413,3 @@ export function filterVisibleSpotCheckins(checkins: any[], viewerId?: string | n
     return true;
   });
 }
-

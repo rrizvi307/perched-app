@@ -2,23 +2,29 @@ import { Body } from '@/components/ui/typography';
 import { tokens } from '@/constants/tokens';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import React from 'react';
-import { Pressable, StyleSheet, TextStyle } from 'react-native';
+import { Pressable, StyleSheet, TextStyle, type PressableProps } from 'react-native';
 
-type Props = {
+type Props = PressableProps & {
   children: React.ReactNode;
   variant?: 'primary' | 'secondary' | 'ghost';
   style?: any;
-  onPress?: () => void;
 };
 
-export function Button({ children, variant = 'primary', style, onPress }: Props) {
+export function Button({
+  children,
+  variant = 'primary',
+  style,
+  accessibilityRole = 'button',
+  ...pressableProps
+}: Props) {
   const textColor = useThemeColor({}, 'text');
   const primary = useThemeColor({}, 'primary');
   const border = useThemeColor({}, 'border');
 
   return (
     <Pressable
-      onPress={onPress}
+      accessibilityRole={accessibilityRole}
+      {...pressableProps}
       style={[
         styles.base,
         variant === 'primary' ? [styles.primary, { backgroundColor: primary }] : undefined,
@@ -68,3 +74,4 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   } as TextStyle,
 });
+

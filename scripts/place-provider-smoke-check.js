@@ -4,6 +4,12 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+const DEFAULT_PLACE_PROVIDER_SMOKE_QUERIES = [
+  'Blacksmith Houston TX',
+  'Catalina Coffee Houston TX',
+  'Boomtown Coffee Houston TX',
+  'Agora Houston TX',
+];
 
 function parseDotenv(content) {
   const output = {};
@@ -62,10 +68,36 @@ function isTruthy(value, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
-function readArg(flag) {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) return '';
-  return String(process.argv[index + 1] || '').trim();
+function readArgs(flag, argv = process.argv) {
+  const values = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== flag) continue;
+    const value = String(argv[index + 1] || '').trim();
+    if (value) values.push(value);
+  }
+  return values;
+}
+
+function readArg(flag, argv = process.argv) {
+  return readArgs(flag, argv)[0] || '';
+}
+
+function parseSmokeQueries(value) {
+  if (!isSet(value)) return [];
+  return String(value)
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getSmokeQueries(options = {}) {
+  const argv = Array.isArray(options.argv) ? options.argv : process.argv;
+  const env = options.env || process.env;
+  const cliQueries = readArgs('--query', argv);
+  if (cliQueries.length) return cliQueries;
+  const envQueries = parseSmokeQueries(env.PLACE_PROVIDER_SMOKE_QUERY);
+  if (envQueries.length) return envQueries;
+  return [...DEFAULT_PLACE_PROVIDER_SMOKE_QUERIES];
 }
 
 function getCredentials() {
@@ -177,36 +209,58 @@ function preview(value) {
   }
 }
 
-async function main() {
-  hydrateLocalEnv();
+function formatAttemptSummary(attempts) {
+  return attempts
+    .map((attempt) => {
+      if (!attempt?.ok) {
+        return `${attempt?.query || 'unknown'} -> error: ${attempt?.error || 'unknown error'}`;
+      }
+      return `${attempt.query} -> place=${attempt.placeName} signals=${attempt.externalSignalsCount} google=${attempt.hasGoogleSnapshot ? 'yes' : 'no'} photos=${attempt.providerPhotosCount}`;
+    })
+    .join(' | ');
+}
 
-  const apiKey = getFirebaseApiKey();
-  const projectId = getProjectId();
-  const { email, password } = getCredentials();
-  const smokeQuery = String(
-    readArg('--query') ||
-    process.env.PLACE_PROVIDER_SMOKE_QUERY ||
-    'Blacksmith Houston TX',
-  ).trim();
-  const requireProviderPhoto = isTruthy(
-    process.env.REQUIRE_PROVIDER_PHOTO_SMOKE_CHECK,
-    true,
-  );
+function selectSmokeResult(attempts, requireProviderPhoto = false) {
+  const successfulAttempts = attempts.filter((attempt) => attempt?.ok);
+  const photoBackedAttempt = successfulAttempts.find(
+    (attempt) => attempt.providerPhotosCount > 0,
+  ) || null;
+  const chosenAttempt = photoBackedAttempt || successfulAttempts[0] || null;
 
-  if (!isSet(apiKey)) {
-    throw new Error('FIREBASE_API_KEY is required for place provider smoke checks.');
+  if (!chosenAttempt) {
+    return {
+      ok: false,
+      chosenAttempt: null,
+      warning: null,
+      error: `all place-provider smoke queries failed: ${formatAttemptSummary(attempts)}`,
+    };
   }
-  if (!isSet(projectId)) {
-    throw new Error('FIREBASE_PROJECT_ID is required for place provider smoke checks.');
-  }
-  if (!isSet(email) || !isSet(password)) {
-    throw new Error('SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are required.');
+
+  if (requireProviderPhoto && !photoBackedAttempt) {
+    return {
+      ok: false,
+      chosenAttempt,
+      warning: null,
+      error: `placeSignalsProxy returned no provider photos for any smoke query. Attempts: ${formatAttemptSummary(attempts)}`,
+    };
   }
 
-  const idToken = await signInWithPassword(apiKey, email, password);
-  const googleProxyUrl = getGooglePlacesProxyUrl(projectId);
-  const signalsProxyUrl = getPlaceSignalsProxyUrl(projectId);
+  return {
+    ok: true,
+    chosenAttempt,
+    warning: photoBackedAttempt
+      ? null
+      : `provider photos unavailable across ${successfulAttempts.length} successful place-provider smoke quer${successfulAttempts.length === 1 ? 'y' : 'ies'}; treating this as non-blocking because the runtime contract only requires external signals or Google snapshot data.`,
+    error: null,
+  };
+}
 
+async function runSmokeQuery({
+  smokeQuery,
+  googleProxyUrl,
+  signalsProxyUrl,
+  idToken,
+}) {
   const searchResponse = await fetchJson(googleProxyUrl, {
     method: 'POST',
     headers: makeAuthHeaders(idToken),
@@ -286,6 +340,9 @@ async function main() {
     ? signalsResponse.json.providerPhotos
     : [];
   const googleSnapshot = signalsResponse.json?.googleSnapshot || null;
+  const degradedProviders = Array.isArray(signalsResponse.json?.degradedProviders)
+    ? signalsResponse.json.degradedProviders.filter(Boolean)
+    : [];
 
   if (!externalSignals.length && !googleSnapshot) {
     throw new Error(
@@ -293,18 +350,90 @@ async function main() {
     );
   }
 
-  if (requireProviderPhoto && providerPhotos.length === 0) {
-    throw new Error(
-      `placeSignalsProxy returned no provider photos for ${primaryPlace.name}. Query: "${smokeQuery}"`,
-    );
+  return {
+    ok: true,
+    query: smokeQuery,
+    placeName: primaryPlace.name,
+    searchCount: searchPlaces.length,
+    nearbyCount: nearbyPlaces.length,
+    externalSignalsCount: externalSignals.length,
+    providerPhotosCount: providerPhotos.length,
+    hasGoogleSnapshot: Boolean(googleSnapshot),
+    degradedProviders,
+  };
+}
+
+async function main() {
+  hydrateLocalEnv();
+
+  const apiKey = getFirebaseApiKey();
+  const projectId = getProjectId();
+  const { email, password } = getCredentials();
+  const smokeQueries = getSmokeQueries();
+  const requireProviderPhoto = isTruthy(
+    process.env.REQUIRE_PROVIDER_PHOTO_SMOKE_CHECK,
+    false,
+  );
+
+  if (!isSet(apiKey)) {
+    throw new Error('FIREBASE_API_KEY is required for place provider smoke checks.');
+  }
+  if (!isSet(projectId)) {
+    throw new Error('FIREBASE_PROJECT_ID is required for place provider smoke checks.');
+  }
+  if (!isSet(email) || !isSet(password)) {
+    throw new Error('SMOKE_TEST_EMAIL/SMOKE_TEST_PASSWORD (or APP_REVIEW_EMAIL/APP_REVIEW_PASSWORD) are required.');
+  }
+
+  const idToken = await signInWithPassword(apiKey, email, password);
+  const googleProxyUrl = getGooglePlacesProxyUrl(projectId);
+  const signalsProxyUrl = getPlaceSignalsProxyUrl(projectId);
+  const attempts = [];
+
+  for (const smokeQuery of smokeQueries) {
+    try {
+      const result = await runSmokeQuery({
+        smokeQuery,
+        googleProxyUrl,
+        signalsProxyUrl,
+        idToken,
+      });
+      attempts.push(result);
+      if (result.providerPhotosCount > 0) break;
+    } catch (error) {
+      attempts.push({
+        ok: false,
+        query: smokeQuery,
+        error: String(error?.message || error),
+      });
+    }
+  }
+
+  const outcome = selectSmokeResult(attempts, requireProviderPhoto);
+  if (!outcome.ok || !outcome.chosenAttempt) {
+    throw new Error(outcome.error || 'place provider smoke check failed');
+  }
+
+  if (outcome.warning) {
+    process.stderr.write(`[place-provider-smoke-check] warning: ${outcome.warning}\n`);
   }
 
   process.stdout.write(
-    `[place-provider-smoke-check] success query="${smokeQuery}" place="${primaryPlace.name}" search=${searchPlaces.length} nearby=${nearbyPlaces.length} signals=${externalSignals.length} photos=${providerPhotos.length}\n`,
+    `[place-provider-smoke-check] success query="${outcome.chosenAttempt.query}" place="${outcome.chosenAttempt.placeName}" search=${outcome.chosenAttempt.searchCount} nearby=${outcome.chosenAttempt.nearbyCount} signals=${outcome.chosenAttempt.externalSignalsCount} google=${outcome.chosenAttempt.hasGoogleSnapshot ? 'yes' : 'no'} photos=${outcome.chosenAttempt.providerPhotosCount} queriesTried=${attempts.length}\n`,
   );
 }
 
-main().catch((error) => {
-  process.stderr.write(`[place-provider-smoke-check] ${String(error?.message || error)}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`[place-provider-smoke-check] ${String(error?.message || error)}\n`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DEFAULT_PLACE_PROVIDER_SMOKE_QUERIES,
+  formatAttemptSummary,
+  getSmokeQueries,
+  parseSmokeQueries,
+  selectSmokeResult,
+};

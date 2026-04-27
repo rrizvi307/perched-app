@@ -18,6 +18,10 @@ export interface NotificationPreferences {
   weeklyRecap: boolean;
 }
 
+type InitPushNotificationsOptions = {
+  requestPermission?: boolean;
+};
+
 type ManagedNotificationType = 'streak_reminder' | 'weekly_recap';
 
 export function ensureNotificationHandlerConfigured(): void {
@@ -89,18 +93,35 @@ export async function clearManagedNotifications(
   await Promise.all(types.map((type) => cancelManagedNotification(type)));
 }
 
+export async function hasPushNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    return status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Initialize push notifications
  */
-export async function initPushNotifications(): Promise<string | null> {
+export async function initPushNotifications(
+  options: InitPushNotificationsOptions = {}
+): Promise<string | null> {
   if (Platform.OS === 'web') return null;
 
   try {
     ensureNotificationHandlerConfigured();
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
+    const requestPermission = options.requestPermission !== false;
 
     if (existingStatus !== 'granted') {
+      if (!requestPermission) {
+        return null;
+      }
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }

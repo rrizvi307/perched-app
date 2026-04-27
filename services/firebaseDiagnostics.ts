@@ -1,4 +1,4 @@
-import { ensureFirebase } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
 import { getExpoFirebaseConfig } from './expoConfig';
 
 type DiagnosticStatus = 'ok' | 'fail' | 'skipped';

@@ -79,15 +79,17 @@ Do not submit until every blocker item below is green on a release build.
 ### Auth And Account
 
 1. Sign up with a brand new email.
-2. Confirm the app routes to the verification screen and does not unlock the main experience before verification.
-3. Open the verification email and confirm the link resolves correctly.
-4. Return to the app and confirm `I verified - continue` succeeds.
-5. Sign out and sign back in with the verified account.
-6. Use `Forgot password?` and confirm the reset email arrives from `Perched <noreply@mail.perched.app>`.
-7. Complete password reset from the email link and sign in with the new password.
-8. Trigger a resend verification email and confirm it works again without Firebase-branded fallback mail.
-9. Open Settings and confirm Account, Upgrade, and Delete Account screens all load.
-10. Delete the account from the in-app deletion flow and confirm the user is returned to sign in.
+2. Confirm signup requests location to verify the current launch market before account creation completes.
+3. Deny the signup-time location request once and confirm the app keeps account creation blocked with clear launch-market messaging.
+4. Confirm the app routes to the verification screen and does not unlock the main experience before verification.
+5. Open the verification email and confirm the link resolves correctly.
+6. Return to the app and confirm `I verified - continue` succeeds.
+7. Sign out and sign back in with the verified account.
+8. Use `Forgot password?` and confirm the reset email arrives from `Perched <noreply@mail.perched.app>`.
+9. Complete password reset from the email link and sign in with the new password.
+10. Trigger a resend verification email and confirm it works again without Firebase-branded fallback mail.
+11. Open Settings and confirm Account, Upgrade, and Delete Account screens all load.
+12. Delete the account from the in-app deletion flow and confirm the user is returned to sign in.
 
 ### Core Product
 

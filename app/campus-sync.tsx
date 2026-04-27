@@ -10,7 +10,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { withAlpha } from '@/utils/colors';
 import { useAuth } from '@/contexts/AuthContext';
-import { updateUserRemote } from '@/services/firebaseClient';
+import { updateUserRemote } from '@/services/repositories/profileRepository';
 
 interface Campus {
   id: string;

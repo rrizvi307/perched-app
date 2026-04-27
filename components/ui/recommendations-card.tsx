@@ -102,7 +102,7 @@ export function RecommendationsCard({
         <View style={styles.header}>
           <IconSymbol name="sparkles" size={20} color={primary} />
           <Text style={[styles.title, { color: text }]}>
-            {variant === 'collaborative' ? 'You Might Also Like' : 'Recommended for You'}
+            {variant === 'collaborative' ? 'You Might Also Like' : 'Recommended Right Now'}
           </Text>
         </View>
         <View style={styles.loadingContainer}>
@@ -122,7 +122,7 @@ export function RecommendationsCard({
       <View style={styles.header}>
         <IconSymbol name="sparkles" size={20} color={primary} />
         <Text style={[styles.title, { color: text }]}>
-          {variant === 'collaborative' ? 'You Might Also Like' : 'Recommended for You'}
+          {variant === 'collaborative' ? 'You Might Also Like' : 'Recommended Right Now'}
         </Text>
       </View>
 
@@ -148,6 +148,12 @@ export function RecommendationsCard({
               {rec.name}
             </Text>
 
+            {rec.distanceMeters ? (
+              <Text style={[styles.metaText, { color: muted }]}>
+                {formatDistanceMeters(rec.distanceMeters)}
+              </Text>
+            ) : null}
+
             {/* Predictions */}
             {(rec.predictedBusyness || rec.predictedNoise) && (
               <View style={styles.predictions}>
@@ -169,6 +175,19 @@ export function RecommendationsCard({
                 )}
               </View>
             )}
+
+            {buildUtilityChips(rec).length ? (
+              <View style={styles.utilityRow}>
+                {buildUtilityChips(rec).map((chip) => (
+                  <View
+                    key={`${rec.placeId}-${chip}`}
+                    style={[styles.utilityChip, { backgroundColor: withAlpha(primary, 0.1) }]}
+                  >
+                    <Text style={[styles.utilityText, { color: primary }]}>{chip}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
 
             {/* Best Time */}
             {rec.bestTimeToVisit && (
@@ -216,6 +235,20 @@ function getNoiseLabel(level: number): string {
   if (level <= 2) return 'Quiet';
   if (level <= 3.5) return 'Moderate';
   return 'Lively';
+}
+
+function formatDistanceMeters(distanceMeters: number): string {
+  if (distanceMeters < 1000) return `${distanceMeters}m away`;
+  return `${(distanceMeters / 1000).toFixed(1)}km away`;
+}
+
+function buildUtilityChips(rec: SpotRecommendation): string[] {
+  const chips: string[] = [];
+  if ((rec.liveSignals?.wifiQuality || 0) >= 4) chips.push('Strong WiFi');
+  if ((rec.liveSignals?.outletAvailability || 0) >= 4) chips.push('Easy outlets');
+  if (rec.liveSignals?.openNow === true) chips.push('Open now');
+  if ((rec.liveSignals?.overallVibe || 0) >= 4) chips.push('Great vibe');
+  return chips.slice(0, 3);
 }
 
 const styles = StyleSheet.create({
@@ -277,9 +310,14 @@ const styles = StyleSheet.create({
   spotName: {
     fontSize: 15,
     fontWeight: '700',
-    marginBottom: 10,
+    marginBottom: 6,
     paddingRight: 50, // Space for score badge
     minHeight: 38,
+  },
+  metaText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 8,
   },
   predictions: {
     flexDirection: 'row',
@@ -312,6 +350,21 @@ const styles = StyleSheet.create({
   reasons: {
     gap: 4,
     marginBottom: 12,
+  },
+  utilityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  utilityChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  utilityText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   reasonRow: {
     flexDirection: 'row',

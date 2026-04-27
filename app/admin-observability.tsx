@@ -1,7 +1,7 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
-import { ensureFirebase } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
 import { getCacheHitRate, getCacheStats } from '@/services/cacheLayer';
 import { getPerfMetricsSnapshot } from '@/services/perfMonitor';
 import { SLO_DEFINITIONS, calculateSLOCompliance, isSLOViolation } from '@/services/sloConfig';

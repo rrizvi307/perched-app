@@ -1,0 +1,21 @@
+appId: app.perched
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: signin-screen
+- tapOn:
+    id: signin-email-input
+- inputText: ${E2E_VERIFIED_EMAIL}
+- tapOn:
+    id: signin-password-input
+- inputText: ${E2E_VERIFIED_PASSWORD}
+- hideKeyboard
+- tapOn:
+    id: signin-submit-button
+- extendedWaitUntil:
+    visible:
+      id: feed-screen
+    timeout: 20000
+- assertVisible:
+    id: feed-screen

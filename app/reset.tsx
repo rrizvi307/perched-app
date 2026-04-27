@@ -49,7 +49,7 @@ export default function ResetPassword() {
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView testID="reset-screen" style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
@@ -71,6 +71,7 @@ export default function ResetPassword() {
           <Body style={{ color: muted, marginTop: tokens.space.s6 }}>Enter your email and we’ll send a reset link.</Body>
           <View style={{ height: tokens.space.s12 }} />
           <TextInput
+            testID="reset-email-input"
             placeholder="you@school.edu"
             placeholderTextColor={muted}
             value={email}
@@ -83,10 +84,19 @@ export default function ResetPassword() {
             style={[styles.input, { borderColor: border, backgroundColor: card, color: text }]}
           />
           <View style={{ height: tokens.space.s10 }} />
-          <Pressable onPress={submit} style={[styles.button, { backgroundColor: primary }]} disabled={loading}>
+          <Pressable
+            testID="reset-submit-button"
+            onPress={submit}
+            style={[styles.button, { backgroundColor: primary }]}
+            disabled={loading}
+          >
             <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>{loading ? 'Sending…' : 'Send reset link'}</Text>
           </Pressable>
-          {status ? <Body style={{ color: muted, marginTop: tokens.space.s10 }}>{status}</Body> : null}
+          {status ? (
+            <Body testID="reset-status-message" style={{ color: muted, marginTop: tokens.space.s10 }}>
+              {status}
+            </Body>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </ThemedView>

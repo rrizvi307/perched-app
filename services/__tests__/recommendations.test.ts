@@ -197,6 +197,7 @@ describe('recommendations scalability path', () => {
         predictedNoise: undefined,
         bestTimeToVisit: undefined,
         matchScore: undefined,
+        source: 'collaborative',
       },
     ]);
     expect(firestoreCollection).not.toHaveBeenCalled();
@@ -273,6 +274,7 @@ describe('recommendations scalability path', () => {
         name: 'Fallback Cafe',
         score: 100,
         reasons: ['1 user with similar taste checked in here', 'Popular among people who like similar spots'],
+        source: 'collaborative',
       },
     ]);
   });

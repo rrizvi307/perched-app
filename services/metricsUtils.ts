@@ -1,3 +1,5 @@
+import { toLegacyOutletAvailability } from '@/services/checkinUtils';
+
 /**
  * Utility Metrics calculation and aggregation
  *
@@ -81,6 +83,12 @@ function calculateMetrics(checkins: any[]): MetricsData {
 
 		if (c.outletAvailability && outletCounts[c.outletAvailability] !== undefined) {
 			outletCounts[c.outletAvailability]++;
+			return;
+		}
+
+		const normalizedOutlet = toLegacyOutletAvailability(c.outletAvailability);
+		if (normalizedOutlet && outletCounts[normalizedOutlet] !== undefined) {
+			outletCounts[normalizedOutlet]++;
 		}
 	});
 

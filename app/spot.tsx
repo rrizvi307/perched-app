@@ -9,7 +9,18 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { gapStyle } from '@/utils/layout';
-import { getOutgoingFriendRequests, getPlaceTagRemote, getPlaceTagVotesRemote, getUserFriendsCached, getUsersByIdsCached, recordPlaceEventRemote, recordPlaceTagVoteRemote, sendFriendRequest } from '@/services/firebaseClient';
+import {
+  getPlaceTagRemote,
+  getPlaceTagVotesRemote,
+  recordPlaceEventRemote,
+  recordPlaceTagVoteRemote,
+} from '@/services/repositories/checkinRepository';
+import {
+  getOutgoingFriendRequests,
+  getUserFriendsCached,
+  getUsersByIdsCached,
+  sendFriendRequest,
+} from '@/services/repositories/socialRepository';
 import { getMapsKey, getPlaceDetails } from '@/services/googleMaps';
 import { openInMaps } from '@/services/mapsLinks';
 import { isSavedSpot, recordPlaceEvent, recordPlaceTag, toggleSavedSpot } from '@/storage/local';

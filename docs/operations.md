@@ -22,6 +22,7 @@ This is the single runbook for Firebase setup, launch operations, and App Store 
 8. Smoke test auth, check-in creation, photo upload, and account deletion on a release build.
 9. Re-test verification email delivery and sign-in alert delivery whenever the transactional email setup changes.
 10. Keep a dedicated production smoke-test account and run the auth smoke check before every App Store submission.
+11. If `verify:user-documents:split` or `post-deploy:smoke-check` fails on migration integrity, run `npm run repair:user-documents:split` in dry-run mode first, then apply only the targeted repair needed before re-running verification.
 
 ## App Store Resubmission Checklist
 

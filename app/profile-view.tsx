@@ -5,18 +5,19 @@ import { SkeletonLoader } from '@/components/ui/skeleton-loader';
 import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { findUserByHandle } from '@/services/repositories/profileRepository';
+import { getCheckinsForUserRemote } from '@/services/repositories/checkinRepository';
 import {
-  getCheckinsForUserRemote,
   getIncomingFriendRequests,
   getOutgoingFriendRequests,
   getUserFriendsCached,
   getUsersByIds,
   sendFriendRequest,
-  findUserByHandle,
-} from '@/services/firebaseClient';
+} from '@/services/repositories/socialRepository';
 import { formatCheckinClock, toMillis } from '@/services/checkinUtils';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { resolvePhotoUri } from '@/services/photoSources';
+import { buildProfileReputationSummary } from '@/services/profileReputation';
 import { getCheckins } from '@/storage/local';
 import { gapStyle } from '@/utils/layout';
 import { withAlpha } from '@/utils/colors';
@@ -191,14 +192,19 @@ export default function ProfileView() {
     return count;
   }, [checkins]);
 
-  const badges = useMemo(() => {
-    const list: string[] = [];
-    if (streak >= 7) list.push(`${streak}-day streak`);
-    if (totalCheckins >= 25) list.push('Regular');
-    if (uniqueSpots >= 10) list.push('Explorer');
-    if (totalCheckins >= 100) list.push('Legend');
-    return list;
-  }, [streak, totalCheckins, uniqueSpots]);
+  const reputation = useMemo(
+    () =>
+      buildProfileReputationSummary({
+        user: profile,
+        checkins,
+        stats: {
+          streakDays: streak,
+          totalCheckins,
+          uniqueSpots,
+        },
+      }),
+    [checkins, profile, streak, totalCheckins, uniqueSpots],
+  );
 
   const visibleCheckins = useMemo(() => checkins.slice(0, 40), [checkins]);
   const topSpots = useMemo(() => {
@@ -311,14 +317,29 @@ export default function ProfileView() {
           </View>
         </View>
 
-        {badges.length ? (
+        {reputation.badges.length ? (
           <View style={{ marginTop: 14 }}>
-            <Text style={{ color: muted, marginBottom: 6 }}>Badges</Text>
+            <Text style={{ color: muted, marginBottom: 6 }}>Credibility</Text>
             <View style={[styles.badgeWrap, gapStyle(8)]}>
-              {badges.map((badge) => (
-                <View key={badge} style={[styles.badge, { borderColor: border, backgroundColor: card }]}>
-                  <Text style={{ color: text, fontSize: 12, fontWeight: '700' }}>{badge}</Text>
+              {reputation.badges.map((badge) => (
+                <View key={badge.id} style={[styles.badge, { borderColor: border, backgroundColor: card }]}>
+                  <Text style={{ color: text, fontSize: 12, fontWeight: '700' }}>
+                    {badge.label} · <Text style={{ color: muted, fontWeight: '600' }}>{badge.detail}</Text>
+                  </Text>
                 </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        {reputation.trustSignals.length ? (
+          <View style={{ marginTop: 14 }}>
+            <Text style={{ color: muted, marginBottom: 6 }}>Trust signals</Text>
+            <View style={[styles.signalCard, { borderColor: withAlpha(border, 0.8), backgroundColor: withAlpha(card, 0.9) }]}>
+              {reputation.trustSignals.map((signal) => (
+                <Text key={signal} style={{ color: text, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>
+                  {signal}
+                </Text>
               ))}
             </View>
           </View>
@@ -447,6 +468,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
+  },
+  signalCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
   },
   feedRow: {
     borderWidth: 1,

@@ -8,12 +8,12 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { formatCheckinTime, toMillis } from '@/services/checkinUtils';
 import { isDemoMode } from '@/services/demoMode';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { getCheckinsForUserRemote } from '@/services/firebaseClient';
+import { getCheckinsForUserRemote } from '@/services/repositories/checkinRepository';
 import { getCheckins } from '@/storage/local';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
 import { resolvePhotoUri } from '@/services/photoSources';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
@@ -140,7 +140,7 @@ export default function MyPostsScreen() {
     });
   }, [data, focusId]);
 
-  if (!user) return <Redirect href="/signin" />;
+  if (!user) return null;
 
   return (
     <ThemedView style={styles.container}>

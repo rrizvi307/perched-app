@@ -6,11 +6,11 @@ import { Body, H1, Label } from '@/components/ui/typography';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useKeyboardHeight, useKeyboardVisible } from '@/hooks/use-keyboard-visible';
-import { isFirebaseConfigured } from '@/services/firebaseClient';
+import { isFirebaseConfigured } from '@/services/repositories/authRepository';
 import { devLog } from '@/services/logger';
 import { withAlpha } from '@/utils/colors';
 import { gapStyle } from '@/utils/layout';
-import { useRootNavigationState, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import React, { useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,7 +21,7 @@ export default function SignIn() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const { signInWithEmail, createDemoUser, user } = useAuth();
+  const { signInWithEmail, createDemoUser } = useAuth();
   const fbAvailable = isFirebaseConfigured();
   const passwordRef = useRef<TextInput>(null);
   const color = useThemeColor({}, 'text');
@@ -33,7 +33,6 @@ export default function SignIn() {
   const background = useThemeColor({}, 'background');
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const rootNavigationState = useRootNavigationState();
   const muted = useThemeColor({}, 'muted');
   const isWeb = Platform.OS === 'web';
   const { height } = useWindowDimensions();
@@ -90,17 +89,8 @@ export default function SignIn() {
     }
   }
 
-  React.useEffect(() => {
-    if (!rootNavigationState?.key || !user) return;
-    if (user.email && !user.emailVerified) {
-      router.replace('/verify');
-      return;
-    }
-    router.replace('/(tabs)/feed');
-  }, [user, rootNavigationState?.key, router]);
-
   return (
-    <ThemedView style={[styles.container, { backgroundColor: background }]}>
+    <ThemedView testID="signin-screen" style={[styles.container, { backgroundColor: background }]}>
       <Atmosphere />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -142,6 +132,7 @@ export default function SignIn() {
               <Text style={{ color: muted, fontWeight: '600' }}>New here?</Text>
               <Pressable
                 onPress={() => router.push('/signup')}
+                testID="signin-create-account-button"
                 accessibilityRole="button"
                 accessibilityLabel="Create a new Perched account"
                 style={[styles.secondary, { borderColor: border }]}
@@ -157,6 +148,7 @@ export default function SignIn() {
                 <View style={{ height: tokens.space.s8 }} />
                 <Pressable
                   onPress={useDemoAccount}
+                  testID="signin-demo-account-button"
                   accessibilityRole="button"
                   accessibilityLabel="Use the Perched demo account"
                   style={{ padding: tokens.space.s8, borderRadius: tokens.radius.r12, backgroundColor: accent, alignItems: 'center', marginTop: tokens.space.s6 }}
@@ -169,6 +161,7 @@ export default function SignIn() {
             <View style={styles.fieldGroup}>
               <Label style={{ color, opacity: 1 }}>Email</Label>
               <TextInput
+                testID="signin-email-input"
                 placeholder="Email"
                 placeholderTextColor={muted}
                 value={email}
@@ -196,6 +189,7 @@ export default function SignIn() {
               <View style={styles.passwordRow}>
                 <TextInput
                   ref={passwordRef}
+                  testID="signin-password-input"
                   placeholder="Password"
                   placeholderTextColor={muted}
                   value={password}
@@ -213,6 +207,7 @@ export default function SignIn() {
                 />
                 <Pressable
                   onPress={() => setShowPassword((s) => !s)}
+                  testID="signin-password-visibility-button"
                   accessibilityRole="button"
                   accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
                   style={[styles.passwordToggle, { borderColor: border }]}
@@ -224,6 +219,7 @@ export default function SignIn() {
 
             <Pressable
               onPress={() => router.push('/reset')}
+              testID="signin-reset-password-button"
               accessibilityRole="button"
               accessibilityLabel="Reset password"
               style={{ alignSelf: 'flex-start', marginTop: tokens.space.s6 }}
@@ -235,6 +231,7 @@ export default function SignIn() {
 
             <Pressable
               onPress={doSignIn}
+              testID="signin-submit-button"
               accessibilityRole="button"
               accessibilityLabel={loading ? 'Signing in' : 'Sign in'}
               style={[styles.primary, { backgroundColor: primary }, loading ? { opacity: 0.6 } : undefined]}

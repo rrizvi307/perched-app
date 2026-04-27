@@ -27,6 +27,7 @@ import {
 import { queryAllCheckins, queryCheckinsByUser, subscribeApprovedCheckins as subscribeApprovedCheckinsHelper } from './schemaHelpers';
 import { addMutualFriend, removeFriendRequestPair, removeMutualFriend } from './friendsLocalUtils';
 import { addBreadcrumb, captureException } from './sentry';
+import { validateLaunchMarketSignup } from './launchMarkets';
 
 // Helper to get config from Expo Constants or environment
 function getConfigValue(key: string): string {
@@ -752,6 +753,11 @@ function normalizeScore(value: unknown): number | null {
 
 function normalizeBool(value: unknown): boolean | null {
   if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value >= 4) return true;
+    if (value <= 2) return false;
+    return null;
+  }
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase();
     if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
@@ -858,7 +864,7 @@ function buildObservedWorkScore(checkin: Record<string, any>) {
   const busyness = normalizeScore(checkin.busyness);
   const laptop = normalizeBool(checkin.laptopFriendly);
   const outletsBool = normalizeBool(checkin.outletAvailability);
-  const outletsScore = normalizeScore(checkin.outlets);
+  const outletsScore = normalizeScore(checkin.outlets ?? checkin.outletAvailability);
 
   let score = 0;
   let weight = 0;
@@ -3163,7 +3169,22 @@ async function assertHandleAvailableForAccount(handle?: string, currentUserId?: 
   }
 }
 
-async function cleanupFailedEmailSignup() {
+async function cleanupFailedEmailSignup(userId?: string) {
+  const fb = ensureFirebase();
+  if (fb && userId) {
+    const db = fb.firestore();
+    try {
+      await Promise.allSettled([
+        db.collection(PUBLIC_PROFILES_COLLECTION).doc(userId).delete(),
+        db.collection(SOCIAL_GRAPH_COLLECTION).doc(userId).delete(),
+        db.collection(USER_PRIVATE_COLLECTION).doc(userId).delete(),
+        db.collection(PUSH_TOKENS_COLLECTION).doc(userId).delete().catch(() => {}),
+        db.collection(USERS_COLLECTION).doc(userId).delete(),
+      ]);
+    } catch (cleanupError) {
+      devLog('profile doc cleanup failed during signup cleanup', { userId, cleanupError });
+    }
+  }
   try {
     await deleteCurrentUser();
   } catch (deleteError) {
@@ -3191,6 +3212,10 @@ export async function createAccountWithEmail({
 }: any) {
   const fb = ensureFirebase();
   if (!fb) throw getFirebaseInitError() || makeFirebaseConfigError();
+  const launchMarketValidation = validateLaunchMarketSignup({ city, campus });
+  if (!launchMarketValidation.allowed) {
+    throw makeClientError(launchMarketValidation.message, launchMarketValidation.code);
+  }
   await ensureAuthPersistenceConfigured(fb);
   const res = await runFirebaseAuthOperationWithRetry('create_user_email_password', async () => (
     shouldUseModularAuth()
@@ -3202,26 +3227,33 @@ export async function createAccountWithEmail({
     await assertHandleAvailableForAccount(handle, uid);
     await sendVerificationEmail(undefined, name || res.user.displayName || undefined);
   } catch (error) {
-    await cleanupFailedEmailSignup();
+    await cleanupFailedEmailSignup(uid);
     throw error;
   }
-  // create profile doc in background after verification delivery succeeds
-  void createUserRemote({
-    userId: uid,
-    name,
-    city,
-    campus,
-    campusOrCity,
-    campusType,
-    handle,
-    email,
-    phone,
-    coffeeIntents,
-    ambiancePreference,
-    photoUrl: res.user.photoURL || null,
-  }).catch((error) => {
+  try {
+    // Account creation is not complete until the split user documents exist.
+    await createUserRemote({
+      userId: uid,
+      name,
+      city,
+      campus,
+      campusOrCity,
+      campusType,
+      handle,
+      email,
+      phone,
+      coffeeIntents,
+      ambiancePreference,
+      photoUrl: res.user.photoURL || null,
+    });
+  } catch (error) {
     devLog('createUserRemote failed', error);
-  });
+    await cleanupFailedEmailSignup(uid);
+    throw makeClientError(
+      'Unable to finish setting up your account. Please try again.',
+      'auth/profile-bootstrap-failed',
+    );
+  }
   return res.user;
 }
 

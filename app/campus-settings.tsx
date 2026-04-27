@@ -23,7 +23,7 @@ import { withAlpha } from '@/utils/colors';
 import * as Haptics from 'expo-haptics';
 import { useToast } from '@/contexts/ToastContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { updateUserRemote } from '@/services/firebaseClient';
+import { updateUserRemote } from '@/services/repositories/profileRepository';
 
 interface CampusPreferences {
   autoDetect: boolean;

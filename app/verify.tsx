@@ -33,21 +33,38 @@ export default function Verify() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const appState = useRef(AppState.currentState);
+  const refreshInFlight = useRef(false);
 
   useEffect(() => {
+    let active = true;
+    const tryRefresh = async () => {
+      if (!active || refreshInFlight.current) return;
+      refreshInFlight.current = true;
+      try {
+        await refreshUser();
+      } finally {
+        refreshInFlight.current = false;
+      }
+    };
+
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appState.current.match(/inactive|background/) && nextState === 'active') {
-        void (async () => {
-          const ok = await refreshUser();
-          if (ok) router.replace('/(tabs)/feed');
-        })();
+        void tryRefresh();
       }
       appState.current = nextState;
     });
+    const interval = setInterval(() => {
+      if (appState.current === 'active') {
+        void tryRefresh();
+      }
+    }, 4000);
+    void tryRefresh();
     return () => {
+      active = false;
+      clearInterval(interval);
       sub.remove();
     };
-  }, [refreshUser, router]);
+  }, [refreshUser]);
 
   async function doResend() {
     if (!resendVerification) return;
@@ -75,7 +92,7 @@ export default function Verify() {
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView testID="verify-screen" style={styles.container}>
       <Atmosphere />
       <Label style={{ color: muted, marginBottom: 8 }}>Almost there</Label>
       <H1 style={{ color }}>Verify your email</H1>
@@ -90,18 +107,22 @@ export default function Verify() {
 
       <View style={{ height: 18 }} />
 
-      <Button onPress={loading || sent ? undefined : doResend} style={loading || sent ? { opacity: 0.6 } : undefined}>
+      <Button
+        testID="verify-resend-button"
+        onPress={loading || sent ? undefined : doResend}
+        style={loading || sent ? { opacity: 0.6 } : undefined}
+      >
         {sent ? 'Sent' : 'Resend verification'}
       </Button>
       <View style={{ height: 12 }} />
       {error ? <Text style={{ color: danger }}>{error}</Text> : null}
       <View style={{ height: 12 }} />
       <Pressable
+        testID="verify-continue-button"
         onPress={async () => {
           setLoading(true);
-          const ok = await refreshUser();
+          await refreshUser();
           setLoading(false);
-          if (ok) router.replace('/(tabs)/feed');
         }}
       >
         <Text style={{ color: primary }}>I verified - continue</Text>
@@ -114,6 +135,7 @@ export default function Verify() {
         </Text>
         <View style={{ height: 12 }} />
         <Pressable
+          testID="verify-use-different-email-button"
           onPress={() => {
             if (loading) return;
             void startOver('/signup');
@@ -124,6 +146,7 @@ export default function Verify() {
         </Pressable>
         <View style={{ height: 10 }} />
         <Pressable
+          testID="verify-back-to-signin-button"
           onPress={() => {
             if (loading) return;
             void startOver('/signin');

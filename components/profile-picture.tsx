@@ -1,7 +1,8 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { devLog } from '@/services/logger';
-import { ensureFirebase, uploadPhotoToStorage } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
+import { uploadPhotoToStorage } from '@/services/repositories/profileRepository';
 import SpotImage from '@/components/ui/spot-image';
 import { withAlpha } from '@/utils/colors';
 import * as ImagePicker from 'expo-image-picker';

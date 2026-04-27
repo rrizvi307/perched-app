@@ -53,10 +53,10 @@ npm run post-deploy:smoke-check
 ### Auth And Account
 
 - Routes: `/signin`, `/signup`, `/verify`, `/reset`, `/settings`, `/delete-account`
-- Required data: one brand-new email and one stable smoke/reviewer account
+- Required data: one brand-new email, one stable smoke/reviewer account, and at least one in-market device or simulator state for the signup gate
 - Launch-blocking: yes
 - Expected behavior:
-  sign up, verify, resend verification, sign in, forgot password, password reset, sign out, and delete account all work on the release candidate without internal knowledge.
+  sign up, verify, resend verification, sign in, forgot password, password reset, sign out, and delete account all work on the release candidate without internal knowledge, and signup only completes for the Houston/Austin launch footprint or supported nearby universities after the location gate succeeds.
 
 ### Check-In Composer
 

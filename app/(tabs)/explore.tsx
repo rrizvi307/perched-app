@@ -18,13 +18,9 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useToast } from '@/contexts/ToastContext';
-import {
-  ensureFirebase,
-  getBlockedUsers,
-  getCheckinsRemote,
-  getPlaceTagRemote,
-  getUserFriendsCached,
-} from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
+import { getCheckinsRemote, getPlaceTagRemote } from '@/services/repositories/checkinRepository';
+import { getBlockedUsers, getUserFriendsCached } from '@/services/repositories/socialRepository';
 import { resolvePhotoUri } from '@/services/photoSources';
 import { resolveSpotVisual } from '@/services/spotVisuals';
 import {
@@ -64,6 +60,7 @@ import {
   scoreSpotForIntent,
   type DiscoveryIntentFilter,
 } from '@/services/discoveryIntents';
+import { buildExploreRecommendationCandidate } from '@/services/recommendationEngine';
 import { applyParsedQueryBoost, parseCoffeeQuery } from '@/services/vibeSearch';
 import { deriveVibeScoresFromSpot, intentToVibe } from '@/services/vibeScoring';
 import { applySeededFallback, isSeededCheckin, normalizeCheckins } from '@/services/checkinPolicy';
@@ -541,6 +538,7 @@ function mergeUniqueCheckins(existing: any[], incoming: any[], maxItems = 600) {
 export default function Explore() {
   const router = useRouter();
   const { user } = useAuth();
+  const userId = user?.id;
   const { showToast } = useToast();
   const demoMode = isDemoMode();
 
@@ -680,7 +678,7 @@ export default function Explore() {
   const passesScope = useCallback(
     (item: any) => {
       if (scope === 'friends') {
-        if (!user) return false;
+        if (!userId) return false;
         return friendIdSet.has(item.userId);
       }
       if (scope === 'campus') {
@@ -689,7 +687,7 @@ export default function Explore() {
       }
       return true;
     },
-    [scope, user, friendIdSet, campusKey]
+    [campusKey, friendIdSet, scope, userId]
   );
 
   const applyFirestoreFilters = useCallback(
@@ -846,18 +844,18 @@ export default function Explore() {
 
   useEffect(() => {
     void (async () => {
-      if (!user) return;
+      if (!userId) return;
       try {
-        const ids = await getUserFriendsCached(user.id);
+        const ids = await getUserFriendsCached(userId);
         setFriendIds(ids?.length ? ids : demoMode ? [...DEMO_USER_IDS] : []);
-        const blocked = await getBlockedUsers(user.id);
+        const blocked = await getBlockedUsers(userId);
         setBlockedIds(blocked || []);
       } catch {
         setFriendIds(demoMode ? [...DEMO_USER_IDS] : []);
         setBlockedIds([]);
       }
     })();
-  }, [user, demoMode]);
+  }, [demoMode, userId]);
 
   useEffect(() => {
     if (!isFocused) return;
@@ -885,9 +883,9 @@ export default function Explore() {
           : mergeUniqueCheckins(remote.items || [], local || []);
 
         const items = mergedItems.filter((item: any) => {
-          if (user && blockedIdSet.has(item.userId)) return false;
+          if (userId && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
-          if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
+          if (!isCheckinVisibleToUser(item, userId, friendIdSet)) return false;
           return true;
         });
         const normalizedItems = await normalizeCheckins(items as any);
@@ -917,9 +915,9 @@ export default function Explore() {
             return;
           }
           const localScoped = (local || []).filter((item: any) => {
-            if (user && blockedIdSet.has(item.userId)) return false;
+            if (userId && blockedIdSet.has(item.userId)) return false;
             if (!passesScope(item)) return false;
-            if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
+            if (!isCheckinVisibleToUser(item, userId, friendIdSet)) return false;
             return true;
           });
           const normalizedLocal = await normalizeCheckins(localScoped as any);
@@ -959,9 +957,9 @@ export default function Explore() {
         }
         const local = await getCheckins();
         let fallback = (local || []).filter((item: any) => {
-          if (user && blockedIdSet.has(item.userId)) return false;
+          if (userId && blockedIdSet.has(item.userId)) return false;
           if (!passesScope(item)) return false;
-          if (!isCheckinVisibleToUser(item, user?.id, friendIdSet)) return false;
+          if (!isCheckinVisibleToUser(item, userId, friendIdSet)) return false;
           return true;
         });
 
@@ -988,7 +986,7 @@ export default function Explore() {
     isFocused,
     demoMode,
     refreshToken,
-    user,
+    userId,
     loc,
     mapFocus,
     mapCenter,
@@ -1053,10 +1051,16 @@ export default function Explore() {
         const queryBoost = applyParsedQueryBoost(spot, parsedQuery);
         const vibeScores = deriveVibeScoresFromSpot(spot);
         const vibeMatch = rankingVibe ? vibeScores[rankingVibe] : null;
+        const recommendation = buildExploreRecommendationCandidate(spot, {
+          intent: rankingIntent,
+          intentSignal,
+          queryBoost: queryBoost.boost,
+        });
         return {
           ...spot,
           intentScore: intentSignal.score,
-          intentReasons: Array.from(new Set([...(intentSignal.reasons || []), ...(queryBoost.reasons || [])])),
+          intentReasons: recommendation.reasons,
+          recommendationScore: recommendation.score,
           queryBoost: queryBoost.boost,
           vibeScores,
           vibeMatch,
@@ -1098,9 +1102,9 @@ export default function Explore() {
         const vibeDelta = (b.vibeMatch || 0) - (a.vibeMatch || 0);
         if (Math.abs(vibeDelta) > 0.5) return vibeDelta;
       }
-      if (rankingIntent !== 'any') {
-        const intentDelta = (b.intentScore || 0) - (a.intentScore || 0);
-        if (Math.abs(intentDelta) > 0.01) return intentDelta;
+      const recommendationDelta = (b.recommendationScore || 0) - (a.recommendationScore || 0);
+      if (Math.abs(recommendationDelta) > 0.5) {
+        return recommendationDelta;
       }
       const queryBoostDelta = (b.queryBoost || 0) - (a.queryBoost || 0);
       if (Math.abs(queryBoostDelta) > 0.5) return queryBoostDelta;

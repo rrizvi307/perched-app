@@ -14,7 +14,21 @@ import { tokens } from '@/constants/tokens';
 import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { subscribeCheckinEvents } from '@/services/feedEvents';
-import { acceptFriendRequest, blockUserRemote, getBlockedUsers, getCheckinsRemote, getCloseFriends, getIncomingFriendRequests, getOutgoingFriendRequests, getUserFriendsCached, isFirebaseConfigured, getFirebaseInitError, reportCheckinRemote, sendFriendRequest, setCloseFriendRemote, subscribeCheckins, subscribeCheckinsForUsers, unblockUserRemote, unfollowUserRemote } from '@/services/firebaseClient';
+import { getFirebaseInitError, isFirebaseConfigured } from '@/services/repositories/authRepository';
+import { getCheckinsRemote, reportCheckinRemote, subscribeCheckins, subscribeCheckinsForUsers } from '@/services/repositories/checkinRepository';
+import {
+  acceptFriendRequest,
+  blockUserRemote,
+  getBlockedUsers,
+  getCloseFriends,
+  getIncomingFriendRequests,
+  getOutgoingFriendRequests,
+  getUserFriendsCached,
+  sendFriendRequest,
+  setCloseFriendRemote,
+  unblockUserRemote,
+  unfollowUserRemote,
+} from '@/services/repositories/socialRepository';
 import { logEvent } from '@/services/logEvent';
 import { devLog } from '@/services/logger';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
@@ -306,6 +320,7 @@ function FeedPhoto({
 	const shouldInlinePhotoUrl = useCallback((value: string | null) => !!value && !value.startsWith('gs://'), []);
 
 	const { user } = useAuth();
+	const userId = user?.id;
 	const router = useRouter();
 	const [isFocused, setIsFocused] = useState(true);
 	const [feedScope, setFeedScope] = useState<'everyone' | 'campus' | 'friends'>('everyone');
@@ -402,17 +417,17 @@ function FeedPhoto({
 		}, [])
 	);
 
-	useEffect(() => {
+		useEffect(() => {
 		(async () => {
-			if (user) {
+			if (userId) {
 				try {
-					const ids = await getUserFriendsCached(user.id);
+					const ids = await getUserFriendsCached(userId);
 					const resolved = ids || [];
 					setFriendIds(resolved.length ? resolved : (isDemoMode() ? [...DEMO_USER_IDS] : []));
-					const blocked = await getBlockedUsers(user.id);
+					const blocked = await getBlockedUsers(userId);
 					setBlockedIds(blocked || []);
-					const incoming = await getIncomingFriendRequests(user.id);
-					const outgoing = await getOutgoingFriendRequests(user.id);
+					const incoming = await getIncomingFriendRequests(userId);
+					const outgoing = await getOutgoingFriendRequests(userId);
 					setIncomingRequests(incoming || []);
 					setOutgoingRequests(outgoing || []);
 				} catch (e) {
@@ -421,22 +436,22 @@ function FeedPhoto({
 				}
 			}
 		})();
-	}, [user]);
+	}, [userId]);
 
 	const refreshFriendRequests = useCallback(async () => {
-		if (!user) return;
+		if (!userId) return;
 		try {
-			const ids = await getUserFriendsCached(user.id);
+			const ids = await getUserFriendsCached(userId);
 			const resolved = ids || [];
 			setFriendIds(resolved.length ? resolved : (isDemoMode() ? [...DEMO_USER_IDS] : []));
-			const blocked = await getBlockedUsers(user.id);
+			const blocked = await getBlockedUsers(userId);
 			setBlockedIds(blocked || []);
-			const incoming = await getIncomingFriendRequests(user.id);
-			const outgoing = await getOutgoingFriendRequests(user.id);
+			const incoming = await getIncomingFriendRequests(userId);
+			const outgoing = await getOutgoingFriendRequests(userId);
 			setIncomingRequests(incoming || []);
 			setOutgoingRequests(outgoing || []);
 		} catch {}
-	}, [user]);
+	}, [userId]);
 
 	const loadReactionsForCheckin = useCallback(async (checkinId: string) => {
 		if (!checkinId) return;
@@ -620,8 +635,8 @@ function FeedPhoto({
 					return !!resolvePhotoUri(item) || !!item?.photoPending;
 				});
 			setItems(mergeUniqueCheckins([], merged as any));
-			if (user) {
-				const selfRemote = merged.filter((c: any) => c.userId === user.id);
+			if (userId) {
+				const selfRemote = merged.filter((c: any) => c.userId === userId);
 				if (selfRemote.length) {
 					const sorted = [...selfRemote].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
 					setLastSelfCheckinAt(sorted[0]?.createdAt || null);
@@ -629,7 +644,7 @@ function FeedPhoto({
 			}
 			setRemoteCursor(remoteFallback ? null : (res.lastCursor || null));
 			setHasMoreRemote(!remoteFallback && cleaned.length >= PAGE);
-			void logEvent('feed_viewed', user?.id);
+			void logEvent('feed_viewed', userId);
 			if (remoteFallback) {
 				setStatus({
 					message: merged.length
@@ -678,7 +693,7 @@ function FeedPhoto({
 				setInitialLoading(false);
 				void endPerfMark(loadMarkId, ok);
 			}
-			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, user]);
+			}, [filterExpired, mergeRemoteWithLocal, showToast, summarizePending, userId]);
 
 	const loadMore = useCallback(async () => {
 		if (loadingMore || !hasMoreRemote) return;
@@ -718,8 +733,8 @@ function FeedPhoto({
 				const local = await getCheckins();
 				localCacheRef.current = local as Checkin[];
 				setItems(mergeUniqueCheckins([], filterExpired(local as any) as any));
-				if (user) {
-					const selfLocal = (local as any[]).filter((c) => c.userId === user.id);
+				if (userId) {
+					const selfLocal = (local as any[]).filter((c) => c.userId === userId);
 					if (selfLocal.length) {
 						const sorted = [...selfLocal].sort((a, b) => (toMillis(b.createdAt) || 0) - (toMillis(a.createdAt) || 0));
 						setLastSelfCheckinAt(sorted[0]?.createdAt || null);
@@ -788,7 +803,7 @@ function FeedPhoto({
 			return () => {
 				unsubLocal();
 			};
-	}, [filterExpired, loadLatest, realtimeEnabled, user, isWeb]);
+	}, [filterExpired, loadLatest, realtimeEnabled, userId, isWeb]);
 
 		useEffect(() => {
 			let active = true;
@@ -800,7 +815,7 @@ function FeedPhoto({
 					setPendingCount(pendingSummary.count);
 					setPendingUploading(pendingSummary.uploading);
 					setPendingError(pendingSummary.error);
-					const scoped = user?.id ? pending.filter((p: any) => p?.userId === user.id) : pending;
+					const scoped = userId ? pending.filter((p: any) => p?.userId === userId) : pending;
 					if (scoped.length) {
 						void syncPendingCheckins(3).then(async () => {
 							try {
@@ -818,7 +833,7 @@ function FeedPhoto({
 		return () => {
 			active = false;
 		};
-		}, [summarizePending, user]);
+		}, [summarizePending, userId]);
 
 		// refs for remote subscriptions so we can swap global <-> friends subscriptions
 		const remoteUnsubRef = useRef<(() => void) | null>(null);
@@ -866,13 +881,13 @@ function FeedPhoto({
 	useEffect(() => {
 		if (!isFocused) return;
 		if (!onlyFriends) return;
-		if (user && friendIds.length === 0) {
+		if (userId && friendIds.length === 0) {
 			(async () => {
 				try {
-					const ids = await getUserFriendsCached(user.id);
+					const ids = await getUserFriendsCached(userId);
 					setFriendIds(ids || []);
-					const incoming = await getIncomingFriendRequests(user.id);
-					const outgoing = await getOutgoingFriendRequests(user.id);
+					const incoming = await getIncomingFriendRequests(userId);
+					const outgoing = await getOutgoingFriendRequests(userId);
 					setIncomingRequests(incoming || []);
 					setOutgoingRequests(outgoing || []);
 				} catch {}
@@ -909,7 +924,7 @@ function FeedPhoto({
 					friendsUnsubRef.current = null;
 				}
 			};
-		}, [isFocused, onlyFriends, friendIds, user, filterExpired, mergeRemoteWithLocal]);
+		}, [filterExpired, friendIds, isFocused, mergeRemoteWithLocal, onlyFriends, userId]);
 
 	const visibleItems = useMemo(() => {
 		let out = items;
@@ -1033,7 +1048,7 @@ function FeedPhoto({
 	}, [initialLoading, feedItems.length]);
 
 	return (
-		<ThemedView style={styles.container}>
+		<ThemedView testID="feed-screen" style={styles.container}>
 			<Atmosphere />
 			<FlatList
 				data={feedItems}
@@ -1195,6 +1210,7 @@ function FeedPhoto({
 						) : null}
 						{user && !hasCheckedInToday ? (
 							<Pressable
+								testID="feed-create-checkin-cta"
 								onPress={() => router.push('/checkin')}
 								accessibilityRole="button"
 								accessibilityLabel="Create a new check-in"

@@ -18,15 +18,15 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { devLog } from '@/services/logger';
 import {
-  getIncomingFriendRequests,
-  getOutgoingFriendRequests,
   acceptFriendRequest,
   declineFriendRequest,
-  sendFriendRequest,
-  getUsersByIds,
-  getUsersByCampus,
+  getIncomingFriendRequests,
+  getOutgoingFriendRequests,
   getUserFriends,
-} from '@/services/firebaseClient';
+  getUsersByCampus,
+  getUsersByIds,
+  sendFriendRequest,
+} from '@/services/repositories/socialRepository';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { logEvent } from '@/services/logEvent';
 import { promptRatingAtMoment, RatingTriggers } from '@/services/appRating';

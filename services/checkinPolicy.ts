@@ -1,6 +1,6 @@
 import { isCloudDemoCheckin, isDemoUserId } from '@/services/demoMode';
 import { resolvePhotoUri } from '@/services/photoSources';
-import { ensureFirebase } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
 
 type CheckinLike = Record<string, any>;
 

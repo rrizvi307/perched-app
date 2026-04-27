@@ -1,4 +1,12 @@
-import { createCheckinRemote, ensureFirebase, getCheckinByClientId, getCheckinById, updateCheckinRemote, uploadCheckinPhotoToStorage, updateUserRemote } from '@/services/firebaseClient';
+import { ensureFirebase } from '@/services/repositories/authRepository';
+import {
+  createCheckinRemote,
+  getCheckinByClientId,
+  getCheckinById,
+  updateCheckinRemote,
+  uploadCheckinPhotoToStorage,
+} from '@/services/repositories/checkinRepository';
+import { updateUserRemote } from '@/services/repositories/profileRepository';
 import { getPendingCheckins, pruneInvalidPendingCheckins, removePendingCheckin, updateCheckinLocalByClientId, getPendingProfileUpdates, removePendingProfileUpdate, updatePendingCheckin } from '@/storage/local';
 import { publishCheckin } from '@/services/feedEvents';
 import { logEvent } from '@/services/logEvent';

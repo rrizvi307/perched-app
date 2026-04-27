@@ -21,22 +21,21 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { useToast } from '@/contexts/ToastContext';
 import { withAlpha } from '@/utils/colors';
+import { findUserByEmail, findUserByPhone } from '@/services/repositories/profileRepository';
 import {
-  searchUsers,
-  sendFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
+  getBlockedUsers,
+  getIncomingFriendRequests,
+  getOutgoingFriendRequests,
   getSocialGraphSnapshotSecure,
   getUserFriendsCached,
   getUsersByCampus,
-  getOutgoingFriendRequests,
-  findUserByEmail,
-  findUserByPhone,
-  getIncomingFriendRequests,
-  acceptFriendRequest,
-  declineFriendRequest,
   getUsersByIdsCached,
+  searchUsers,
+  sendFriendRequest,
   unfollowUserRemote,
-  getBlockedUsers,
-} from '@/services/firebaseClient';
+} from '@/services/repositories/socialRepository';
 import { didFriendRequestResolveToFriendship } from '@/services/friendship';
 import { devLog } from '@/services/logger';
 import { useFocusEffect } from '@react-navigation/native';

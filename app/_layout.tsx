@@ -1,61 +1,27 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, router } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-import { useEffect, useRef } from 'react';
-import { AppState, InteractionManager, Platform } from 'react-native';
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { ThemePreferenceProvider } from '@/contexts/ThemePreferenceContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { initErrorReporting } from '@/services/errorReporting';
-import { syncPendingCheckins, syncPendingProfileUpdates } from '@/services/syncPending';
 import { ToastProvider, useToast } from '@/contexts/ToastContext';
-import { Colors } from '@/constants/theme';
-import { ensureDemoModeReady, isDemoMode } from '@/services/demoMode';
-import { cleanupDemoDataForRealUser } from '@/storage/local';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { initDeepLinking } from '@/services/deepLinking';
-import { initAnalytics } from '@/services/analytics';
-import { refreshFirebaseAppCheckToken, seedCachedAppCheckToken } from '@/services/firebaseAppCheck';
-import { primeProviderProxyAccess } from '@/services/providerProxy';
-import { learnUserPreferences } from '@/services/recommendations';
-import { initPushNotifications, scheduleWeeklyRecap, addNotificationResponseListener } from '@/services/smartNotifications';
-import { savePushToken, seedCachedIdToken } from '@/services/firebaseClient';
 import { AppHeader } from '@/components/ui/app-header';
+import { AppLaunchScreen } from '@/components/ui/app-launch-screen';
 import { AnalyticsConsentDialog } from '@/components/analytics-consent';
-import { seedAnalyticsConsent, isAnalyticsConsentGranted } from '@/services/analyticsConsent';
-import { devLog } from '@/services/logger';
-import { endPerfMark, markPerfEvent, startPerfMark } from '@/services/perfMarks';
 import { getExpoFirebaseConfig } from '@/services/expoConfig';
+import { AuthRouteGuard } from '@/navigation/route-guard';
+import { Colors } from '@/constants/theme';
+import { useAppBootstrap, useRootServicesBootstrap } from '@/bootstrap/app-bootstrap';
 
 export const unstable_settings = {
   initialRouteName: 'signin',
 };
 
-const APP_LAUNCH_MARK_ID = startPerfMark('app_launch_total');
-
 export default function RootLayout() {
-  useEffect(() => {
-    const initMarkId = startPerfMark('app_init_services');
-    void (async () => {
-      try {
-        await seedAnalyticsConsent();
-        initErrorReporting();
-        if (isAnalyticsConsentGranted()) {
-          initAnalytics();
-        }
-      } finally {
-        void endPerfMark(initMarkId, true);
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    // Initialize deep linking
-    const cleanup = initDeepLinking();
-    return cleanup;
-  }, []);
+  useRootServicesBootstrap();
 
   return (
     <ErrorBoundary>
@@ -71,13 +37,11 @@ export default function RootLayout() {
 }
 
 function InnerApp() {
-  const { user } = useAuth();
+  const { authReady, user } = useAuth();
   const colorScheme = useColorScheme();
   const firebaseConfig = getExpoFirebaseConfig();
-  const appState = useRef(AppState.currentState);
-  const notificationsInitializedForUser = useRef<string | null>(null);
-  const interactiveMarked = useRef(false);
   const { showToast } = useToast();
+  const activeUserId = user?.id && (!user.email || user.emailVerified) ? user.id : null;
   const lightNavTheme = {
     ...DefaultTheme,
     colors: {
@@ -103,214 +67,20 @@ function InnerApp() {
     },
   };
 
-  if (
-    Object.values(firebaseConfig || {}).some((value) => typeof value === 'string' && value.trim().length > 0) &&
-    !(global as any).FIREBASE_CONFIG
-  ) {
-    (global as any).FIREBASE_CONFIG = firebaseConfig;
+  useAppBootstrap({
+    activeUserId,
+    colorScheme,
+    firebaseConfig,
+    showToast,
+  });
+
+  if (!authReady) {
+    return <AppLaunchScreen />;
   }
-
-  useEffect(() => {
-    let canceled = false;
-    if (Platform.OS === 'web') {
-      const timer = setTimeout(() => {
-        if (!canceled) {
-          void ensureDemoModeReady(user?.id);
-        }
-      }, 200);
-      return () => {
-        canceled = true;
-        clearTimeout(timer);
-      };
-    }
-    const task = InteractionManager.runAfterInteractions(() => {
-      if (!canceled) {
-        void ensureDemoModeReady(user?.id);
-      }
-    });
-    return () => {
-      canceled = true;
-      task.cancel();
-    };
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    if (isDemoMode()) return;
-    void cleanupDemoDataForRealUser(user.id);
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (interactiveMarked.current) return;
-    const markInteractive = () => {
-      if (interactiveMarked.current) return;
-      interactiveMarked.current = true;
-      void endPerfMark(APP_LAUNCH_MARK_ID, true);
-      void markPerfEvent('app_launch_interactive');
-    };
-
-    if (Platform.OS === 'web') {
-      const id = requestAnimationFrame(markInteractive);
-      return () => cancelAnimationFrame(id);
-    }
-
-    const task = InteractionManager.runAfterInteractions(() => {
-      requestAnimationFrame(markInteractive);
-    });
-    return () => task.cancel();
-  }, []);
-
-  useEffect(() => {
-    if (!user?.id || isDemoMode()) return;
-    const task = InteractionManager.runAfterInteractions(() => {
-      void learnUserPreferences(user.id);
-    });
-    return () => task.cancel();
-  }, [user?.id]);
-
-  // Seed cached auth tokens from AsyncStorage as early as possible so that
-  // the first proxy request on cold start can use them immediately.
-  useEffect(() => {
-    void seedCachedIdToken();
-    void seedCachedAppCheckToken();
-  }, []);
-
-  // Prime proxy access immediately when a signed-in user is detected.
-  // Do NOT delay behind InteractionManager — cold-start proxy readiness
-  // is the #1 cause of "warming up" / broken place search in TestFlight.
-  useEffect(() => {
-    const userId = user?.id;
-    if (!userId || isDemoMode()) return;
-
-    void primeProviderProxyAccess(true);
-    void refreshFirebaseAppCheckToken(true);
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    try {
-      const bg = colorScheme === 'dark' ? Colors.dark.background : Colors.light.background;
-      document.body.style.backgroundColor = bg;
-      document.documentElement.style.backgroundColor = bg;
-      document.body.style.margin = '0';
-      document.body.style.padding = '0';
-      document.body.style.width = '100%';
-      document.body.style.maxWidth = '100%';
-      document.body.style.minHeight = '100%';
-      document.body.style.overflowX = 'hidden';
-      document.body.style.display = 'block';
-      document.documentElement.style.width = '100%';
-      document.documentElement.style.maxWidth = '100%';
-      document.documentElement.style.height = '100%';
-      document.documentElement.style.margin = '0';
-      document.documentElement.style.padding = '0';
-      const root = document.getElementById('root') || document.getElementById('__next');
-      if (root) {
-        root.style.width = '100%';
-        root.style.maxWidth = '100%';
-        root.style.margin = '0';
-        root.style.display = 'flex';
-        root.style.flexDirection = 'column';
-        root.style.alignItems = 'stretch';
-        root.style.justifyContent = 'flex-start';
-        root.style.height = '100%';
-        root.style.boxSizing = 'border-box';
-        Array.from(root.children).forEach((child) => {
-          if (child instanceof HTMLElement) {
-            child.style.width = '100%';
-            child.style.maxWidth = '100%';
-            child.style.margin = '0';
-          }
-        });
-      }
-    } catch {}
-  }, [colorScheme]);
-
-  useEffect(() => {
-    const userId = user?.id;
-    if (!userId || isDemoMode()) return;
-    const runSync = async () => {
-      const markId = startPerfMark('app_pending_sync');
-      try {
-        const res = await syncPendingCheckins(5);
-        if (res.synced > 0) {
-          showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
-        }
-        await syncPendingProfileUpdates(5);
-        void endPerfMark(markId, true);
-      } catch (error) {
-        void endPerfMark(markId, false, { error: String(error) });
-      }
-    };
-
-    // Initialize push notifications
-    const setupNotifications = async () => {
-      const markId = startPerfMark('app_notifications_setup');
-      try {
-        if (notificationsInitializedForUser.current === userId) return;
-        notificationsInitializedForUser.current = userId;
-
-        const token = await initPushNotifications();
-        if (token) {
-          // Save token to Firebase for Cloud Function notifications
-          await savePushToken(userId, token);
-        }
-        // Schedule weekly recap
-        await scheduleWeeklyRecap();
-        void endPerfMark(markId, true);
-      } catch (error) {
-        notificationsInitializedForUser.current = null;
-        devLog('Failed to setup notifications:', error);
-        void endPerfMark(markId, false, { error: String(error) });
-      }
-    };
-
-    const initialTask = Platform.OS === 'web' ? null : InteractionManager.runAfterInteractions(() => {
-      void runSync();
-    });
-    const notificationsTimer = Platform.OS === 'web'
-      ? null
-      : setTimeout(() => {
-        void setupNotifications();
-      }, 1200);
-
-    if (Platform.OS === 'web') {
-      void runSync();
-      // Skip notifications on web
-    } else {
-      // Also set up notification response handler
-      const notificationSubscription = addNotificationResponseListener((response) => {
-        // Handle notification tap - navigate based on type
-        const notifType = response.notification.request.content.data?.type;
-        if (notifType === 'achievement') {
-          router.push('/achievements');
-        }
-      });
-
-      const sub = AppState.addEventListener('change', async (next) => {
-        if (appState.current.match(/inactive|background/) && next === 'active') {
-          try {
-            await refreshFirebaseAppCheckToken();
-            const res = await syncPendingCheckins(5);
-            if (res.synced > 0) {
-              showToast(`Synced ${res.synced} check-in${res.synced === 1 ? '' : 's'}.`, 'success');
-            }
-          } catch {}
-        }
-        appState.current = next;
-      });
-
-      return () => {
-        initialTask?.cancel?.();
-        if (notificationsTimer) clearTimeout(notificationsTimer);
-        sub.remove();
-        notificationSubscription.remove();
-      };
-    }
-  }, [showToast, user?.id]);
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? darkNavTheme : lightNavTheme}>
+      <AuthRouteGuard />
       <Stack
         screenOptions={{
           headerShown: true,
